@@ -1,0 +1,8 @@
+{
+  "appId": "com.vcp.vcpmobile",
+  "appName": "vcpmobile",
+  "webDir": "dist",
+  "server": {
+    "androidScheme": "http"
+  }
+}
