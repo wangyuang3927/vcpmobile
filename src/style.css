@@ -627,6 +627,34 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
   color: var(--secondary-text);
 }
 
+.sync-btn {
+  background: linear-gradient(135deg, #667eea, #764ba2) !important;
+  color: #fff !important;
+  margin-top: 10px;
+}
+
+.sync-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.sync-status {
+  font-size: 0.7rem;
+  color: var(--secondary-text);
+  text-align: center;
+  padding: 6px 0;
+}
+
+.settings-divider {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  color: var(--placeholder-text);
+  letter-spacing: 1px;
+  margin: 16px 0 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border-color);
+}
+
 .sidebar-footer-info {
   margin-top: auto;
   padding: 20px;

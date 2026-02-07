@@ -2,12 +2,15 @@
 import { onMounted, ref } from 'vue'
 import { fetchModels, normalizeBaseUrl, streamChat, interruptChat } from './services/vcpApi'
 import { cleanupAllBubbleStyles, renderMessageHtml } from './utils/messageRenderer'
+import { checkSyncStatus, syncTopic, mergeServerMessages, fullSync } from './services/chatSync'
 
 const isLightTheme = ref(false)
 const isSettingsOpen = ref(false)
 const isSidebarOpen = ref(false)
 const isStreaming = ref(false)
 const isRecording = ref(false)
+const isSyncing = ref(false)
+const syncStatus = ref('')
 const mediaRecorder = ref(null)
 const audioChunks = ref([])
 const statusMessage = ref('')
@@ -27,6 +30,9 @@ const config = ref({
   enableAgentBubbleTheme: false,
   temperature: 0.7,
   maxTokens: 2048,
+  syncEnabled: false,
+  adminUsername: '',
+  adminPassword: '',
 })
 
 const activeAgent = ref({
@@ -417,6 +423,7 @@ const sendMessage = () => {
       streamAbortController.value = null
       statusMessage.value = '就绪'
       saveHistory()
+      backgroundSync(currentTopicId.value, messages.value)
     })
     .catch((error) => {
       const message = error?.message || error?.toString?.() || '流传输失败'
@@ -431,12 +438,91 @@ const sendMessage = () => {
     })
 }
 
+const getSyncConfig = () => ({
+  baseUrl: config.value.baseUrl,
+  adminUsername: config.value.adminUsername,
+  adminPassword: config.value.adminPassword,
+})
+
+const SYNC_AGENT_ID = 'mobile-default'
+
+const backgroundSync = async (topicId, localMessages) => {
+  if (!config.value.syncEnabled || !config.value.baseUrl || !config.value.adminUsername) return
+  try {
+    const result = await syncTopic(getSyncConfig(), SYNC_AGENT_ID, topicId, localMessages)
+    if (result.success && result.serverNewMessages && result.serverNewMessages.length > 0) {
+      const merged = mergeServerMessages(localMessages, result.serverNewMessages)
+      if (merged !== localMessages) {
+        messages.value = merged
+        saveHistory()
+      }
+    }
+  } catch (e) {
+    console.warn('[ChatSync] 后台同步失败:', e.message)
+  }
+}
+
+const manualSync = async () => {
+  if (isSyncing.value) return
+  if (!config.value.syncEnabled || !config.value.baseUrl || !config.value.adminUsername) {
+    syncStatus.value = '请先在设置中配置同步'
+    return
+  }
+  isSyncing.value = true
+  syncStatus.value = '正在同步...'
+
+  try {
+    const status = await checkSyncStatus(getSyncConfig())
+    if (!status.available) {
+      syncStatus.value = `同步服务不可用: ${status.error}`
+      isSyncing.value = false
+      return
+    }
+
+    const getMessages = (topicId) => {
+      const saved = localStorage.getItem(`vcpMessages_${topicId}`)
+      return saved ? JSON.parse(saved) : []
+    }
+    const setMessages = (topicId, msgs) => {
+      localStorage.setItem(`vcpMessages_${topicId}`, JSON.stringify(msgs))
+      if (topicId === currentTopicId.value) {
+        messages.value = msgs
+      }
+    }
+
+    const result = await fullSync(
+      getSyncConfig(),
+      SYNC_AGENT_ID,
+      topics.value,
+      getMessages,
+      setMessages,
+      (current, total, title) => {
+        syncStatus.value = `同步中 ${current}/${total}: ${title || ''}`
+      }
+    )
+
+    if (result.success) {
+      syncStatus.value = `同步完成: ${result.syncedCount}/${result.total} 个话题`
+    } else {
+      syncStatus.value = `同步失败: ${result.error}`
+    }
+  } catch (e) {
+    syncStatus.value = `同步出错: ${e.message}`
+  } finally {
+    isSyncing.value = false
+    setTimeout(() => { syncStatus.value = '' }, 5000)
+  }
+}
+
 onMounted(() => {
   document.body.classList.toggle('light-theme', isLightTheme.value)
   loadConfig()
   loadHistory()
   if (config.value.baseUrl) {
     refreshModels()
+    if (config.value.syncEnabled && config.value.adminUsername) {
+      setTimeout(() => backgroundSync(currentTopicId.value, messages.value), 2000)
+    }
   }
 })
 </script>
@@ -583,6 +669,20 @@ onMounted(() => {
             <span>最大令牌数 (Max Tokens)</span>
             <input v-model.number="config.maxTokens" type="number" min="64" max="4096" step="64" />
           </label>
+          <div class="settings-divider">聊天记录同步</div>
+          <label class="settings-toggle">
+            <span>启用跨设备同步</span>
+            <input v-model="config.syncEnabled" type="checkbox" />
+          </label>
+          <label v-if="config.syncEnabled">
+            <span>管理面板用户名</span>
+            <input v-model="config.adminUsername" placeholder="AdminPanel 用户名" />
+          </label>
+          <label v-if="config.syncEnabled">
+            <span>管理面板密码</span>
+            <input v-model="config.adminPassword" type="password" placeholder="AdminPanel 密码" />
+          </label>
+          <div class="settings-divider">其他</div>
           <label>
             <span>系统提示词 (System Prompt)</span>
             <textarea 
@@ -638,6 +738,15 @@ onMounted(() => {
               <button class="delete-topic-btn" @click.stop="deleteTopic(topic.id)">×</button>
             </div>
           </div>
+
+          <button 
+            class="new-topic-btn sync-btn" 
+            :disabled="isSyncing" 
+            @click="manualSync"
+          >
+            {{ isSyncing ? '同步中...' : '🔄 同步聊天记录' }}
+          </button>
+          <div v-if="syncStatus" class="sync-status">{{ syncStatus }}</div>
 
           <div class="sidebar-footer-info">
             VCP Mobile v1.0.0
