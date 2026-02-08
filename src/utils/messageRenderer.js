@@ -575,9 +575,10 @@ const transformSpecialBlocks = (text) => {
   return processed
 }
 
-const fixStickerUrls = (text, baseUrl) => {
+const fixStickerUrls = (text, baseUrl, imageKey) => {
   if (!text || !baseUrl) return text
   const normalizedBase = baseUrl.replace(/\/$/, '')
+  const authPrefix = imageKey ? `/pw=${imageKey}/images` : ''
   
   // 1. Replace localhost/127.0.0.1 variants
   let fixed = text.replace(/http:\/\/(localhost|127\.0\.0\.1):6005/g, normalizedBase)
@@ -587,20 +588,31 @@ const fixStickerUrls = (text, baseUrl) => {
   fixed = fixed.replace(/https?:\/\/[^\s"'<>]+\/pw=/g, `${normalizedBase}/pw=`)
   
   // 3. Ensure relative paths starting with /pw= are also prefixed (if AI outputs relative path)
-  // This helps when AI follows the "standard path" instruction but forgets the domain
   fixed = fixed.replace(/(src=["'])\/pw=/g, `$1${normalizedBase}/pw=`)
+  
+  // 4. Fix sticker relative paths containing '表情包' — insert auth prefix
+  if (authPrefix) {
+    fixed = fixed.replace(/(src=["'])\/([^"']*表情包[^"']*)/g, `$1${normalizedBase}${authPrefix}/$2`)
+    fixed = fixed.replace(/(!\[[^\]]*\]\()\/((?:[^)]*表情包[^)]*)\))/g, `$1${normalizedBase}${authPrefix}/$2)`)
+  }
+  
+  // 5. Fix other relative src paths by prepending baseUrl
+  fixed = fixed.replace(/(src=["'])\/((?!\/|https?:|pw=)[^"']*)/g, `$1${normalizedBase}/$2`)
+  
+  // 6. Fix markdown image relative paths ![alt](/path)
+  fixed = fixed.replace(/(!\[[^\]]*\]\()\/((?!\/|https?:)[^)]*\))/g, `$1${normalizedBase}/$2`)
   
   return fixed
 }
 
 export const renderMessageHtml = (text = '', options = {}) => {
-  const { messageId, allowBubbleCss, role, baseUrl, isStreaming } = options || {}
+  const { messageId, allowBubbleCss, role, baseUrl, imageKey, isStreaming } = options || {}
   const bubbleScopeId = messageId ? makeSafeId(messageId) : ''
   
   let processed = text
   
   if (baseUrl) {
-    processed = fixStickerUrls(processed, baseUrl)
+    processed = fixStickerUrls(processed, baseUrl, imageKey)
   }
 
   processed = processStartEndMarkers(processed)
@@ -658,10 +670,8 @@ export const renderMessageHtml = (text = '', options = {}) => {
     if (messageId) removeBubbleStyleTag(messageId)
   }
 
-  // Only transform special blocks if they aren't suppressed by pure bubble mode
-  if (!hasCustomBubble || isStreaming) {
-    processed = transformSpecialBlocks(processed)
-  }
+  // Always transform special blocks to avoid raw markers showing in chat
+  processed = transformSpecialBlocks(processed)
 
   const rawHtml = marked.parse(processed)
   const sanitized = DOMPurify.sanitize(rawHtml, {

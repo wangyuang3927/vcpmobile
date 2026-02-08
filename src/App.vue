@@ -33,6 +33,7 @@ const config = ref({
   syncEnabled: false,
   adminUsername: '',
   adminPassword: '',
+  imageKey: '',
 })
 
 const activeAgent = ref({
@@ -126,6 +127,7 @@ const renderContent = (message) =>
     role: message.role,
     allowBubbleCss: config.value.enableAgentBubbleTheme,
     baseUrl: config.value.baseUrl,
+    imageKey: config.value.imageKey,
     isStreaming: message.isStreaming,
   })
 
@@ -548,25 +550,25 @@ onMounted(() => {
     </header>
 
     <main class="chat-body">
+      <div v-if="isStreaming" class="stream-banner">
+        <span>模型正在响应...</span>
+        <button class="icon-button" type="button" @click="interruptStream">
+          停止
+        </button>
+      </div>
+      <div v-if="statusMessage" class="status-banner">{{ statusMessage }}</div>
       <div class="chat-messages-container" @click="handleBubbleToggle">
-        <div v-if="isStreaming" class="stream-banner">
-          <span>模型正在响应...</span>
-          <button class="icon-button" type="button" @click="interruptStream">
-            停止
-          </button>
-        </div>
-        <div v-if="statusMessage" class="status-banner">{{ statusMessage }}</div>
         <div class="chat-messages">
           <div
             v-for="message in messages"
             :key="message.id"
             :class="['message-item', message.role]"
           >
-            <div class="chat-avatar">
-              <span>{{ message.name.slice(0, 1).toUpperCase() }}</span>
-            </div>
             <div class="details-and-bubble-wrapper">
               <div class="name-time-block">
+                <div class="chat-avatar">
+                  <span>{{ message.name.slice(0, 1).toUpperCase() }}</span>
+                </div>
                 <div class="sender-name">{{ message.role === 'user' ? '你' : message.name }}</div>
                 <div class="message-timestamp">{{ formatTime(message.timestamp) }}</div>
               </div>
@@ -681,6 +683,10 @@ onMounted(() => {
           <label v-if="config.syncEnabled">
             <span>管理面板密码</span>
             <input v-model="config.adminPassword" type="password" placeholder="AdminPanel 密码" />
+          </label>
+          <label>
+            <span>图片密钥 (Image Key)</span>
+            <input v-model="config.imageKey" placeholder="服务器 Image_Key，用于加载表情图" />
           </label>
           <div class="settings-divider">其他</div>
           <label>
