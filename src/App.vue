@@ -1,8 +1,9 @@
 <script setup>
-import { onMounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref } from 'vue'
 import { fetchModels, normalizeBaseUrl, streamChat, interruptChat } from './services/vcpApi'
 import { cleanupAllBubbleStyles, renderMessageHtml } from './utils/messageRenderer'
 import { checkSyncStatus, syncTopic, mergeServerMessages, fullSync } from './services/chatSync'
+import { connect as pushConnect, disconnect as pushDisconnect, onPushMessage, onStatusChange as onPushStatusChange } from './services/vcpPush'
 
 const isLightTheme = ref(false)
 const isSettingsOpen = ref(false)
@@ -35,6 +36,8 @@ const config = ref({
   adminPassword: '',
   imageKey: '',
 })
+
+const pushStatus = ref('disconnected') // WebSocket 推送状态
 
 const activeAgent = ref({
   name: 'Nova',
@@ -174,6 +177,9 @@ const saveConfig = async () => {
   await refreshModels()
   isSettingsOpen.value = false
   statusMessage.value = '设置已保存'
+  setTimeout(() => { if (statusMessage.value === '设置已保存') statusMessage.value = '' }, 2000)
+  // 重连 WebSocket 推送
+  initPushConnection()
 }
 
 const refreshModels = async () => {
@@ -191,6 +197,7 @@ const refreshModels = async () => {
       config.value.model = models.value[0]
     }
     statusMessage.value = '模型列表已更新'
+    setTimeout(() => { if (statusMessage.value === '模型列表已更新') statusMessage.value = '' }, 2000)
   } catch (error) {
     statusMessage.value = `获取模型失败: ${error.message || error}`
   }
@@ -516,16 +523,53 @@ const manualSync = async () => {
   }
 }
 
+// WebSocket 推送初始化
+function initPushConnection() {
+  if (config.value.baseUrl && config.value.apiKey) {
+    pushConnect({ baseUrl: config.value.baseUrl, apiKey: config.value.apiKey })
+  }
+}
+
+// 处理服务端推送的消息
+onPushMessage((data) => {
+  console.log('[App] 收到推送消息:', data.type)
+  if (data.type === 'agent_message' || data.type === 'mobile_push') {
+    const payload = data.data || data
+    const pushMsg = {
+      role: 'assistant',
+      content: payload.message || payload.content || JSON.stringify(payload),
+      name: payload.recipient || 'AI',
+      timestamp: Date.now(),
+      isPush: true, // 标记为推送消息
+    }
+    messages.value.push(pushMsg)
+    saveHistory()
+    // 更新状态栏
+    statusMessage.value = '💬 收到新消息'
+    setTimeout(() => { if (statusMessage.value === '💬 收到新消息') statusMessage.value = '' }, 3000)
+  }
+})
+
+onPushStatusChange((status) => {
+  pushStatus.value = status
+  console.log('[App] 推送状态:', status)
+})
+
 onMounted(() => {
   document.body.classList.toggle('light-theme', isLightTheme.value)
   loadConfig()
   loadHistory()
   if (config.value.baseUrl) {
     refreshModels()
+    initPushConnection()
     if (config.value.syncEnabled && config.value.adminUsername) {
       setTimeout(() => backgroundSync(currentTopicId.value, messages.value), 2000)
     }
   }
+})
+
+onUnmounted(() => {
+  pushDisconnect()
 })
 </script>
 
@@ -537,9 +581,13 @@ onMounted(() => {
         <div class="header-title">
           <span class="agent-name">{{ activeAgent.name }}</span>
           <span class="agent-status">{{ activeAgent.status }}</span>
+          <span class="push-dot" :class="pushStatus" :title="pushStatus === 'connected' ? '推送已连接' : '推送未连接'"></span>
         </div>
       </div>
       <div class="header-actions">
+        <button class="icon-button" type="button" @click="initPushConnection">
+          连接
+        </button>
         <button class="icon-button" type="button" @click="toggleTheme">
           主题
         </button>
@@ -567,9 +615,9 @@ onMounted(() => {
             <div class="details-and-bubble-wrapper">
               <div class="name-time-block">
                 <div class="chat-avatar">
-                  <span>{{ message.name.slice(0, 1).toUpperCase() }}</span>
+                  <span>{{ (message.name || (message.role === 'user' ? 'U' : 'A')).slice(0, 1).toUpperCase() }}</span>
                 </div>
-                <div class="sender-name">{{ message.role === 'user' ? '你' : message.name }}</div>
+                <div class="sender-name">{{ message.role === 'user' ? '你' : (message.name || 'AI') }}</div>
                 <div class="message-timestamp">{{ formatTime(message.timestamp) }}</div>
               </div>
               <div class="md-content">

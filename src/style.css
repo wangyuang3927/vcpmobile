@@ -178,8 +178,9 @@ body.light-theme .md-content hr {
 
 .header-title {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  flex-direction: row;
+  align-items: baseline;
+  gap: 6px;
 }
 
 .agent-name {
@@ -193,6 +194,20 @@ body.light-theme .md-content hr {
   font-size: 0.75rem;
   color: var(--secondary-text);
 }
+
+.push-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-left: 6px;
+  vertical-align: middle;
+  background: #666;
+  transition: background 0.3s;
+}
+.push-dot.connected { background: #4caf50; }
+.push-dot.connecting, .push-dot.reconnecting { background: #ff9800; }
+.push-dot.disconnected { background: #666; }
 
 .header-actions {
   display: flex;
