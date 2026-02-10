@@ -272,6 +272,17 @@ body.light-theme .md-content hr {
   border-color: rgba(255, 203, 119, 0.2);
 }
 
+.load-more-bar {
+  text-align: center;
+  padding: 8px 12px;
+  margin: 4px 0 8px;
+  color: var(--highlight-text);
+  font-size: 0.85rem;
+  cursor: pointer;
+  border-radius: 8px;
+  background: rgba(255, 203, 119, 0.08);
+}
+
 .message-item {
   display: flex;
   align-items: flex-start;
@@ -507,9 +518,9 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
 
 .input-bar {
   display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 12px 14px 18px;
+  flex-direction: column;
+  gap: 0;
+  padding: 8px 14px 18px;
   background: var(--panel-bg-dark);
   border-top: 1px solid rgba(255, 255, 255, 0.08);
 }
@@ -677,6 +688,14 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
   display: flex;
   align-items: center;
   gap: 6px;
+  max-width: 100%;
+}
+
+.chip-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 200px;
 }
 
 .remove-chip {
@@ -757,10 +776,12 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
 
 .sidebar-content {
   flex: 1;
+  min-height: 0;
   padding: 12px;
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow-y: auto;
 }
 
 .agent-item {
@@ -798,6 +819,55 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
 .agent-meta {
   font-size: 0.7rem;
   color: var(--secondary-text);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 160px;
+}
+
+.agent-list {
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.agent-empty {
+  font-size: 0.8rem;
+  color: var(--placeholder-text);
+  text-align: center;
+  padding: 16px 8px;
+}
+
+.refresh-agents-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.8rem;
+  padding: 0 4px;
+  opacity: 0.7;
+}
+
+.refresh-agents-btn:hover {
+  opacity: 1;
+}
+
+.loading-indicator {
+  font-size: 0.75rem;
+  color: var(--secondary-text);
+  animation: pulse 1s infinite;
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.4; }
+  50% { opacity: 1; }
+}
+
+.sidebar-section-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
 }
 
 .sync-btn {
@@ -861,6 +931,8 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
   display: flex;
   flex-direction: column;
   gap: 4px;
+  flex: 1;
+  min-height: 0;
   overflow-y: auto;
 }
 
@@ -920,6 +992,108 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
   overflow: hidden;
   clip: rect(0, 0, 0, 0);
   border: 0;
+}
+
+/* ========== 壁纸选择器 ========== */
+
+.settings-wallpaper-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 0;
+}
+
+.settings-wallpaper-row > span {
+  flex: 1;
+  color: var(--primary-text);
+  font-size: 0.9rem;
+}
+
+.wallpaper-pick-btn,
+.wallpaper-clear-btn {
+  padding: 5px 12px;
+  border-radius: 8px;
+  border: 1px solid var(--border-color);
+  background: var(--secondary-bg);
+  color: var(--primary-text);
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.wallpaper-clear-btn {
+  background: transparent;
+  color: var(--secondary-text);
+  border-color: transparent;
+}
+
+.wallpaper-picker-card {
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.wallpaper-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 10px;
+  padding: 12px;
+}
+
+.wallpaper-item {
+  position: relative;
+  border-radius: 10px;
+  overflow: hidden;
+  cursor: pointer;
+  border: 2px solid transparent;
+  aspect-ratio: 9 / 16;
+  background: var(--tertiary-bg);
+  transition: border-color 0.2s;
+}
+
+.wallpaper-item.active {
+  border-color: var(--highlight-text);
+}
+
+.wallpaper-item img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.wallpaper-item.wallpaper-none {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--secondary-text);
+  font-size: 0.85rem;
+}
+
+.wallpaper-label {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  padding: 4px 6px;
+  background: rgba(0, 0, 0, 0.6);
+  color: #fff;
+  font-size: 0.7rem;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* 壁纸模式下消息气泡半透明 */
+.chat-body[style*="background-image"] .md-content {
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border-radius: 12px;
+  padding: 10px 12px;
+}
+
+.chat-body[style*="background-image"] .message-item.user .md-content {
+  background: rgba(58, 80, 107, 0.6);
 }
 
 @media (min-width: 768px) {

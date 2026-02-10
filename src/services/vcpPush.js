@@ -13,6 +13,7 @@ let onStatusChangeCallback = null
 let currentConfig = null
 let reconnectAttempts = 0
 const MAX_RECONNECT_DELAY = 30000 // 最大重连间隔 30s
+const HEARTBEAT_INTERVAL = 15000 // 每 15s 发一次心跳（Android WebView 后台可能暂停 timer）
 
 function getWsUrl(config) {
   const baseUrl = normalizeBaseUrl(config.baseUrl)
@@ -43,9 +44,13 @@ function startHeartbeat() {
   stopHeartbeat()
   heartbeatTimer = setInterval(() => {
     if (ws && ws.readyState === WebSocket.OPEN) {
-      ws.send(JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }))
+      try {
+        ws.send(JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }))
+      } catch (e) {
+        console.warn(`${TAG} 心跳发送失败:`, e.message)
+      }
     }
-  }, 25000) // 每 25s 发一次心跳
+  }, HEARTBEAT_INTERVAL)
 }
 
 function stopHeartbeat() {
@@ -122,16 +127,19 @@ export function connect(config) {
 }
 
 export function disconnect(skipStatusUpdate = false) {
-  currentConfig = null
+  // 只有外部主动断开时才清除 config（阻止重连）
+  if (!skipStatusUpdate) {
+    currentConfig = null
+  }
   if (reconnectTimer) {
     clearTimeout(reconnectTimer)
     reconnectTimer = null
   }
   stopHeartbeat()
-  reconnectAttempts = 0
+  if (!skipStatusUpdate) reconnectAttempts = 0
   if (ws) {
     ws.onclose = null // 防止触发重连
-    ws.close()
+    try { ws.close() } catch (e) { /* ignore */ }
     ws = null
   }
   if (!skipStatusUpdate) updateStatus('disconnected')
@@ -156,4 +164,22 @@ export function onPushMessage(callback) {
 
 export function onStatusChange(callback) {
   onStatusChangeCallback = callback
+}
+
+// Android WebView 后台恢复时检查连接
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && currentConfig) {
+      // App 回到前台，检查 WebSocket 状态
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        console.log(`${TAG} App 回到前台，WebSocket 未连接，立即重连`)
+        reconnectAttempts = 0 // 重置重连计数
+        if (reconnectTimer) {
+          clearTimeout(reconnectTimer)
+          reconnectTimer = null
+        }
+        connect(currentConfig)
+      }
+    }
+  })
 }

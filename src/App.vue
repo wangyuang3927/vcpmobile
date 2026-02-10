@@ -1,9 +1,11 @@
 <script setup>
-import { onMounted, onUnmounted, ref } from 'vue'
+import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { fetchModels, normalizeBaseUrl, streamChat, interruptChat } from './services/vcpApi'
 import { cleanupAllBubbleStyles, renderMessageHtml } from './utils/messageRenderer'
 import { checkSyncStatus, syncTopic, mergeServerMessages, fullSync } from './services/chatSync'
 import { connect as pushConnect, disconnect as pushDisconnect, onPushMessage, onStatusChange as onPushStatusChange } from './services/vcpPush'
+import { fetchAgentList, normalizeAgents, loadCachedAgents, saveCachedAgents, getActiveAgentId, saveActiveAgentId, fetchTopicHistory, appendToHistory, deleteTopicFromDesktop } from './services/agentService'
+import { getCachedMessages, setCachedMessages } from './services/messageCache'
 
 const isLightTheme = ref(false)
 const isSettingsOpen = ref(false)
@@ -39,23 +41,161 @@ const config = ref({
 
 const pushStatus = ref('disconnected') // WebSocket 推送状态
 
-const activeAgent = ref({
-  name: 'Nova',
-  status: '就绪',
+// 壁纸
+const selectedWallpaper = ref(localStorage.getItem('vcpMobileWallpaper') || '')
+const isWallpaperPickerOpen = ref(false)
+
+// 多 Agent 支持
+const agents = ref([]) // 从服务端拉取的 Agent 列表
+const activeAgentId = ref('') // 当前选中的 Agent ID
+const isLoadingAgents = ref(false)
+
+// 计算当前活跃 Agent 对象
+const activeAgent = computed(() => {
+  if (activeAgentId.value && agents.value.length > 0) {
+    const found = agents.value.find(a => a.id === activeAgentId.value)
+    if (found) return { ...found, status: '就绪' }
+  }
+  return { id: '', name: 'Nova', status: '未配置', systemPrompt: '', modelId: '', temperature: 0.7, maxOutputTokens: 40000 }
 })
 
 const messages = ref([])
+const displayLimit = ref(20)
+const displayMessages = computed(() => {
+  if (messages.value.length <= displayLimit.value) return messages.value
+  return messages.value.slice(messages.value.length - displayLimit.value)
+})
+const hasMoreMessages = computed(() => messages.value.length > displayLimit.value)
+const loadMoreMessages = () => { displayLimit.value += 20 }
+
+// ========== 壁纸（本地资源） ==========
+
+const LOCAL_WALLPAPERS = [
+  'dark.jpg', 'light.jpeg', 'forest_night.jpg', 'mountain.jpg', 'leaf.jpg',
+  'sakuranight.png', 'wallpaper_ci.jpg', 'wallpaper_jin.jpg',
+  'wallpaper-mountain-nightgold.jpg', 'themes_snow_realm_light.jpg',
+  'themes_star_abyss_dark.jpg', 'watermelon_day.jpg',
+  'win22coffee.png', 'wincoffee.png',
+  'ComfyUI_010842_894361418827477_00027.png', 'ComfyUI_012952_1030647063343854_00033.png',
+  '樱夜倒影.png', '绿影猫咪.png',
+]
+
+const localWpUrl = (name) => `/wallpapers/${encodeURIComponent(name)}`
+
+const wallpaperBgStyle = computed(() => {
+  if (!selectedWallpaper.value) return {}
+  return { backgroundImage: `url('${localWpUrl(selectedWallpaper.value)}')`, backgroundSize: 'cover', backgroundPosition: 'center' }
+})
+
+const selectWallpaper = (name) => {
+  selectedWallpaper.value = name
+  localStorage.setItem('vcpMobileWallpaper', name)
+  isWallpaperPickerOpen.value = false
+}
+
+const clearWallpaper = () => {
+  selectedWallpaper.value = ''
+  localStorage.removeItem('vcpMobileWallpaper')
+  isWallpaperPickerOpen.value = false
+}
+
+// ========== Agent 加载与切换 ==========
+
+const loadAgents = async () => {
+  // 先从缓存加载
+  const cached = loadCachedAgents()
+  if (cached.length > 0) {
+    agents.value = cached
+  }
+  // 恢复上次选中的 Agent
+  const savedId = getActiveAgentId()
+  if (savedId && agents.value.find(a => a.id === savedId)) {
+    activeAgentId.value = savedId
+  } else if (agents.value.length > 0) {
+    activeAgentId.value = agents.value[0].id
+  }
+}
+
+const refreshAgents = async () => {
+  if (!config.value.baseUrl || !config.value.adminUsername) return
+  isLoadingAgents.value = true
+  try {
+    const result = await fetchAgentList({
+      baseUrl: config.value.baseUrl,
+      adminUsername: config.value.adminUsername,
+      adminPassword: config.value.adminPassword,
+    })
+    if (result.success && result.agents.length > 0) {
+      agents.value = normalizeAgents(result.agents)
+      saveCachedAgents(agents.value)
+
+      // VCPChat 来源：用服务端话题列表同步本地（删除桌面端已删除的，保留本地新建的）
+      if (result.source === 'vcpchat') {
+        for (const agent of agents.value) {
+          const topicsKey = `vcpTopics_${agent.id}`
+          const serverTopics = (agent.topics || []).map(t => ({
+            id: t.id,
+            title: t.name || '未命名话题',
+            timestamp: t.createdAt || Date.now(),
+          }))
+          const serverIds = new Set(serverTopics.map(t => t.id))
+          const existingRaw = localStorage.getItem(topicsKey)
+          const localTopics = existingRaw ? JSON.parse(existingRaw) : []
+          // 保留本地独有的话题（手机端新建但尚未同步到桌面端的）
+          const localOnly = localTopics.filter(t => !serverIds.has(t.id))
+          const merged = [...serverTopics, ...localOnly]
+          localStorage.setItem(topicsKey, JSON.stringify(merged))
+          if (localTopics.length !== merged.length) {
+            console.log(`[App] 同步 ${agent.name} 话题：服务端 ${serverTopics.length}，本地独有 ${localOnly.length}，合计 ${merged.length}`)
+          }
+        }
+      }
+
+      // 如果当前选中的 Agent 不在新列表中，切换到第一个
+      if (!agents.value.find(a => a.id === activeAgentId.value)) {
+        switchAgent(agents.value[0].id)
+      } else {
+        // 重新加载当前 Agent 的话题（可能刚被初始化）
+        loadHistory()
+      }
+      console.log(`[App] 已刷新 ${agents.value.length} 个 Agent (来源: ${result.source})`)
+    }
+  } catch (e) {
+    console.warn('[App] 刷新 Agent 列表失败:', e.message)
+  } finally {
+    isLoadingAgents.value = false
+  }
+}
+
+const switchAgent = (agentId) => {
+  if (agentId === activeAgentId.value) return
+  if (isStreaming.value) interruptStream()
+  cleanupAllBubbleStyles()
+
+  activeAgentId.value = agentId
+  saveActiveAgentId(agentId)
+
+  // 加载该 Agent 的话题列表
+  loadHistory()
+}
+
+// ========== 话题管理（按 Agent 分组） ==========
+
+const getTopicsKey = () => `vcpTopics_${activeAgentId.value || 'default'}`
+const getMessagesKey = (topicId) => `vcpMessages_${activeAgentId.value || 'default'}_${topicId}`
 
 const loadHistory = () => {
-  const savedTopics = localStorage.getItem('vcpMobileTopics')
+  const savedTopics = localStorage.getItem(getTopicsKey())
   if (savedTopics) {
     topics.value = JSON.parse(savedTopics)
+  } else {
+    topics.value = []
   }
 
   if (topics.value.length === 0) {
     createNewTopic()
   } else {
-    const lastTopicId = localStorage.getItem('vcpMobileLastTopicId')
+    const lastTopicId = localStorage.getItem(`vcpLastTopic_${activeAgentId.value}`)
     if (lastTopicId && topics.value.find(t => t.id === lastTopicId)) {
       switchTopic(lastTopicId)
     } else {
@@ -65,10 +205,19 @@ const loadHistory = () => {
 }
 
 const saveHistory = () => {
-  localStorage.setItem('vcpMobileTopics', JSON.stringify(topics.value))
+  localStorage.setItem(getTopicsKey(), JSON.stringify(topics.value))
   if (currentTopicId.value) {
-    localStorage.setItem(`vcpMessages_${currentTopicId.value}`, JSON.stringify(messages.value))
-    localStorage.setItem('vcpMobileLastTopicId', currentTopicId.value)
+    const agent = activeAgent.value
+    if (agent.agentDirId) {
+      // VCPChat Agent：存 IndexedDB（避免 localStorage 超限）
+      // JSON 深拷贝去掉 Vue reactive proxy，否则 IndexedDB 无法序列化
+      const plain = JSON.parse(JSON.stringify(messages.value.map(({ fromHistory, ...rest }) => rest)))
+      setCachedMessages(agent.agentDirId, currentTopicId.value, plain, Date.now())
+    } else {
+      // 非 VCPChat Agent：存 localStorage
+      localStorage.setItem(getMessagesKey(currentTopicId.value), JSON.stringify(messages.value))
+    }
+    localStorage.setItem(`vcpLastTopic_${activeAgentId.value}`, currentTopicId.value)
   }
 }
 
@@ -84,23 +233,77 @@ const createNewTopic = () => {
   saveHistory()
 }
 
-const switchTopic = (topicId) => {
+const switchTopic = async (topicId) => {
   if (isStreaming.value) interruptStream()
   cleanupAllBubbleStyles()
+  displayLimit.value = 20
   
   currentTopicId.value = topicId
-  const savedMessages = localStorage.getItem(`vcpMessages_${topicId}`)
-  if (savedMessages) {
-    messages.value = JSON.parse(savedMessages)
+  const agent = activeAgent.value
+
+  // VCPChat 来源的 Agent：先显示 IndexedDB 缓存，后台比对更新
+  if (agent.agentDirId && config.value.baseUrl && config.value.adminUsername) {
+    // 1. 先从 IndexedDB 加载缓存（秒开）
+    let cachedLastModified = 0
+    try {
+      const cached = await getCachedMessages(agent.agentDirId, topicId)
+      if (cached && cached.messages && cached.messages.length > 0) {
+        messages.value = cached.messages.map(m => m.isLocal ? m : { ...m, fromHistory: true })
+        cachedLastModified = cached.lastModified || 0
+        console.log(`[App] 从缓存加载了 ${cached.messages.length} 条消息`)
+      } else {
+        messages.value = []
+        statusMessage.value = '正在加载聊天记录...'
+      }
+    } catch (e) {
+      messages.value = []
+      statusMessage.value = '正在加载聊天记录...'
+    }
+
+    // 2. 后台向服务端比对，有变化才更新
+    try {
+      const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+      const result = await fetchTopicHistory(syncConfig, agent.agentDirId, topicId, cachedLastModified)
+      if (result.success) {
+        if (result.notModified) {
+          console.log(`[App] 话题 ${topicId} 未变化，使用缓存`)
+        } else if (result.messages && result.messages.length > 0) {
+          // 合并：isLocal 消息优先保留本地版本（有完整渲染），服务端版本可能被 simplifyContent 剥离了 HTML
+          const localMap = new Map()
+          messages.value.forEach(m => { if (m.isLocal) localMap.set(m.id, m) })
+          const serverIds = new Set(result.messages.map(m => m.id))
+          const localOnly = messages.value.filter(m => m.isLocal && !serverIds.has(m.id))
+          const merged = [
+            ...result.messages.map(m => localMap.has(m.id) ? localMap.get(m.id) : { ...m, fromHistory: true }),
+            ...localOnly,
+          ]
+          messages.value = merged
+          // 缓存合并后的完整消息
+          const toCache = merged.map(({ fromHistory, ...rest }) => rest)
+          setCachedMessages(agent.agentDirId, topicId, JSON.parse(JSON.stringify(toCache)), result.lastModified)
+          console.log(`[App] 从服务端更新了 ${result.messages.length} 条消息，保留 ${localMap.size + localOnly.length} 条本地消息`)
+        } else {
+          // 服务端无消息，但保留本地独有的
+          const localOnly = messages.value.filter(m => m.isLocal)
+          messages.value = localOnly
+        }
+      }
+      statusMessage.value = ''
+    } catch (e) {
+      console.warn('[App] 后台同步失败:', e.message)
+      statusMessage.value = ''
+    }
   } else {
-    messages.value = []
+    // 非 VCPChat Agent：从 localStorage 加载
+    const savedMessages = localStorage.getItem(getMessagesKey(topicId))
+    messages.value = savedMessages ? JSON.parse(savedMessages) : []
   }
   isSidebarOpen.value = false
 }
 
 const deleteTopic = (topicId) => {
   topics.value = topics.value.filter(t => t.id !== topicId)
-  localStorage.removeItem(`vcpMessages_${topicId}`)
+  localStorage.removeItem(getMessagesKey(topicId))
   if (currentTopicId.value === topicId) {
     if (topics.value.length > 0) {
       switchTopic(topics.value[0].id)
@@ -109,6 +312,14 @@ const deleteTopic = (topicId) => {
     }
   }
   saveHistory()
+  // VCPChat Agent：同步删除桌面端话题
+  const agent = activeAgent.value
+  if (agent.agentDirId && config.value.baseUrl && config.value.adminUsername) {
+    const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+    deleteTopicFromDesktop(syncConfig, agent.agentDirId, topicId)
+      .then(r => { if (r.success) console.log(`[App] 已同步删除桌面端话题 ${topicId}`) })
+      .catch(e => console.warn('[App] 同步删除桌面端话题失败:', e.message))
+  }
 }
 
 const updateTopicTitle = (message) => {
@@ -124,15 +335,34 @@ const draftMessage = ref('')
 const formatTime = (value) =>
   new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-const renderContent = (message) =>
-  renderMessageHtml(message.content, {
+// 去掉 HTML 行首缩进，避免 marked 把缩进的 HTML 当代码块
+const deIndentHtml = (text) => {
+  if (!text || !/<[a-z][\s\S]*>/i.test(text)) return text
+  return text.replace(/^[ \t]+(<!?[a-z/])/gim, '$1')
+}
+
+const renderContent = (message) => {
+  const isVCPChat = !!activeAgent.value.agentDirId
+  // 非 VCPChat 的本地 Agent 历史消息：纯文本渲染（避免大量 HTML 卡顿）
+  if (!isVCPChat && message.fromHistory && !message.isStreaming) {
+    const text = message.content || ''
+    const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    return escaped.replace(/\n/g, '<br>')
+  }
+  // VCPChat Agent 的 assistant 消息：去掉 HTML 缩进避免 marked 当代码块
+  let content = message.content
+  if (isVCPChat && message.role === 'assistant') {
+    content = deIndentHtml(content)
+  }
+  return renderMessageHtml(content, {
     messageId: message.id,
     role: message.role,
-    allowBubbleCss: config.value.enableAgentBubbleTheme,
+    allowBubbleCss: !isVCPChat && config.value.enableAgentBubbleTheme,
     baseUrl: config.value.baseUrl,
     imageKey: config.value.imageKey,
     isStreaming: message.isStreaming,
   })
+}
 
 const agentBubbleThemeSpec = `【VCP-Mobile 沉浸式气泡渲染协议】
 你的核心任务是将每一次回复构建为美观的HTML气泡。
@@ -175,6 +405,7 @@ const saveConfig = async () => {
   localStorage.setItem('vcpMobileConfig', JSON.stringify(config.value))
   document.body.classList.toggle('agent-bubble-theme', !!config.value.enableAgentBubbleTheme)
   await refreshModels()
+  refreshAgents() // 刷新 Agent 列表
   isSettingsOpen.value = false
   statusMessage.value = '设置已保存'
   setTimeout(() => { if (statusMessage.value === '设置已保存') statusMessage.value = '' }, 2000)
@@ -228,7 +459,9 @@ const interruptStream = async () => {
 const buildPayloadMessages = (items) => {
   const payload = []
   const systemParts = []
-  if (config.value.systemPrompt) systemParts.push(config.value.systemPrompt)
+  // 优先使用当前 Agent 的 systemPrompt，其次使用全局设置
+  const agentPrompt = activeAgent.value.systemPrompt || config.value.systemPrompt
+  if (agentPrompt) systemParts.push(agentPrompt)
   if (config.value.enableAgentBubbleTheme) systemParts.push(agentBubbleThemeSpec)
   const systemContent = systemParts.join('\n\n').trim()
   if (systemContent) payload.push({ role: 'system', content: systemContent })
@@ -368,6 +601,7 @@ const sendMessage = () => {
     content: text,
     attachments: [...pendingAttachments.value],
     timestamp: Date.now(),
+    isLocal: true,
   }
 
   updateTopicTitle(text || '多模态消息')
@@ -384,6 +618,7 @@ const sendMessage = () => {
     content: '',
     timestamp: Date.now(),
     isStreaming: true,
+    isLocal: true,
   }
   messages.value.push(assistantMessage)
 
@@ -404,13 +639,18 @@ const sendMessage = () => {
   const controller = new AbortController()
   streamAbortController.value = controller
 
+  // 优先使用 Agent 的模型和参数，其次使用全局设置
+  const chatModel = activeAgent.value.modelId || config.value.model
+  const chatTemperature = activeAgent.value.temperature ?? Number(config.value.temperature)
+  const chatMaxTokens = activeAgent.value.maxOutputTokens || Number(config.value.maxTokens)
+
   streamChat({
     baseUrl,
     apiKey: config.value.apiKey,
     messages: payloadMessages,
-    model: config.value.model,
-    temperature: Number(config.value.temperature),
-    maxTokens: Number(config.value.maxTokens),
+    model: chatModel,
+    temperature: chatTemperature,
+    maxTokens: chatMaxTokens,
     requestId: assistantId,
     signal: controller.signal,
     onChunk: (chunk) => {
@@ -432,7 +672,18 @@ const sendMessage = () => {
       streamAbortController.value = null
       statusMessage.value = '就绪'
       saveHistory()
-      backgroundSync(currentTopicId.value, messages.value)
+      // VCPChat Agent：将新消息写回桌面端 history.json（双向同步）
+      const agent = activeAgent.value
+      if (agent.agentDirId && config.value.baseUrl && config.value.adminUsername) {
+        const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+        const newMsgs = [userMessage, { id: assistantMessage.id, role: assistantMessage.role, name: assistantMessage.name, content: assistantMessage.content, timestamp: assistantMessage.timestamp }]
+        const currentTopic = topics.value.find(t => t.id === currentTopicId.value)
+        appendToHistory(syncConfig, agent.agentDirId, currentTopicId.value, newMsgs, currentTopic?.title)
+          .then(r => { if (r.success) console.log(`[App] 已同步 ${r.appended} 条消息到桌面端`) })
+          .catch(e => console.warn('[App] 同步到桌面端失败:', e.message))
+      } else {
+        backgroundSync(currentTopicId.value, messages.value)
+      }
     })
     .catch((error) => {
       const message = error?.message || error?.toString?.() || '流传输失败'
@@ -453,12 +704,13 @@ const getSyncConfig = () => ({
   adminPassword: config.value.adminPassword,
 })
 
-const SYNC_AGENT_ID = 'mobile-default'
+// 同步使用当前 Agent 的真实 ID
+const getSyncAgentId = () => activeAgentId.value || 'mobile-default'
 
 const backgroundSync = async (topicId, localMessages) => {
   if (!config.value.syncEnabled || !config.value.baseUrl || !config.value.adminUsername) return
   try {
-    const result = await syncTopic(getSyncConfig(), SYNC_AGENT_ID, topicId, localMessages)
+    const result = await syncTopic(getSyncConfig(), getSyncAgentId(), topicId, localMessages)
     if (result.success && result.serverNewMessages && result.serverNewMessages.length > 0) {
       const merged = mergeServerMessages(localMessages, result.serverNewMessages)
       if (merged !== localMessages) {
@@ -473,47 +725,94 @@ const backgroundSync = async (topicId, localMessages) => {
 
 const manualSync = async () => {
   if (isSyncing.value) return
-  if (!config.value.syncEnabled || !config.value.baseUrl || !config.value.adminUsername) {
-    syncStatus.value = '请先在设置中配置同步'
+  if (!config.value.baseUrl || !config.value.adminUsername) {
+    syncStatus.value = '请先在设置中配置服务器和管理员账号'
     return
   }
   isSyncing.value = true
   syncStatus.value = '正在同步...'
 
   try {
-    const status = await checkSyncStatus(getSyncConfig())
-    if (!status.available) {
-      syncStatus.value = `同步服务不可用: ${status.error}`
-      isSyncing.value = false
-      return
-    }
+    const agent = activeAgent.value
 
-    const getMessages = (topicId) => {
-      const saved = localStorage.getItem(`vcpMessages_${topicId}`)
-      return saved ? JSON.parse(saved) : []
-    }
-    const setMessages = (topicId, msgs) => {
-      localStorage.setItem(`vcpMessages_${topicId}`, JSON.stringify(msgs))
-      if (topicId === currentTopicId.value) {
-        messages.value = msgs
+    // ====== VCPChat 来源：直接从 VCPChat AppData 拉取聊天记录 ======
+    if (agent.agentDirId) {
+      const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+
+      // 1. 先用服务端的话题列表覆盖本地（确保话题 ID 与桌面端一致）
+      if (agent.topics && agent.topics.length > 0) {
+        const serverTopics = agent.topics.map(t => ({
+          id: t.id,
+          title: t.name || '未命名话题',
+          timestamp: t.createdAt || Date.now(),
+        }))
+        topics.value = serverTopics
+        localStorage.setItem(getTopicsKey(), JSON.stringify(serverTopics))
+        console.log(`[App] 已同步 ${serverTopics.length} 个话题列表`)
       }
-    }
 
-    const result = await fullSync(
-      getSyncConfig(),
-      SYNC_AGENT_ID,
-      topics.value,
-      getMessages,
-      setMessages,
-      (current, total, title) => {
-        syncStatus.value = `同步中 ${current}/${total}: ${title || ''}`
+      // 2. 加载当前话题的聊天记录（VCPChat 不存 localStorage，实时拉取）
+      const targetTopicId = currentTopicId.value && topics.value.find(t => t.id === currentTopicId.value)
+        ? currentTopicId.value
+        : (topics.value.length > 0 ? topics.value[0].id : null)
+
+      if (targetTopicId) {
+        currentTopicId.value = targetTopicId
+        syncStatus.value = '正在加载聊天记录...'
+        try {
+          const result = await fetchTopicHistory(syncConfig, agent.agentDirId, targetTopicId)
+          if (result.success && result.messages.length > 0) {
+            messages.value = result.messages
+            console.log(`[App] 加载了 ${result.messages.length} 条消息`)
+          } else {
+            messages.value = []
+          }
+        } catch (e) {
+          console.warn('[App] 加载聊天记录失败:', e.message)
+        }
       }
-    )
 
-    if (result.success) {
-      syncStatus.value = `同步完成: ${result.syncedCount}/${result.total} 个话题`
+      syncStatus.value = `同步完成: ${topics.value.length} 个话题已同步`
+    }
+    // ====== Fallback: ChatSync 插件同步 ======
+    else if (config.value.syncEnabled) {
+      const status = await checkSyncStatus(getSyncConfig())
+      if (!status.available) {
+        syncStatus.value = `同步服务不可用: ${status.error}`
+        isSyncing.value = false
+        return
+      }
+
+      const agentId = getSyncAgentId()
+      const getMessages = (topicId) => {
+        const saved = localStorage.getItem(getMessagesKey(topicId))
+        return saved ? JSON.parse(saved) : []
+      }
+      const setMessages = (topicId, msgs) => {
+        localStorage.setItem(getMessagesKey(topicId), JSON.stringify(msgs))
+        if (topicId === currentTopicId.value) {
+          messages.value = msgs
+        }
+      }
+
+      const result = await fullSync(
+        getSyncConfig(),
+        agentId,
+        topics.value,
+        getMessages,
+        setMessages,
+        (current, total, title) => {
+          syncStatus.value = `同步中 ${current}/${total}: ${title || ''}`
+        }
+      )
+
+      if (result.success) {
+        syncStatus.value = `同步完成: ${result.syncedCount}/${result.total} 个话题`
+      } else {
+        syncStatus.value = `同步失败: ${result.error}`
+      }
     } else {
-      syncStatus.value = `同步失败: ${result.error}`
+      syncStatus.value = '当前 Agent 不支持同步'
     }
   } catch (e) {
     syncStatus.value = `同步出错: ${e.message}`
@@ -555,12 +854,14 @@ onPushStatusChange((status) => {
   console.log('[App] 推送状态:', status)
 })
 
-onMounted(() => {
+onMounted(async () => {
   document.body.classList.toggle('light-theme', isLightTheme.value)
   loadConfig()
+  await loadAgents() // 先从缓存加载 Agent 列表
   loadHistory()
   if (config.value.baseUrl) {
     refreshModels()
+    refreshAgents() // 异步从服务端刷新 Agent 列表
     initPushConnection()
     if (config.value.syncEnabled && config.value.adminUsername) {
       setTimeout(() => backgroundSync(currentTopicId.value, messages.value), 2000)
@@ -585,7 +886,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div class="header-actions">
-        <button class="icon-button" type="button" @click="initPushConnection">
+        <button v-if="!activeAgent.agentDirId" class="icon-button" type="button" @click="initPushConnection">
           连接
         </button>
         <button class="icon-button" type="button" @click="toggleTheme">
@@ -597,7 +898,7 @@ onUnmounted(() => {
       </div>
     </header>
 
-    <main class="chat-body">
+    <main class="chat-body" :style="wallpaperBgStyle">
       <div v-if="isStreaming" class="stream-banner">
         <span>模型正在响应...</span>
         <button class="icon-button" type="button" @click="interruptStream">
@@ -607,8 +908,11 @@ onUnmounted(() => {
       <div v-if="statusMessage" class="status-banner">{{ statusMessage }}</div>
       <div class="chat-messages-container" @click="handleBubbleToggle">
         <div class="chat-messages">
+          <div v-if="hasMoreMessages" class="load-more-bar" @click="loadMoreMessages">
+            还有 {{ messages.length - displayLimit }} 条更早的消息，点击加载
+          </div>
           <div
-            v-for="message in messages"
+            v-for="message in displayMessages"
             :key="message.id"
             :class="['message-item', message.role]"
           >
@@ -690,7 +994,7 @@ onUnmounted(() => {
           </button>
         </div>
         <div class="settings-body">
-          <label class="settings-toggle">
+          <label v-if="!activeAgent.agentDirId" class="settings-toggle">
             <span>启用 Agent 气泡主题</span>
             <input v-model="config.enableAgentBubbleTheme" type="checkbox" />
           </label>
@@ -702,7 +1006,7 @@ onUnmounted(() => {
             <span>API 密钥</span>
             <input v-model="config.apiKey" placeholder="Bearer 令牌" />
           </label>
-          <label>
+          <label v-if="!activeAgent.agentDirId">
             <span>模型</span>
             <select v-model="config.model">
               <option value="">选择模型</option>
@@ -711,11 +1015,11 @@ onUnmounted(() => {
               </option>
             </select>
           </label>
-          <label>
+          <label v-if="!activeAgent.agentDirId">
             <span>温度 (Temperature)</span>
             <input v-model.number="config.temperature" type="number" min="0" max="2" step="0.1" />
           </label>
-          <label>
+          <label v-if="!activeAgent.agentDirId">
             <span>最大令牌数 (Max Tokens)</span>
             <input v-model.number="config.maxTokens" type="number" min="64" max="4096" step="64" />
           </label>
@@ -736,8 +1040,16 @@ onUnmounted(() => {
             <span>图片密钥 (Image Key)</span>
             <input v-model="config.imageKey" placeholder="服务器 Image_Key，用于加载表情图" />
           </label>
+          <div class="settings-divider">外观</div>
+          <div class="settings-wallpaper-row">
+            <span>聊天壁纸</span>
+            <button class="wallpaper-pick-btn" @click="isWallpaperPickerOpen = true">
+              {{ selectedWallpaper ? '更换壁纸' : '选择壁纸' }}
+            </button>
+            <button v-if="selectedWallpaper" class="wallpaper-clear-btn" @click="clearWallpaper">清除</button>
+          </div>
           <div class="settings-divider">其他</div>
-          <label>
+          <label v-if="!activeAgent.agentDirId">
             <span>系统提示词 (System Prompt)</span>
             <textarea 
               v-model="config.systemPrompt" 
@@ -748,7 +1060,7 @@ onUnmounted(() => {
           </label>
         </div>
         <div class="settings-footer">
-          <button class="icon-button" type="button" @click="refreshModels">
+          <button v-if="!activeAgent.agentDirId" class="icon-button" type="button" @click="refreshModels">
             刷新模型
           </button>
           <button class="send-button" type="button" @click="saveConfig">
@@ -758,27 +1070,67 @@ onUnmounted(() => {
       </div>
     </div>
 
+    <div v-if="isWallpaperPickerOpen" class="settings-panel" @click.self="isWallpaperPickerOpen = false">
+      <div class="settings-card wallpaper-picker-card">
+        <div class="settings-header">
+          <h3>选择壁纸</h3>
+          <button class="icon-button" type="button" @click="isWallpaperPickerOpen = false">关闭</button>
+        </div>
+        <div class="wallpaper-grid">
+          <div class="wallpaper-item wallpaper-none" :class="{ active: !selectedWallpaper }" @click="clearWallpaper">
+            <span>无壁纸</span>
+          </div>
+          <div
+            v-for="name in LOCAL_WALLPAPERS"
+            :key="name"
+            class="wallpaper-item"
+            :class="{ active: selectedWallpaper === name }"
+            @click="selectWallpaper(name)"
+          >
+            <img :src="localWpUrl(name)" :alt="name" loading="lazy" />
+            <span class="wallpaper-label">{{ name.replace(/\.[^.]+$/, '') }}</span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <div v-if="isSidebarOpen" class="sidebar-overlay" @click.self="isSidebarOpen = false">
       <div class="sidebar">
         <div class="sidebar-header">
-          <h3>话题管理</h3>
+          <h3>智能体 & 话题</h3>
           <button class="icon-button" @click="isSidebarOpen = false">关闭</button>
         </div>
         <div class="sidebar-content">
-          <button class="new-topic-btn" @click="createNewTopic">
-            + 开启新话题
-          </button>
-          
-          <div class="sidebar-section-title">活跃 Agent</div>
-          <div class="agent-item active">
-            <div class="agent-avatar">{{ activeAgent.name[0] }}</div>
-            <div class="agent-info">
-              <div class="agent-name">{{ activeAgent.name }}</div>
-              <div class="agent-meta">当前对话中</div>
+          <!-- Agent 列表 -->
+          <div class="sidebar-section-title">
+            智能体
+            <button v-if="!isLoadingAgents" class="refresh-agents-btn" @click="refreshAgents" title="刷新列表">🔄</button>
+            <span v-else class="loading-indicator">...</span>
+          </div>
+          <div class="agent-list">
+            <div 
+              v-for="agent in agents" 
+              :key="agent.id" 
+              class="agent-item"
+              :class="{ active: activeAgentId === agent.id }"
+              @click="switchAgent(agent.id)"
+            >
+              <div class="agent-avatar">{{ agent.name.slice(0, 1) }}</div>
+              <div class="agent-info">
+                <div class="agent-name">{{ agent.name }}</div>
+                <div class="agent-meta">{{ agent.description || (agent.modelId ? agent.modelId.split('/').pop() : '') }}</div>
+              </div>
+            </div>
+            <div v-if="agents.length === 0" class="agent-empty">
+              暂无智能体，请在设置中配置服务器
             </div>
           </div>
 
-          <div class="sidebar-section-title">历史话题</div>
+          <!-- 当前 Agent 的话题列表 -->
+          <div class="sidebar-section-title">{{ activeAgent.name }} 的话题</div>
+          <button class="new-topic-btn" @click="createNewTopic">
+            + 开启新话题
+          </button>
           <div class="topic-list">
             <div 
               v-for="topic in topics" 
@@ -794,16 +1146,17 @@ onUnmounted(() => {
           </div>
 
           <button 
+            v-if="!activeAgent.agentDirId"
             class="new-topic-btn sync-btn" 
             :disabled="isSyncing" 
             @click="manualSync"
           >
             {{ isSyncing ? '同步中...' : '🔄 同步聊天记录' }}
           </button>
-          <div v-if="syncStatus" class="sync-status">{{ syncStatus }}</div>
+          <div v-if="syncStatus && !activeAgent.agentDirId" class="sync-status">{{ syncStatus }}</div>
 
           <div class="sidebar-footer-info">
-            VCP Mobile v1.0.0
+            VCP Mobile v1.1.0
           </div>
         </div>
       </div>
