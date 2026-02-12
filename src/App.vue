@@ -47,38 +47,135 @@ const config = ref({
 
 const pushStatus = ref('disconnected') // WebSocket 推送状态
 
-// 长按复制
-const copyMenuVisible = ref(false)
-const copyMenuPos = ref({ x: 0, y: 0 })
-const copyTargetMessage = ref(null)
+// 长按消息操作菜单
+const actionSheetVisible = ref(false)
+const actionSheetMessage = ref(null)
 let longPressTimer = null
 
 const onMsgTouchStart = (event, message) => {
   longPressTimer = setTimeout(() => {
-    copyTargetMessage.value = message
-    const touch = event.touches[0]
-    copyMenuPos.value = { x: touch.clientX, y: touch.clientY }
-    copyMenuVisible.value = true
+    actionSheetMessage.value = message
+    actionSheetVisible.value = true
   }, 500)
 }
 const onMsgTouchEnd = () => {
   clearTimeout(longPressTimer)
 }
+const closeActionSheet = () => {
+  actionSheetVisible.value = false
+  actionSheetMessage.value = null
+}
+
+// 复制文本
 const doCopyMessage = async () => {
-  if (!copyTargetMessage.value) return
+  if (!actionSheetMessage.value) return
   try {
-    await navigator.clipboard.writeText(copyTargetMessage.value.content || '')
+    await navigator.clipboard.writeText(actionSheetMessage.value.content || '')
     statusMessage.value = '已复制'
     setTimeout(() => { statusMessage.value = '' }, 1500)
   } catch {
     statusMessage.value = '复制失败'
   }
-  copyMenuVisible.value = false
-  copyTargetMessage.value = null
+  closeActionSheet()
 }
-const closeCopyMenu = () => {
-  copyMenuVisible.value = false
-  copyTargetMessage.value = null
+
+// 删除消息
+const doDeleteMessage = () => {
+  if (!actionSheetMessage.value) return
+  const msgId = actionSheetMessage.value.id
+  messages.value = messages.value.filter(m => m.id !== msgId)
+  saveHistory()
+  // VCPChat Agent：同步到桌面端（重写整个话题历史）
+  const agent = activeAgent.value
+  if (agent.agentDirId && config.value.baseUrl && config.value.adminUsername) {
+    const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+    const topicName = topics.value.find(t => t.id === currentTopicId.value)?.title || ''
+    appendToHistory(syncConfig, agent.agentDirId, currentTopicId.value, messages.value.map(m => ({
+      id: m.id, role: m.role, name: m.name, content: m.content, timestamp: m.timestamp,
+    })), topicName).catch(e => console.warn('[App] 同步删除到桌面端失败:', e.message))
+  }
+  statusMessage.value = '已删除'
+  setTimeout(() => { statusMessage.value = '' }, 1500)
+  closeActionSheet()
+}
+
+// 阅读模式
+const readModeVisible = ref(false)
+const readModeMessage = ref(null)
+const openReadMode = () => {
+  readModeMessage.value = actionSheetMessage.value
+  readModeVisible.value = true
+  closeActionSheet()
+}
+const closeReadMode = () => {
+  readModeVisible.value = false
+  readModeMessage.value = null
+}
+
+// 编辑消息
+const editModeVisible = ref(false)
+const editModeText = ref('')
+const editModeMessageId = ref(null)
+const openEditMode = () => {
+  if (!actionSheetMessage.value) return
+  editModeMessageId.value = actionSheetMessage.value.id
+  editModeText.value = actionSheetMessage.value.content || ''
+  editModeVisible.value = true
+  closeActionSheet()
+}
+const saveEditMessage = () => {
+  const msg = messages.value.find(m => m.id === editModeMessageId.value)
+  if (msg) {
+    msg.content = editModeText.value
+    saveHistory()
+    statusMessage.value = '已保存'
+    setTimeout(() => { statusMessage.value = '' }, 1500)
+  }
+  editModeVisible.value = false
+  editModeText.value = ''
+  editModeMessageId.value = null
+}
+const cancelEditMode = () => {
+  editModeVisible.value = false
+  editModeText.value = ''
+  editModeMessageId.value = null
+}
+
+// 转发消息
+const forwardPickerVisible = ref(false)
+const forwardMessage = ref(null)
+const openForwardPicker = () => {
+  forwardMessage.value = actionSheetMessage.value
+  forwardPickerVisible.value = true
+  closeActionSheet()
+}
+const closeForwardPicker = () => {
+  forwardPickerVisible.value = false
+  forwardMessage.value = null
+}
+const doForwardMessage = async (targetAgent, targetTopicId) => {
+  if (!forwardMessage.value || !targetAgent.agentDirId) return
+  const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+  const fwdMsg = {
+    id: `fwd_${Date.now()}`,
+    role: forwardMessage.value.role,
+    name: forwardMessage.value.name || (forwardMessage.value.role === 'user' ? 'You' : 'AI'),
+    content: `[转发消息]\n${forwardMessage.value.content}`,
+    timestamp: Date.now(),
+  }
+  const topicTitle = `转发的消息 ${new Date().toLocaleDateString()}`
+  try {
+    const result = await appendToHistory(syncConfig, targetAgent.agentDirId, targetTopicId || `fwd_${Date.now()}`, [fwdMsg], topicTitle)
+    if (result.success) {
+      statusMessage.value = `已转发到 ${targetAgent.name}`
+    } else {
+      statusMessage.value = '转发失败: ' + (result.error || '')
+    }
+  } catch (e) {
+    statusMessage.value = '转发失败: ' + e.message
+  }
+  setTimeout(() => { statusMessage.value = '' }, 2000)
+  closeForwardPicker()
 }
 
 // 音量键快捷操作
@@ -1249,12 +1346,75 @@ onUnmounted(() => {
       </div>
     </main>
 
-    <!-- 长按复制菜单 -->
-    <div v-if="copyMenuVisible" class="copy-menu-overlay" @click="closeCopyMenu">
-      <div class="copy-menu" :style="{ top: copyMenuPos.y + 'px', left: copyMenuPos.x + 'px' }" @click.stop="doCopyMessage">
-        复制
+    <!-- 消息操作 ActionSheet -->
+    <Teleport to="body">
+      <div v-if="actionSheetVisible" class="action-sheet-overlay" @click="closeActionSheet">
+        <div class="action-sheet" @click.stop>
+          <div class="action-sheet-item" @click="doCopyMessage">复制文本</div>
+          <div class="action-sheet-item" @click="openEditMode">编辑消息</div>
+          <div class="action-sheet-item" @click="openReadMode">阅读模式</div>
+          <div class="action-sheet-item forward-item" @click="openForwardPicker" v-if="agents.length > 0 && config.adminUsername">转发消息</div>
+          <div class="action-sheet-item delete-item" @click="doDeleteMessage">删除消息</div>
+          <div class="action-sheet-cancel" @click="closeActionSheet">取消</div>
+        </div>
       </div>
-    </div>
+    </Teleport>
+
+    <!-- 阅读模式 -->
+    <Teleport to="body">
+      <div v-if="readModeVisible && readModeMessage" class="read-mode-overlay" @click="closeReadMode">
+        <div class="read-mode-panel" @click.stop>
+          <div class="read-mode-header">
+            <span class="read-mode-role">{{ readModeMessage.role === 'user' ? '我' : (readModeMessage.name || 'AI') }}</span>
+            <button class="read-mode-close" @click="closeReadMode">✕</button>
+          </div>
+          <div class="read-mode-body" v-html="renderContent(readModeMessage)"></div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 编辑消息 -->
+    <Teleport to="body">
+      <div v-if="editModeVisible" class="edit-mode-overlay" @click="cancelEditMode">
+        <div class="edit-mode-panel" @click.stop>
+          <div class="edit-mode-header">
+            <span>编辑消息</span>
+            <button class="read-mode-close" @click="cancelEditMode">✕</button>
+          </div>
+          <textarea class="edit-mode-textarea" v-model="editModeText"></textarea>
+          <div class="edit-mode-actions">
+            <button class="edit-cancel-btn" @click="cancelEditMode">取消</button>
+            <button class="edit-save-btn" @click="saveEditMessage">保存</button>
+          </div>
+        </div>
+      </div>
+    </Teleport>
+
+    <!-- 转发消息：选择 Agent -->
+    <Teleport to="body">
+      <div v-if="forwardPickerVisible" class="forward-picker-overlay" @click="closeForwardPicker">
+        <div class="forward-picker-panel" @click.stop>
+          <div class="edit-mode-header">
+            <span>转发到</span>
+            <button class="read-mode-close" @click="closeForwardPicker">✕</button>
+          </div>
+          <div class="forward-agent-list">
+            <div
+              v-for="ag in agents.filter(a => a.agentDirId)"
+              :key="ag.id"
+              class="forward-agent-item"
+              @click="doForwardMessage(ag, null)"
+            >
+              <span class="forward-agent-name">{{ ag.name }}</span>
+              <span class="forward-agent-hint">新话题</span>
+            </div>
+            <div v-if="agents.filter(a => a.agentDirId).length === 0" class="forward-empty">
+              没有可转发的 Agent
+            </div>
+          </div>
+        </div>
+      </div>
+    </Teleport>
 
     <footer class="input-bar">
       <!-- 附件预览行 -->

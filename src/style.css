@@ -746,24 +746,232 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
   to { transform: rotate(360deg); }
 }
 
-/* 长按复制菜单 */
-.copy-menu-overlay {
+/* 消息操作 ActionSheet */
+.action-sheet-overlay {
   position: fixed;
   inset: 0;
   z-index: 9999;
+  background: rgba(0,0,0,0.45);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
 }
-.copy-menu {
-  position: fixed;
-  transform: translate(-50%, -120%);
-  background: var(--input-bg, #333);
+.action-sheet {
+  width: 100%;
+  max-width: 420px;
+  background: var(--sidebar-bg, #1a1a2e);
+  border-radius: 16px 16px 0 0;
+  padding-bottom: env(safe-area-inset-bottom, 12px);
+  animation: slideUp 0.2s ease;
+}
+.action-sheet-item {
+  padding: 16px 24px;
+  font-size: 0.95rem;
   color: var(--primary-text, #fff);
-  padding: 8px 20px;
-  border-radius: 8px;
-  font-size: 0.88rem;
-  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
-  user-select: none;
+  text-align: center;
   cursor: pointer;
-  white-space: nowrap;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.15s;
+}
+.action-sheet-item:active {
+  background: rgba(255,255,255,0.08);
+}
+.action-sheet-item.delete-item {
+  color: #ff6b6b;
+}
+.action-sheet-item.forward-item {
+  color: var(--highlight-text, #ffcb77);
+}
+.action-sheet-cancel {
+  padding: 16px 24px;
+  font-size: 0.95rem;
+  color: var(--secondary-text, #999);
+  text-align: center;
+  cursor: pointer;
+  margin-top: 6px;
+}
+@keyframes slideUp {
+  from { transform: translateY(100%); }
+  to { transform: translateY(0); }
+}
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* 阅读模式 */
+.read-mode-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.85);
+  display: flex;
+  flex-direction: column;
+  animation: fadeIn 0.15s ease;
+}
+.read-mode-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  max-height: 100vh;
+  overflow: hidden;
+}
+.read-mode-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  padding-top: calc(16px + env(safe-area-inset-top, 0px));
+  background: var(--sidebar-bg, #1a1a2e);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.read-mode-role {
+  font-size: 1rem;
+  font-weight: 600;
+  color: var(--highlight-text, #ffcb77);
+}
+.read-mode-close {
+  background: none;
+  border: none;
+  color: var(--secondary-text, #999);
+  font-size: 1.2rem;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+.read-mode-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px;
+  color: var(--primary-text, #fff);
+  font-size: 0.95rem;
+  line-height: 1.75;
+  -webkit-overflow-scrolling: touch;
+}
+
+/* 编辑消息模式 */
+.edit-mode-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  animation: fadeIn 0.15s ease;
+}
+.edit-mode-panel {
+  width: 100%;
+  max-width: 420px;
+  max-height: 80vh;
+  background: var(--sidebar-bg, #1a1a2e);
+  border-radius: 16px;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.edit-mode-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--primary-text, #fff);
+  border-bottom: 1px solid rgba(255,255,255,0.08);
+}
+.edit-mode-textarea {
+  flex: 1;
+  min-height: 200px;
+  max-height: 50vh;
+  padding: 16px;
+  background: transparent;
+  color: var(--primary-text, #fff);
+  border: none;
+  outline: none;
+  font-size: 0.9rem;
+  line-height: 1.6;
+  resize: none;
+  font-family: inherit;
+}
+.edit-mode-actions {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+}
+.edit-cancel-btn, .edit-save-btn {
+  flex: 1;
+  padding: 10px;
+  border: none;
+  border-radius: 10px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+.edit-cancel-btn {
+  background: rgba(255,255,255,0.08);
+  color: var(--secondary-text, #999);
+}
+.edit-save-btn {
+  background: var(--highlight-text, #ffcb77);
+  color: #1a1a2e;
+  font-weight: 600;
+}
+
+/* 转发消息选择器 */
+.forward-picker-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  background: rgba(0,0,0,0.7);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  animation: fadeIn 0.15s ease;
+}
+.forward-picker-panel {
+  width: 100%;
+  max-width: 420px;
+  max-height: 60vh;
+  background: var(--sidebar-bg, #1a1a2e);
+  border-radius: 16px 16px 0 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom, 12px);
+  animation: slideUp 0.2s ease;
+}
+.forward-agent-list {
+  flex: 1;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+}
+.forward-agent-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 20px;
+  cursor: pointer;
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+  transition: background 0.15s;
+}
+.forward-agent-item:active {
+  background: rgba(255,255,255,0.08);
+}
+.forward-agent-name {
+  font-size: 0.92rem;
+  color: var(--primary-text, #fff);
+}
+.forward-agent-hint {
+  font-size: 0.78rem;
+  color: var(--secondary-text, #999);
+}
+.forward-empty {
+  padding: 30px 20px;
+  text-align: center;
+  color: var(--secondary-text, #999);
+  font-size: 0.88rem;
 }
 
 /* 音量键快捷操作状态 */
