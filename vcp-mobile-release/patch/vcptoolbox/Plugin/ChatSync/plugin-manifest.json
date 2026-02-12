@@ -1,0 +1,31 @@
+{
+  "manifestVersion": "1.0.0",
+  "name": "ChatSync",
+  "version": "1.0.0",
+  "displayName": "聊天记录同步服务",
+  "description": "跨设备聊天记录同步服务，支持 VCPChat 桌面端和 vcp-mobile 移动端之间的增量同步。",
+  "author": "wangyuang3927",
+  "pluginType": "service",
+  "entryPoint": {
+    "type": "nodejs",
+    "script": "ChatSync.js"
+  },
+  "communication": {
+    "protocol": "direct"
+  },
+  "configSchema": {
+    "DebugMode": {
+      "type": "boolean",
+      "description": "是否启用调试日志",
+      "default": false
+    }
+  },
+  "capabilities": {
+    "services": [
+      {
+        "serviceName": "ChatHistorySync",
+        "description": "提供聊天记录的增量同步 API，支持多设备间的消息级同步。"
+      }
+    ]
+  }
+}

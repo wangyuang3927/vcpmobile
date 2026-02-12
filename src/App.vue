@@ -21,6 +21,10 @@ const streamAbortController = ref(null)
 const models = ref([])
 const pendingAttachments = ref([])
 const fileInput = ref(null)
+const cameraInput = ref(null)
+const videoInput = ref(null)
+const isAttachMenuOpen = ref(false)
+const isCompressing = ref(false)
 
 const topics = ref([])
 const currentTopicId = ref(null)
@@ -37,9 +41,85 @@ const config = ref({
   adminUsername: '',
   adminPassword: '',
   imageKey: '',
+  screenshotPresetMessage: '识别截图内容并记录日记',
+  clipPresetMessage: '分析以下内容',
 })
 
 const pushStatus = ref('disconnected') // WebSocket 推送状态
+
+// 长按复制
+const copyMenuVisible = ref(false)
+const copyMenuPos = ref({ x: 0, y: 0 })
+const copyTargetMessage = ref(null)
+let longPressTimer = null
+
+const onMsgTouchStart = (event, message) => {
+  longPressTimer = setTimeout(() => {
+    copyTargetMessage.value = message
+    const touch = event.touches[0]
+    copyMenuPos.value = { x: touch.clientX, y: touch.clientY }
+    copyMenuVisible.value = true
+  }, 500)
+}
+const onMsgTouchEnd = () => {
+  clearTimeout(longPressTimer)
+}
+const doCopyMessage = async () => {
+  if (!copyTargetMessage.value) return
+  try {
+    await navigator.clipboard.writeText(copyTargetMessage.value.content || '')
+    statusMessage.value = '已复制'
+    setTimeout(() => { statusMessage.value = '' }, 1500)
+  } catch {
+    statusMessage.value = '复制失败'
+  }
+  copyMenuVisible.value = false
+  copyTargetMessage.value = null
+}
+const closeCopyMenu = () => {
+  copyMenuVisible.value = false
+  copyTargetMessage.value = null
+}
+
+// 音量键快捷操作
+const volumeKeyAccessibility = ref(false)
+const volumeKeyEnabled = ref(true)
+
+const checkVolumeKeyStatus = async () => {
+  try {
+    const { Capacitor, registerPlugin } = await import('@capacitor/core')
+    if (!Capacitor.isNativePlatform()) return
+    const VolumeKey = registerPlugin('VolumeKey')
+    const res = await VolumeKey.isEnabled()
+    volumeKeyAccessibility.value = res.accessibilityGranted
+    volumeKeyEnabled.value = res.enabled
+  } catch (e) {
+    console.warn('[VolumeKey] 检查状态失败:', e)
+  }
+}
+
+const openAccessibilitySettings = async () => {
+  try {
+    const { Capacitor, registerPlugin } = await import('@capacitor/core')
+    if (!Capacitor.isNativePlatform()) return
+    const VolumeKey = registerPlugin('VolumeKey')
+    await VolumeKey.openAccessibilitySettings()
+  } catch (e) {
+    console.warn('[VolumeKey] 打开设置失败:', e)
+  }
+}
+
+const toggleVolumeKey = async (enabled) => {
+  try {
+    const { Capacitor, registerPlugin } = await import('@capacitor/core')
+    if (!Capacitor.isNativePlatform()) return
+    const VolumeKey = registerPlugin('VolumeKey')
+    await VolumeKey.setEnabled({ enabled })
+    volumeKeyEnabled.value = enabled
+  } catch (e) {
+    console.warn('[VolumeKey] 切换失败:', e)
+  }
+}
 
 // 壁纸
 const selectedWallpaper = ref(localStorage.getItem('vcpMobileWallpaper') || '')
@@ -159,6 +239,8 @@ const refreshAgents = async () => {
         loadHistory()
       }
       console.log(`[App] 已刷新 ${agents.value.length} 个 Agent (来源: ${result.source})`)
+      // 刷新后同步原生层配置（agentDirId 可能已更新）
+      syncScreenshotConfig()
     }
   } catch (e) {
     console.warn('[App] 刷新 Agent 列表失败:', e.message)
@@ -174,6 +256,9 @@ const switchAgent = (agentId) => {
 
   activeAgentId.value = agentId
   saveActiveAgentId(agentId)
+
+  // 同步原生层配置（更新 agentDirId）
+  syncScreenshotConfig()
 
   // 加载该 Agent 的话题列表
   loadHistory()
@@ -358,7 +443,7 @@ const renderContent = (message) => {
     messageId: message.id,
     role: message.role,
     allowBubbleCss: !isVCPChat && config.value.enableAgentBubbleTheme,
-    baseUrl: config.value.baseUrl,
+    baseUrl: normalizeBaseUrl(config.value.baseUrl),
     imageKey: config.value.imageKey,
     isStreaming: message.isStreaming,
   })
@@ -401,6 +486,30 @@ const loadConfig = () => {
   }
 }
 
+const syncScreenshotConfig = async () => {
+  try {
+    const { Capacitor } = await import('@capacitor/core')
+    if (Capacitor.isNativePlatform()) {
+      const { registerPlugin } = await import('@capacitor/core')
+      const ScreenshotSender = registerPlugin('ScreenshotSender')
+      await ScreenshotSender.configure({
+        baseUrl: config.value.baseUrl,
+        apiKey: config.value.apiKey,
+        model: config.value.model,
+        presetMessage: config.value.screenshotPresetMessage || '识别截图内容并记录日记',
+        clipPresetMessage: config.value.clipPresetMessage || '分析以下内容',
+        systemPrompt: config.value.systemPrompt || '',
+        adminUsername: config.value.adminUsername || '',
+        adminPassword: config.value.adminPassword || '',
+        agentDirId: activeAgent.value?.agentDirId || '',
+      })
+      console.log('[ScreenshotSender] 配置已同步到原生层')
+    }
+  } catch (e) {
+    console.warn('[ScreenshotSender] 同步配置失败:', e)
+  }
+}
+
 const saveConfig = async () => {
   localStorage.setItem('vcpMobileConfig', JSON.stringify(config.value))
   document.body.classList.toggle('agent-bubble-theme', !!config.value.enableAgentBubbleTheme)
@@ -411,6 +520,8 @@ const saveConfig = async () => {
   setTimeout(() => { if (statusMessage.value === '设置已保存') statusMessage.value = '' }, 2000)
   // 重连 WebSocket 推送
   initPushConnection()
+  // 同步截图发送配置到原生层
+  syncScreenshotConfig()
 }
 
 const refreshModels = async () => {
@@ -472,8 +583,9 @@ const buildPayloadMessages = (items) => {
       if (message.role === 'user' && message.attachments && message.attachments.length > 0) {
         const contentParts = [{ type: 'text', text: message.content || '' }]
         message.attachments.forEach((att) => {
-          const mimeType = att.mimeType.toLowerCase()
-          if (att.kind === 'audio' || att.kind === 'image' || mimeType.startsWith('audio/') || mimeType.startsWith('image/')) {
+          const mimeType = (att.mimeType || '').toLowerCase()
+          if (att.kind === 'audio' || att.kind === 'image' || att.kind === 'video' ||
+              mimeType.startsWith('audio/') || mimeType.startsWith('image/') || mimeType.startsWith('video/')) {
             contentParts.push({
               type: 'image_url',
               image_url: { url: att.url }
@@ -496,8 +608,154 @@ const buildPayloadMessages = (items) => {
   return [...payload, ...history]
 }
 
-const triggerFileInput = () => {
+const toggleAttachMenu = () => {
+  isAttachMenuOpen.value = !isAttachMenuOpen.value
+}
+
+const triggerCamera = () => {
+  isAttachMenuOpen.value = false
+  cameraInput.value?.click()
+}
+
+const triggerVideo = () => {
+  isAttachMenuOpen.value = false
+  videoInput.value?.click()
+}
+
+const triggerFilePicker = () => {
+  isAttachMenuOpen.value = false
   fileInput.value?.click()
+}
+
+// 视频压缩：通过 Canvas + MediaRecorder 重编码降低码率
+const compressVideo = (file, targetBitrate = 800000) => {
+  return new Promise((resolve, reject) => {
+    const video = document.createElement('video')
+    video.muted = true
+    video.playsInline = true
+    video.src = URL.createObjectURL(file)
+
+    video.onloadedmetadata = () => {
+      // 限制分辨率：最大 720p
+      let w = video.videoWidth
+      let h = video.videoHeight
+      const maxDim = 720
+      if (Math.max(w, h) > maxDim) {
+        const scale = maxDim / Math.max(w, h)
+        w = Math.round(w * scale)
+        h = Math.round(h * scale)
+      }
+      // 确保宽高为偶数
+      w = w % 2 === 0 ? w : w + 1
+      h = h % 2 === 0 ? h : h + 1
+
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+
+      const stream = canvas.captureStream(24)
+      // 尝试添加音轨
+      try {
+        if (video.captureStream) {
+          const videoStream = video.captureStream()
+          const audioTracks = videoStream.getAudioTracks()
+          audioTracks.forEach(t => stream.addTrack(t))
+        }
+      } catch (e) { /* 部分浏览器不支持 captureStream */ }
+
+      const mimeType = MediaRecorder.isTypeSupported('video/webm;codecs=vp9')
+        ? 'video/webm;codecs=vp9'
+        : MediaRecorder.isTypeSupported('video/webm;codecs=vp8')
+          ? 'video/webm;codecs=vp8'
+          : 'video/webm'
+
+      const recorder = new MediaRecorder(stream, { mimeType, videoBitsPerSecond: targetBitrate })
+      const chunks = []
+      recorder.ondataavailable = (e) => { if (e.data.size > 0) chunks.push(e.data) }
+      recorder.onstop = () => {
+        URL.revokeObjectURL(video.src)
+        const blob = new Blob(chunks, { type: mimeType })
+        resolve(blob)
+      }
+      recorder.onerror = (e) => {
+        URL.revokeObjectURL(video.src)
+        reject(e)
+      }
+
+      recorder.start()
+      video.play()
+
+      const drawFrame = () => {
+        if (video.ended || video.paused) {
+          recorder.stop()
+          return
+        }
+        ctx.drawImage(video, 0, 0, w, h)
+        requestAnimationFrame(drawFrame)
+      }
+      requestAnimationFrame(drawFrame)
+
+      video.onended = () => {
+        setTimeout(() => recorder.stop(), 100)
+      }
+    }
+
+    video.onerror = () => {
+      URL.revokeObjectURL(video.src)
+      reject(new Error('无法加载视频'))
+    }
+  })
+}
+
+// 图片压缩：通过 Canvas 缩放 + JPEG 压缩，避免大图 base64 导致 OOM
+const compressImage = (file, maxDim = 1920, quality = 0.8) => {
+  return new Promise((resolve, reject) => {
+    const img = new Image()
+    img.onload = () => {
+      let w = img.width
+      let h = img.height
+      if (Math.max(w, h) > maxDim) {
+        const scale = maxDim / Math.max(w, h)
+        w = Math.round(w * scale)
+        h = Math.round(h * scale)
+      }
+      const canvas = document.createElement('canvas')
+      canvas.width = w
+      canvas.height = h
+      const ctx = canvas.getContext('2d')
+      ctx.drawImage(img, 0, 0, w, h)
+      URL.revokeObjectURL(img.src)
+      canvas.toBlob(
+        (blob) => {
+          if (blob) resolve(blob)
+          else reject(new Error('Canvas toBlob 失败'))
+        },
+        'image/jpeg',
+        quality
+      )
+    }
+    img.onerror = () => {
+      URL.revokeObjectURL(img.src)
+      reject(new Error('无法加载图片'))
+    }
+    img.src = URL.createObjectURL(file)
+  })
+}
+
+const addFileAsAttachment = (file, dataUrl) => {
+  let kind = 'file'
+  if (file.type.startsWith('image/')) kind = 'image'
+  else if (file.type.startsWith('video/')) kind = 'video'
+  else if (file.type.startsWith('audio/')) kind = 'audio'
+
+  pendingAttachments.value.push({
+    id: `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
+    name: file.name,
+    mimeType: file.type,
+    url: dataUrl,
+    kind
+  })
 }
 
 const handleFileChange = async (event) => {
@@ -505,22 +763,55 @@ const handleFileChange = async (event) => {
   if (!files.length) return
 
   for (const file of files) {
-    const reader = new FileReader()
-    reader.onload = (e) => {
-      let kind = 'file'
-      if (file.type.startsWith('image/')) kind = 'image'
-      else if (file.type.startsWith('video/')) kind = 'video'
-      else if (file.type.startsWith('audio/')) kind = 'audio'
-
-      pendingAttachments.value.push({
-        id: `att_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
-        name: file.name,
-        mimeType: file.type,
-        url: e.target.result,
-        kind
-      })
+    // 视频文件 > 5MB 自动压缩
+    if (file.type.startsWith('video/') && file.size > 5 * 1024 * 1024) {
+      try {
+        isCompressing.value = true
+        statusMessage.value = `正在压缩视频 (${(file.size / 1024 / 1024).toFixed(1)}MB)...`
+        const compressed = await compressVideo(file)
+        statusMessage.value = `压缩完成: ${(file.size / 1024 / 1024).toFixed(1)}MB → ${(compressed.size / 1024 / 1024).toFixed(1)}MB`
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          const ext = compressed.type.includes('webm') ? 'webm' : 'mp4'
+          addFileAsAttachment(
+            { name: file.name.replace(/\.[^.]+$/, `.${ext}`), type: compressed.type, size: compressed.size },
+            e.target.result
+          )
+        }
+        reader.readAsDataURL(compressed)
+      } catch (err) {
+        console.error('视频压缩失败，使用原始文件:', err)
+        statusMessage.value = '视频压缩失败，使用原始文件'
+        const reader = new FileReader()
+        reader.onload = (e) => addFileAsAttachment(file, e.target.result)
+        reader.readAsDataURL(file)
+      } finally {
+        isCompressing.value = false
+        setTimeout(() => { statusMessage.value = '' }, 3000)
+      }
+    } else if (file.type.startsWith('image/')) {
+      // 图片压缩后再转 base64，防止大图 OOM 闪退
+      try {
+        const compressed = await compressImage(file)
+        const reader = new FileReader()
+        reader.onload = (e) => {
+          addFileAsAttachment(
+            { name: file.name.replace(/\.[^.]+$/, '.jpg'), type: 'image/jpeg', size: compressed.size },
+            e.target.result
+          )
+        }
+        reader.readAsDataURL(compressed)
+      } catch (err) {
+        console.error('图片压缩失败，使用原始文件:', err)
+        const reader = new FileReader()
+        reader.onload = (e) => addFileAsAttachment(file, e.target.result)
+        reader.readAsDataURL(file)
+      }
+    } else {
+      const reader = new FileReader()
+      reader.onload = (e) => addFileAsAttachment(file, e.target.result)
+      reader.readAsDataURL(file)
     }
-    reader.readAsDataURL(file)
   }
   event.target.value = ''
 }
@@ -854,10 +1145,19 @@ onPushStatusChange((status) => {
   console.log('[App] 推送状态:', status)
 })
 
+const closeAttachMenuOnOutsideClick = (e) => {
+  if (isAttachMenuOpen.value && !e.target.closest('.attach-menu-wrapper')) {
+    isAttachMenuOpen.value = false
+  }
+}
+
 onMounted(async () => {
   document.body.classList.toggle('light-theme', isLightTheme.value)
+  document.addEventListener('click', closeAttachMenuOnOutsideClick)
   loadConfig()
+  checkVolumeKeyStatus() // 检查音量键快捷操作状态
   await loadAgents() // 先从缓存加载 Agent 列表
+  syncScreenshotConfig() // 同步截图发送配置到原生层（需在 loadAgents 之后，确保 agentDirId 已加载）
   loadHistory()
   if (config.value.baseUrl) {
     refreshModels()
@@ -870,6 +1170,7 @@ onMounted(async () => {
 })
 
 onUnmounted(() => {
+  document.removeEventListener('click', closeAttachMenuOnOutsideClick)
   pushDisconnect()
 })
 </script>
@@ -924,7 +1225,11 @@ onUnmounted(() => {
                 <div class="sender-name">{{ message.role === 'user' ? '你' : (message.name || 'AI') }}</div>
                 <div class="message-timestamp">{{ formatTime(message.timestamp) }}</div>
               </div>
-              <div class="md-content">
+              <div class="md-content"
+                @touchstart.passive="onMsgTouchStart($event, message)"
+                @touchend="onMsgTouchEnd"
+                @touchmove="onMsgTouchEnd"
+              >
                 <div v-html="renderContent(message)"></div>
                 <!-- 消息附件 -->
                 <div v-if="message.attachments && message.attachments.length > 0" class="message-attachments-preview">
@@ -944,6 +1249,13 @@ onUnmounted(() => {
       </div>
     </main>
 
+    <!-- 长按复制菜单 -->
+    <div v-if="copyMenuVisible" class="copy-menu-overlay" @click="closeCopyMenu">
+      <div class="copy-menu" :style="{ top: copyMenuPos.y + 'px', left: copyMenuPos.x + 'px' }" @click.stop="doCopyMessage">
+        复制
+      </div>
+    </div>
+
     <footer class="input-bar">
       <!-- 附件预览行 -->
       <div v-if="pendingAttachments.length > 0" class="pending-attachments-row">
@@ -953,8 +1265,30 @@ onUnmounted(() => {
         </div>
       </div>
 
+      <!-- 压缩状态提示 -->
+      <div v-if="isCompressing" class="compress-status-bar">
+        <span class="compress-spinner"></span>
+        <span>{{ statusMessage }}</span>
+      </div>
+
       <div class="input-controls">
-        <button class="icon-button" type="button" @click="triggerFileInput">+</button>
+        <div class="attach-menu-wrapper">
+          <button class="icon-button" type="button" @click="toggleAttachMenu">+</button>
+          <div v-if="isAttachMenuOpen" class="attach-menu">
+            <button class="attach-menu-item" @click="triggerCamera">
+              <span class="attach-menu-icon">📷</span>
+              <span>拍照</span>
+            </button>
+            <button class="attach-menu-item" @click="triggerVideo">
+              <span class="attach-menu-icon">🎬</span>
+              <span>拍视频</span>
+            </button>
+            <button class="attach-menu-item" @click="triggerFilePicker">
+              <span class="attach-menu-icon">📁</span>
+              <span>选文件</span>
+            </button>
+          </div>
+        </div>
         <button 
           class="icon-button recording-btn" 
           :class="{ active: isRecording }" 
@@ -976,13 +1310,11 @@ onUnmounted(() => {
       </div>
 
       <!-- 隐藏的文件输入 -->
-      <input 
-        ref="fileInput" 
-        type="file" 
-        multiple 
-        style="display: none" 
-        @change="handleFileChange"
-      />
+      <input ref="fileInput" type="file" multiple style="display: none" @change="handleFileChange" />
+      <!-- 拍照输入 -->
+      <input ref="cameraInput" type="file" accept="image/*" capture="environment" style="display: none" @change="handleFileChange" />
+      <!-- 拍视频输入 -->
+      <input ref="videoInput" type="file" accept="video/*" capture="environment" style="display: none" @change="handleFileChange" />
     </footer>
 
     <div v-if="isSettingsOpen" class="settings-panel">
@@ -1039,6 +1371,25 @@ onUnmounted(() => {
           <label>
             <span>图片密钥 (Image Key)</span>
             <input v-model="config.imageKey" placeholder="服务器 Image_Key，用于加载表情图" />
+          </label>
+          <div class="settings-divider">音量键快捷操作</div>
+          <p class="settings-hint">双击音量上键 → 截图发送给 AI；长按音量上键 → 剪贴板发送给 AI。需开启辅助功能权限。</p>
+          <div class="volume-key-status">
+            <span>辅助功能权限</span>
+            <span v-if="volumeKeyAccessibility" class="vk-badge vk-on">已开启</span>
+            <button v-else class="vk-badge vk-off" @click="openAccessibilitySettings">去开启</button>
+          </div>
+          <label v-if="volumeKeyAccessibility" class="settings-toggle">
+            <span>启用音量键监听</span>
+            <input type="checkbox" :checked="volumeKeyEnabled" @change="toggleVolumeKey($event.target.checked)" />
+          </label>
+          <label>
+            <span>截图预设消息</span>
+            <input v-model="config.screenshotPresetMessage" placeholder="识别截图内容并记录日记" />
+          </label>
+          <label>
+            <span>剪贴板预设消息</span>
+            <input v-model="config.clipPresetMessage" placeholder="分析以下内容" />
           </label>
           <div class="settings-divider">外观</div>
           <div class="settings-wallpaper-row">

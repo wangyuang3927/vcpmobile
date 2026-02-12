@@ -25,6 +25,64 @@
 
         </activity>
 
+        <!-- 截图快捷发送 Activity（无 UI，供 Button Mapper 等外部工具启动） -->
+        <activity
+            android:name=".ScreenshotSendActivity"
+            android:label="VCP 截图发送"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="">
+            <intent-filter>
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+                <data android:scheme="vcpmobile" android:host="send" />
+            </intent-filter>
+        </activity>
+
+        <!-- 剪贴板快捷发送 Activity（无 UI，供 Button Mapper 等外部工具启动） -->
+        <activity
+            android:name=".ClipboardSendActivity"
+            android:label="VCP 剪贴板发送"
+            android:theme="@android:style/Theme.NoDisplay"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+
+        <!-- 剪贴板读取透明 Activity（Android 10+ 后台 Service 无法读取剪贴板） -->
+        <activity
+            android:name=".ClipboardReaderActivity"
+            android:theme="@android:style/Theme.Translucent.NoTitleBar"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:taskAffinity="" />
+
+        <!-- 截图发送前台服务 -->
+        <service
+            android:name=".ScreenshotSenderService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+
+        <!-- 剪贴板发送前台服务 -->
+        <service
+            android:name=".ClipboardSenderService"
+            android:exported="false"
+            android:foregroundServiceType="shortService" />
+
+        <!-- 音量键快捷操作（AccessibilityService） -->
+        <service
+            android:name=".VolumeKeyService"
+            android:exported="false"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService" />
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/volume_key_service_config" />
+        </service>
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"
@@ -44,4 +102,8 @@
     <uses-permission android:name="android.permission.READ_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.WRITE_EXTERNAL_STORAGE" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
+    <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>

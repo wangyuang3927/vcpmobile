@@ -670,6 +670,132 @@ body.agent-bubble-theme .message-item.assistant .vcp-bubble-root {
   100% { transform: scale(1); box-shadow: 0 0 0 0 rgba(255, 77, 79, 0); }
 }
 
+/* 附件弹出菜单 */
+.attach-menu-wrapper {
+  position: relative;
+}
+
+.attach-menu {
+  position: absolute;
+  bottom: calc(100% + 8px);
+  left: 0;
+  background: var(--panel-bg-dark);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 14px;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 130px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  z-index: 15;
+  animation: menu-pop 0.15s ease-out;
+}
+
+@keyframes menu-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.95); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.attach-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border: none;
+  background: transparent;
+  color: var(--primary-text);
+  font-size: 0.85rem;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.attach-menu-item:hover,
+.attach-menu-item:active {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.attach-menu-icon {
+  font-size: 1.1rem;
+}
+
+/* 视频压缩状态栏 */
+.compress-status-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: rgba(255, 203, 119, 0.12);
+  border-radius: 10px;
+  margin-bottom: 6px;
+  font-size: 0.75rem;
+  color: #ffcb77;
+}
+
+.compress-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 203, 119, 0.3);
+  border-top-color: #ffcb77;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+/* 长按复制菜单 */
+.copy-menu-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+}
+.copy-menu {
+  position: fixed;
+  transform: translate(-50%, -120%);
+  background: var(--input-bg, #333);
+  color: var(--primary-text, #fff);
+  padding: 8px 20px;
+  border-radius: 8px;
+  font-size: 0.88rem;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.35);
+  user-select: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* 音量键快捷操作状态 */
+.volume-key-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 0;
+}
+.vk-badge {
+  font-size: 0.78rem;
+  padding: 3px 10px;
+  border-radius: 12px;
+  border: none;
+  cursor: pointer;
+}
+.vk-badge.vk-on {
+  background: rgba(76, 175, 80, 0.2);
+  color: #4caf50;
+}
+.vk-badge.vk-off {
+  background: rgba(255, 152, 0, 0.2);
+  color: #ff9800;
+}
+
+.settings-hint {
+  font-size: 0.72rem;
+  color: var(--secondary-text);
+  margin: -4px 0 8px;
+  line-height: 1.4;
+}
+
 .pending-attachments-row {
   display: flex;
   flex-wrap: wrap;
