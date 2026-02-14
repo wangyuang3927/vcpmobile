@@ -90,13 +90,13 @@ async function getCityInfo(cityName, weatherKey, weatherUrl) {
     }
   }
 
-  const lookupUrl = `https://geoapi.qweather.com/geo/v2/city/lookup?location=${encodeURIComponent(
+  const lookupUrl = `https://${weatherUrl}/geo/v2/city/lookup?location=${encodeURIComponent(
     cityName,
-  )}&key=${weatherKey}`;
+  )}`;
 
   try {
     console.error(`[WeatherReporter] Fetching city info for: ${cityName}`);
-    const response = await fetch(lookupUrl, { timeout: 10000 }); // 10s timeout
+    const response = await fetch(lookupUrl, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } }); // 10s timeout
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -128,11 +128,11 @@ async function getCurrentWeather(cityId, weatherKey, weatherUrl) {
     return { success: false, data: null, error: new Error('Missing parameters for getCurrentWeather.') };
   }
 
-  const weatherUrlEndpoint = `https://${weatherUrl}/v7/weather/now?location=${cityId}&key=${weatherKey}`;
+  const weatherUrlEndpoint = `https://${weatherUrl}/v7/weather/now?location=${cityId}`;
 
   try {
     console.error(`[WeatherReporter] Fetching current weather for city ID: ${cityId}`);
-    const response = await fetch(weatherUrlEndpoint, { timeout: 10000 }); // 10s timeout
+    const response = await fetch(weatherUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } }); // 10s timeout
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -178,11 +178,11 @@ async function getNDayForecast(cityId, weatherKey, weatherUrl, days = 7) {
     endpoint = '7d';
   }
 
-  const forecastUrlEndpoint = `https://${weatherUrl}/v7/weather/${endpoint}?location=${cityId}&key=${weatherKey}`;
+  const forecastUrlEndpoint = `https://${weatherUrl}/v7/weather/${endpoint}?location=${cityId}`;
 
   try {
     console.error(`[WeatherReporter] Fetching ${days}-day forecast for city ID: ${cityId}`);
-    const response = await fetch(forecastUrlEndpoint, { timeout: 10000 }); // 10s timeout
+    const response = await fetch(forecastUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } }); // 10s timeout
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -210,11 +210,11 @@ async function get24HourForecast(cityId, weatherKey, weatherUrl) {
     return { success: false, data: null, error: new Error('Missing parameters for get24HourForecast.') };
   }
 
-  const forecastUrlEndpoint = `https://${weatherUrl}/v7/weather/24h?location=${cityId}&key=${weatherKey}`;
+  const forecastUrlEndpoint = `https://${weatherUrl}/v7/weather/24h?location=${cityId}`;
 
   try {
     console.error(`[WeatherReporter] Fetching 24-hour forecast for city ID: ${cityId}`);
-    const response = await fetch(forecastUrlEndpoint, { timeout: 10000 }); // 10s timeout
+    const response = await fetch(forecastUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } }); // 10s timeout
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -242,11 +242,11 @@ async function getWeatherWarning(cityId, weatherKey, weatherUrl) {
     return { success: false, data: null, error: new Error('Missing parameters for getWeatherWarning.') };
   }
 
-  const warningUrlEndpoint = `https://${weatherUrl}/v7/warning/now?location=${cityId}&key=${weatherKey}`;
+  const warningUrlEndpoint = `https://${weatherUrl}/v7/warning/now?location=${cityId}`;
 
   try {
     console.error(`[WeatherReporter] Fetching weather warning for city ID: ${cityId}`);
-    const response = await fetch(warningUrlEndpoint, { timeout: 10000 }); // 10s timeout
+    const response = await fetch(warningUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } }); // 10s timeout
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -276,11 +276,11 @@ async function getMoonPhase(cityId, weatherKey, weatherUrl) {
   }
 
   const today = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  const moonPhaseUrlEndpoint = `https://${weatherUrl}/v7/astronomy/moon?location=${cityId}&date=${today}&key=${weatherKey}`;
+  const moonPhaseUrlEndpoint = `https://${weatherUrl}/v7/astronomy/moon?location=${cityId}&date=${today}`;
 
   try {
     console.error(`[WeatherReporter] Fetching moon phase for city ID: ${cityId}`);
-    const response = await fetch(moonPhaseUrlEndpoint, { timeout: 10000 }); // 10s timeout
+    const response = await fetch(moonPhaseUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } }); // 10s timeout
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -308,11 +308,11 @@ async function getAirQuality(latitude, longitude, weatherKey, weatherUrl) {
     return { success: false, data: null, error: new Error('Missing parameters for getAirQuality.') };
   }
 
-  const airQualityUrlEndpoint = `https://${weatherUrl}/v7/air/now?location=${longitude},${latitude}&key=${weatherKey}`;
+  const airQualityUrlEndpoint = `https://${weatherUrl}/airquality/v1/current/${latitude}/${longitude}`;
 
   try {
     console.error(`[WeatherReporter] Fetching air quality for coords: ${latitude},${longitude}`);
-    const response = await fetch(airQualityUrlEndpoint, { timeout: 10000 });
+    const response = await fetch(airQualityUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } });
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -320,9 +320,20 @@ async function getAirQuality(latitude, longitude, weatherKey, weatherUrl) {
     }
 
     const data = await response.json();
-    if (data.code === '200') {
+    // 新 API 直接返回 { indexes, pollutants, stations }，无 code 字段
+    if (data.indexes && data.indexes.length > 0) {
+      const mainIndex = data.indexes.find((i) => i.code === 'us-epa') || data.indexes[0];
+      const pm2p5Pollutant =
+        data.pollutants && data.pollutants.find((p) => p.code === 'pm2p5');
+      const now = {
+        aqi: mainIndex.aqi,
+        primary:
+          (mainIndex.primaryPollutant && mainIndex.primaryPollutant.name) || 'NA',
+        category: mainIndex.category || '',
+        pm2p5: pm2p5Pollutant ? pm2p5Pollutant.concentration.value : null,
+      };
       console.error(`[WeatherReporter] Successfully fetched air quality for ${latitude},${longitude}.`);
-      return { success: true, data: data.now, error: null };
+      return { success: true, data: now, error: null };
     } else {
       throw new Error(`Failed to get air quality for ${latitude},${longitude}. Response: ${JSON.stringify(data)}`);
     }
@@ -343,11 +354,11 @@ async function getSolarElevationAngle(latitude, longitude, altitude, date, time,
   }
 
   const locationString = `${longitude},${latitude}`;
-  const solarAngleUrlEndpoint = `https://${weatherUrl}/v7/astronomy/solar-elevation-angle?location=${locationString}&alt=${altitude}&date=${date}&time=${time}&tz=${tz}&key=${weatherKey}`;
+  const solarAngleUrlEndpoint = `https://${weatherUrl}/v7/astronomy/solar-elevation-angle?location=${locationString}&alt=${altitude}&date=${date}&time=${time}&tz=${tz}`;
 
   try {
     console.error(`[WeatherReporter] Fetching solar elevation angle for coords: ${locationString}`);
-    const response = await fetch(solarAngleUrlEndpoint, { timeout: 10000 });
+    const response = await fetch(solarAngleUrlEndpoint, { timeout: 10000, headers: { 'X-QW-Api-Key': weatherKey } });
 
     if (!response.ok) {
       const errorText = await response.text();
