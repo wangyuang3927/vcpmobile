@@ -9,6 +9,7 @@ public class MainActivity extends BridgeActivity {
     protected void onCreate(Bundle savedInstanceState) {
         registerPlugin(ScreenshotSenderPlugin.class);
         registerPlugin(VolumeKeyPlugin.class);
+        registerPlugin(ImageSaverPlugin.class);
         super.onCreate(savedInstanceState);
         WebView.setWebContentsDebuggingEnabled(true);
     }

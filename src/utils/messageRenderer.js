@@ -1,5 +1,6 @@
 import { marked } from 'marked'
 import DOMPurify from 'dompurify'
+import { autoCompleteHtml, hasVcpRoot, hasExecutableScript } from './htmlAutoComplete'
 
 marked.setOptions({
   breaks: true,
@@ -610,6 +611,17 @@ export const renderMessageHtml = (text = '', options = {}) => {
   const bubbleScopeId = messageId ? makeSafeId(messageId) : ''
   
   let processed = text
+
+  // === 富文本沙箱渲染 ===
+  // 完成后的消息如果包含 vcp-root + 可执行脚本，标记为沙箱占位容器
+  if (messageId && role === 'assistant' && !isStreaming && hasVcpRoot(processed) && hasExecutableScript(processed)) {
+    return `<div class="vcp-sandbox-container" data-sandbox-id="${bubbleScopeId}"></div>`
+  }
+
+  // 流式渲染时如果检测到 vcp-root，使用 HTML 自动补全确保标签闭合
+  if (isStreaming && hasVcpRoot(processed)) {
+    processed = autoCompleteHtml(processed)
+  }
   
   if (baseUrl) {
     processed = fixStickerUrls(processed, baseUrl, imageKey)

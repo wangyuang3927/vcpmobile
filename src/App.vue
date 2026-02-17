@@ -2,10 +2,12 @@
 import { onMounted, onUnmounted, ref, computed } from 'vue'
 import { fetchModels, normalizeBaseUrl, streamChat, interruptChat } from './services/vcpApi'
 import { cleanupAllBubbleStyles, renderMessageHtml } from './utils/messageRenderer'
+import { mountSandbox, unmountAllSandboxes, setupSandboxBridge, needsSandbox } from './utils/vcpRichSandbox'
+import { captureBubble, captureTopicAsImage } from './utils/bubbleCapture'
 import { checkSyncStatus, syncTopic, mergeServerMessages, fullSync } from './services/chatSync'
 import { connect as pushConnect, disconnect as pushDisconnect, onPushMessage, onStatusChange as onPushStatusChange } from './services/vcpPush'
 import { fetchAgentList, normalizeAgents, loadCachedAgents, saveCachedAgents, getActiveAgentId, saveActiveAgentId, fetchTopicHistory, appendToHistory, deleteTopicFromDesktop } from './services/agentService'
-import { getCachedMessages, setCachedMessages } from './services/messageCache'
+import { getCachedMessages, setCachedMessages, clearAllCache } from './services/messageCache'
 
 const isLightTheme = ref(false)
 const isSettingsOpen = ref(false)
@@ -25,6 +27,56 @@ const cameraInput = ref(null)
 const videoInput = ref(null)
 const isAttachMenuOpen = ref(false)
 const isCompressing = ref(false)
+
+// === 渐进渲染队列 ===
+// 历史消息先用轻量渲染（纯文本），队列空闲时逐条升级为富文本
+const richRenderedIds = ref(new Set()) // 已完成富文本渲染的消息 ID
+let renderQueue = []                   // 待渲染队列
+let renderTimerId = null               // 队列定时器
+
+const scheduleRenderQueue = () => {
+  if (renderTimerId) return
+  const processNext = () => {
+    renderTimerId = null
+    // 流式响应中暂停，避免抢占渲染资源
+    if (isStreaming.value) {
+      renderTimerId = setTimeout(processNext, 500)
+      return
+    }
+    if (renderQueue.length === 0) return
+    const msgId = renderQueue.shift()
+    richRenderedIds.value = new Set([...richRenderedIds.value, msgId])
+    // 升级后检查是否需要挂载 sandbox（队列升级才创建 vcp-sandbox-container）
+    requestAnimationFrame(() => {
+      const msg = messages.value.find(m => m.id === msgId)
+      if (msg && msg.role === 'assistant' && needsSandbox(msg.content)) {
+        mountSandboxForMessage(msg)
+      }
+    })
+    // 继续处理下一条，间隔 150ms 让渐进过渡可见
+    if (renderQueue.length > 0) {
+      renderTimerId = setTimeout(processNext, 150)
+    }
+  }
+  renderTimerId = setTimeout(processNext, 300)
+}
+
+const enqueueHistoryRender = (msgList) => {
+  // 把需要渐进渲染的消息 ID 加入队列（从新到旧，优先渲染最新消息）
+  const ids = msgList
+    .filter(m => m.fromHistory && !m.isStreaming && m.id)
+    .map(m => m.id)
+    .reverse()
+  if (ids.length === 0) return
+  renderQueue = ids
+  scheduleRenderQueue()
+}
+
+const clearRenderQueue = () => {
+  renderQueue = []
+  if (renderTimerId) { clearTimeout(renderTimerId); renderTimerId = null }
+  richRenderedIds.value = new Set()
+}
 
 const topics = ref([])
 const currentTopicId = ref(null)
@@ -139,6 +191,205 @@ const cancelEditMode = () => {
   editModeVisible.value = false
   editModeText.value = ''
   editModeMessageId.value = null
+}
+
+// 气泡截图下载
+const isCapturing = ref(false)
+const doCaptureMessage = async () => {
+  if (!actionSheetMessage.value) return
+  const msgId = actionSheetMessage.value.id
+  closeActionSheet()
+  // 等待 Vue DOM 更新完成 + 短延迟确保 ActionSheet 完全关闭
+  await new Promise(r => setTimeout(r, 150))
+  // 找到气泡 DOM 元素
+  const bubbleEl = document.querySelector(`[data-msg-id="${msgId}"]`)
+  if (!bubbleEl) {
+    statusMessage.value = '找不到消息气泡'
+    setTimeout(() => { statusMessage.value = '' }, 1500)
+    return
+  }
+  isCapturing.value = true
+  statusMessage.value = '正在生成图片...'
+  try {
+    await captureBubble(bubbleEl, msgId)
+    statusMessage.value = '图片已保存'
+  } catch (e) {
+    console.error('[Capture] 气泡截图失败:', e)
+    statusMessage.value = '截图失败: ' + (e.message || '未知错误')
+  } finally {
+    isCapturing.value = false
+    setTimeout(() => { statusMessage.value = '' }, 2000)
+  }
+}
+
+// 话题长图
+const captureProgress = ref('')
+const doCaptureTopic = async () => {
+  const chatContainer = document.querySelector('.messages-list')
+  if (!chatContainer) {
+    statusMessage.value = '找不到聊天容器'
+    setTimeout(() => { statusMessage.value = '' }, 1500)
+    return
+  }
+  isCapturing.value = true
+  const topicTitle = topics.value.find(t => t.id === currentTopicId.value)?.title || '对话记录'
+  statusMessage.value = '正在生成话题长图...'
+  try {
+    await captureTopicAsImage(chatContainer, topicTitle, (current, total) => {
+      if (total > 1) {
+        captureProgress.value = `正在处理 ${current}/${total} 段...`
+        statusMessage.value = captureProgress.value
+      }
+    })
+    statusMessage.value = '话题长图已保存'
+    captureProgress.value = ''
+  } catch (e) {
+    console.error('[Capture] 话题长图失败:', e)
+    statusMessage.value = '生成失败: ' + (e.message || '未知错误')
+    captureProgress.value = ''
+  } finally {
+    isCapturing.value = false
+    setTimeout(() => { statusMessage.value = '' }, 2000)
+  }
+}
+
+// 创建分支
+const doCreateBranch = () => {
+  if (!actionSheetMessage.value) return
+  const msgIndex = messages.value.findIndex(m => m.id === actionSheetMessage.value.id)
+  if (msgIndex === -1) { closeActionSheet(); return }
+  // 截取到该消息（含）为止的历史作为新分支
+  const branchMessages = messages.value.slice(0, msgIndex + 1).map(m => ({ ...m, id: `msg_${Date.now()}_${Math.random().toString(36).slice(2, 6)}` }))
+  const branchId = `topic_${Date.now()}`
+  const branchTitle = `分支 - ${actionSheetMessage.value.content?.substring(0, 15) || '新分支'}...`
+  topics.value.unshift({ id: branchId, title: branchTitle, timestamp: Date.now() })
+  // 保存当前话题，然后切换到新分支并写入消息
+  saveHistory()
+  currentTopicId.value = branchId
+  messages.value = branchMessages
+  saveHistory()
+  statusMessage.value = '已创建分支'
+  setTimeout(() => { statusMessage.value = '' }, 1500)
+  closeActionSheet()
+}
+
+// 朗读气泡（Web Speech API）
+const isSpeaking = ref(false)
+const doReadAloud = () => {
+  if (!actionSheetMessage.value) return
+  const text = (actionSheetMessage.value.content || '').replace(/<[^>]*>/g, '').replace(/```[\s\S]*?```/g, '[代码块]').trim()
+  if (!text) {
+    statusMessage.value = '没有可朗读的内容'
+    setTimeout(() => { statusMessage.value = '' }, 1500)
+    closeActionSheet()
+    return
+  }
+  if (window.speechSynthesis.speaking) {
+    window.speechSynthesis.cancel()
+    isSpeaking.value = false
+    statusMessage.value = '已停止朗读'
+    setTimeout(() => { statusMessage.value = '' }, 1500)
+    closeActionSheet()
+    return
+  }
+  const utterance = new SpeechSynthesisUtterance(text)
+  utterance.lang = 'zh-CN'
+  utterance.rate = 1.0
+  utterance.onend = () => { isSpeaking.value = false }
+  utterance.onerror = () => { isSpeaking.value = false }
+  isSpeaking.value = true
+  window.speechSynthesis.speak(utterance)
+  statusMessage.value = '正在朗读...'
+  setTimeout(() => { statusMessage.value = '' }, 1500)
+  closeActionSheet()
+}
+
+// 重新回复
+const doRegenerateReply = () => {
+  if (!actionSheetMessage.value || actionSheetMessage.value.role !== 'assistant') return
+  const msgId = actionSheetMessage.value.id
+  const msgIndex = messages.value.findIndex(m => m.id === msgId)
+  if (msgIndex === -1) { closeActionSheet(); return }
+  // 移除该 AI 回复
+  messages.value.splice(msgIndex, 1)
+  closeActionSheet()
+  // 用当前历史重新请求
+  const payloadMessages = buildPayloadMessages([...messages.value])
+  const assistantId = `assistant_${Date.now()}`
+  const assistantMessage = {
+    id: assistantId,
+    role: 'assistant',
+    name: activeAgent.value.name,
+    content: '',
+    reasoning: '',
+    timestamp: Date.now(),
+    isStreaming: true,
+    isLocal: true,
+  }
+  messages.value.push(assistantMessage)
+  const baseUrl = normalizeBaseUrl(config.value.baseUrl)
+  if (!baseUrl || !config.value.model) {
+    assistantMessage.content = '⚠️ 请先配置后端地址和模型。'
+    assistantMessage.isStreaming = false
+    return
+  }
+  if (isStreaming.value) interruptStream()
+  isStreaming.value = true
+  statusMessage.value = '正在重新生成...'
+  const controller = new AbortController()
+  streamAbortController.value = controller
+  const chatModel = activeAgent.value.modelId || config.value.model
+  const chatTemperature = activeAgent.value.temperature ?? Number(config.value.temperature)
+  const chatMaxTokens = activeAgent.value.maxOutputTokens || Number(config.value.maxTokens)
+  streamChat({
+    baseUrl,
+    apiKey: config.value.apiKey,
+    messages: payloadMessages,
+    model: chatModel,
+    temperature: chatTemperature,
+    maxTokens: chatMaxTokens,
+    requestId: assistantId,
+    signal: controller.signal,
+    onChunk: (chunk) => { assistantMessage.content += chunk },
+    onReasoning: (chunk) => { assistantMessage.reasoning += chunk },
+    onError: (error) => {
+      const message = error?.message || error?.toString?.() || '流传输错误'
+      assistantMessage.content = assistantMessage.content ? `${assistantMessage.content}\n\n${message}` : message
+      statusMessage.value = '重新生成出错'
+      isStreaming.value = false
+      saveHistory()
+    },
+  }).then(() => {
+    assistantMessage.isStreaming = false
+    isStreaming.value = false
+    streamAbortController.value = null
+    statusMessage.value = '就绪'
+    saveHistory()
+    if (needsSandbox(assistantMessage.content)) {
+      requestAnimationFrame(() => mountSandboxForMessage(assistantMessage))
+    }
+    // VCPChat Agent：重新生成后同步到桌面端（全量重写话题历史）
+    const agent = activeAgent.value
+    if (agent.agentDirId && config.value.baseUrl && config.value.adminUsername) {
+      const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+      const topicName = topics.value.find(t => t.id === currentTopicId.value)?.title || ''
+      appendToHistory(syncConfig, agent.agentDirId, currentTopicId.value, messages.value.map(m => ({
+        id: m.id, role: m.role, name: m.name, content: m.content, timestamp: m.timestamp,
+      })), topicName)
+        .then(r => { if (r.success) console.log(`[App] 重新生成已同步到桌面端`) })
+        .catch(e => console.warn('[App] 重新生成同步到桌面端失败:', e.message))
+    } else {
+      backgroundSync(currentTopicId.value, messages.value)
+    }
+  }).catch((error) => {
+    const message = error?.message || error?.toString?.() || '流传输失败'
+    assistantMessage.content = assistantMessage.content ? `${assistantMessage.content}\n\n${message}` : message
+    assistantMessage.isStreaming = false
+    isStreaming.value = false
+    streamAbortController.value = null
+    statusMessage.value = '重新生成失败'
+    saveHistory()
+  })
 }
 
 // 转发消息
@@ -418,6 +669,8 @@ const createNewTopic = () => {
 const switchTopic = async (topicId) => {
   if (isStreaming.value) interruptStream()
   cleanupAllBubbleStyles()
+  unmountAllSandboxes()
+  clearRenderQueue()
   displayLimit.value = 20
   
   currentTopicId.value = topicId
@@ -433,6 +686,7 @@ const switchTopic = async (topicId) => {
         messages.value = cached.messages.map(m => m.isLocal ? m : { ...m, fromHistory: true })
         cachedLastModified = cached.lastModified || 0
         console.log(`[App] 从缓存加载了 ${cached.messages.length} 条消息`)
+        enqueueHistoryRender(messages.value)
       } else {
         messages.value = []
         statusMessage.value = '正在加载聊天记录...'
@@ -455,15 +709,26 @@ const switchTopic = async (topicId) => {
           messages.value.forEach(m => { if (m.isLocal) localMap.set(m.id, m) })
           const serverIds = new Set(result.messages.map(m => m.id))
           const localOnly = messages.value.filter(m => m.isLocal && !serverIds.has(m.id))
-          const merged = [
+          // 前缀去重：防止网络抖动导致的重复消息
+          const seen = new Set()
+          const dedup = (arr) => arr.filter(m => {
+            const prefix = `${m.role}_${(m.content || '').substring(0, 80)}_${m.timestamp || ''}`
+            if (seen.has(prefix)) return false
+            seen.add(prefix)
+            return true
+          })
+          const merged = dedup([
             ...result.messages.map(m => localMap.has(m.id) ? localMap.get(m.id) : { ...m, fromHistory: true }),
             ...localOnly,
-          ]
+          ])
           messages.value = merged
           // 缓存合并后的完整消息
           const toCache = merged.map(({ fromHistory, ...rest }) => rest)
           setCachedMessages(agent.agentDirId, topicId, JSON.parse(JSON.stringify(toCache)), result.lastModified)
           console.log(`[App] 从服务端更新了 ${result.messages.length} 条消息，保留 ${localMap.size + localOnly.length} 条本地消息`)
+          // 服务端有新消息，重新启动渐进渲染队列
+          clearRenderQueue()
+          enqueueHistoryRender(merged)
         } else {
           // 服务端无消息，但保留本地独有的
           const localOnly = messages.value.filter(m => m.isLocal)
@@ -476,11 +741,15 @@ const switchTopic = async (topicId) => {
       statusMessage.value = ''
     }
   } else {
-    // 非 VCPChat Agent：从 localStorage 加载
+    // 非 VCPChat Agent：从 localStorage 加载，标记 fromHistory 启用渐进渲染
     const savedMessages = localStorage.getItem(getMessagesKey(topicId))
-    messages.value = savedMessages ? JSON.parse(savedMessages) : []
+    const parsed = savedMessages ? JSON.parse(savedMessages) : []
+    messages.value = parsed.map(m => m.isLocal ? m : { ...m, fromHistory: true })
+    if (parsed.length > 0) enqueueHistoryRender(messages.value)
   }
   isSidebarOpen.value = false
+  // 切换话题后为富文本消息挂载沙箱
+  mountSandboxesForHistory()
 }
 
 const deleteTopic = (topicId) => {
@@ -525,8 +794,9 @@ const deIndentHtml = (text) => {
 
 const renderContent = (message) => {
   const isVCPChat = !!activeAgent.value.agentDirId
-  // 非 VCPChat 的本地 Agent 历史消息：纯文本渲染（避免大量 HTML 卡顿）
-  if (!isVCPChat && message.fromHistory && !message.isStreaming) {
+  // 渐进渲染：仅非 VCPChat 的本地 Agent 历史消息使用轻量渲染
+  // VCPChat 消息始终完整渲染（需要保留 <img> 表情图等 HTML 标签）
+  if (!isVCPChat && message.fromHistory && !message.isStreaming && message.id && !richRenderedIds.value.has(message.id)) {
     const text = message.content || ''
     const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     return escaped.replace(/\n/g, '<br>')
@@ -547,8 +817,9 @@ const renderContent = (message) => {
 }
 
 const agentBubbleThemeSpec = `【VCP-Mobile 沉浸式气泡渲染协议】
-你的核心任务是将每一次回复构建为美观的HTML气泡。
+你现在拥有全量 HTML/CSS/JS 操作权。你的核心任务是将每一次回复构建为美观的交互式HTML气泡。
 
+## 基础规则
 1. 根级封装：必须将所有回复内容包裹在 <div id="vcp-root" style="你的内联样式"> 中。
 2. 样式注入：使用 <style> 标签注入额外CSS（会被自动作用域隔离）。
 3. 内联样式优先：由于是流式渲染，推荐使用内联 style 属性确保样式即时生效。
@@ -556,15 +827,26 @@ const agentBubbleThemeSpec = `【VCP-Mobile 沉浸式气泡渲染协议】
 5. 禁止Markdown：在div模式下不输出md格式，代码用 <pre style="..."><code>...</code></pre>。
 6. 贴纸：使用 <img src="/pw=STICKER_NAME" style="width:80px;"/>
 
-示例：
+## JavaScript 交互能力
+当回复包含 <script> 标签时，消息完成后会在隔离沙箱中执行，自动预载 anime.js 和 three.js。
+- 交互桥接：调用 input("文本") 可将文本注入聊天输入框并自动发送。
+- 用例：<button onclick="input('你好')">打招呼</button> — 用户点击后自动发送"你好"。
+- 可使用 anime.js 做动画、three.js 做 3D 场景、Canvas 绑定等。
+
+## 示例（静态气泡）
 <div id="vcp-root" style="background:linear-gradient(135deg,#667eea,#764ba2);padding:20px;border-radius:20px;color:#fff;">
   <p style="font-size:16px;">✨ 你好，主人！</p>
-  <img src="/pw=A_01" style="width:80px;border-radius:10px;"/>
 </div>
 <style>
 #vcp-root { box-shadow: 0 4px 15px rgba(0,0,0,0.3); }
-#vcp-root p { margin: 8px 0; line-height: 1.6; }
-</style>`
+</style>
+
+## 示例（交互式气泡）
+<div id="vcp-root" style="padding:20px;border-radius:20px;background:#1a1a2e;color:#e0e0e0;">
+  <p>选择一个话题：</p>
+  <button onclick="input('讲个笑话')" style="padding:8px 16px;margin:4px;border-radius:8px;border:none;background:#667eea;color:#fff;cursor:pointer;">讲个笑话</button>
+  <button onclick="input('今天天气')" style="padding:8px 16px;margin:4px;border-radius:8px;border:none;background:#764ba2;color:#fff;cursor:pointer;">查天气</button>
+</div>`
 
 const toggleTheme = () => {
   isLightTheme.value = !isLightTheme.value
@@ -965,6 +1247,32 @@ const toggleRecording = () => {
   else startRecording()
 }
 
+// === 富文本沙箱 ===
+let cleanupSandboxBridge = null
+
+const mountSandboxForMessage = (message) => {
+  const container = document.querySelector(`[data-sandbox-id="${message.id?.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-24)}"]`)
+  if (!container) return
+  const baseUrl = normalizeBaseUrl(config.value.baseUrl)
+  mountSandbox(message.id, message.content, container, baseUrl, config.value.imageKey)
+}
+
+// 页面加载时为已有历史消息挂载沙箱（分批处理，避免阻塞 UI）
+const mountSandboxesForHistory = () => {
+  requestAnimationFrame(async () => {
+    const pending = messages.value.filter(
+      msg => msg.role === 'assistant' && !msg.isStreaming && needsSandbox(msg.content)
+    )
+    for (let i = 0; i < pending.length; i++) {
+      mountSandboxForMessage(pending[i])
+      // 每挂载 3 个让出事件循环，防止 CPU 独占
+      if ((i + 1) % 3 === 0 && i < pending.length - 1) {
+        await new Promise(r => setTimeout(r, 0))
+      }
+    }
+  })
+}
+
 const handleBubbleToggle = (event) => {
   const toolHeader = event.target.closest('.vcp-tool-result-header')
   if (toolHeader) {
@@ -1004,6 +1312,7 @@ const sendMessage = () => {
     role: 'assistant',
     name: activeAgent.value.name,
     content: '',
+    reasoning: '',
     timestamp: Date.now(),
     isStreaming: true,
     isLocal: true,
@@ -1044,6 +1353,9 @@ const sendMessage = () => {
     onChunk: (chunk) => {
       assistantMessage.content += chunk
     },
+    onReasoning: (chunk) => {
+      assistantMessage.reasoning += chunk
+    },
     onError: (error) => {
       const message = error?.message || error?.toString?.() || '流传输错误'
       assistantMessage.content = assistantMessage.content
@@ -1060,6 +1372,10 @@ const sendMessage = () => {
       streamAbortController.value = null
       statusMessage.value = '就绪'
       saveHistory()
+      // 富文本沙箱：流式完成后如果检测到 vcp-root + 脚本，挂载 iframe 沙箱
+      if (needsSandbox(assistantMessage.content)) {
+        requestAnimationFrame(() => mountSandboxForMessage(assistantMessage))
+      }
       // VCPChat Agent：将新消息写回桌面端 history.json（双向同步）
       const agent = activeAgent.value
       if (agent.agentDirId && config.value.baseUrl && config.value.adminUsername) {
@@ -1251,11 +1567,25 @@ const closeAttachMenuOnOutsideClick = (e) => {
 onMounted(async () => {
   document.body.classList.toggle('light-theme', isLightTheme.value)
   document.addEventListener('click', closeAttachMenuOnOutsideClick)
+  // 一次性缓存清理：旧版缓存中 <img> 表情图被服务端剥离，需要强制重新拉取
+  const CACHE_VER = 'vcpCacheVer_2'
+  if (!localStorage.getItem(CACHE_VER)) {
+    await clearAllCache()
+    localStorage.setItem(CACHE_VER, '1')
+    console.log('[App] 已清空旧版消息缓存，将从服务器重新拉取')
+  }
   loadConfig()
   checkVolumeKeyStatus() // 检查音量键快捷操作状态
   await loadAgents() // 先从缓存加载 Agent 列表
   syncScreenshotConfig() // 同步截图发送配置到原生层（需在 loadAgents 之后，确保 agentDirId 已加载）
   loadHistory()
+  // 富文本沙箱：设置事件桥接（input() → 聊天输入框）
+  cleanupSandboxBridge = setupSandboxBridge((text) => {
+    draftMessage.value = text
+    sendMessage()
+  })
+  // 为已有历史中的富文本消息挂载沙箱
+  mountSandboxesForHistory()
   if (config.value.baseUrl) {
     refreshModels()
     refreshAgents() // 异步从服务端刷新 Agent 列表
@@ -1269,6 +1599,8 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', closeAttachMenuOnOutsideClick)
   pushDisconnect()
+  if (cleanupSandboxBridge) cleanupSandboxBridge()
+  unmountAllSandboxes()
 })
 </script>
 
@@ -1287,12 +1619,6 @@ onUnmounted(() => {
         <button v-if="!activeAgent.agentDirId" class="icon-button" type="button" @click="initPushConnection">
           连接
         </button>
-        <button class="icon-button" type="button" @click="toggleTheme">
-          主题
-        </button>
-        <button class="icon-button" type="button" @click="isSettingsOpen = true">
-          设置
-        </button>
       </div>
     </header>
 
@@ -1305,7 +1631,7 @@ onUnmounted(() => {
       </div>
       <div v-if="statusMessage" class="status-banner">{{ statusMessage }}</div>
       <div class="chat-messages-container" @click="handleBubbleToggle">
-        <div class="chat-messages">
+        <div class="chat-messages messages-list">
           <div v-if="hasMoreMessages" class="load-more-bar" @click="loadMoreMessages">
             还有 {{ messages.length - displayLimit }} 条更早的消息，点击加载
           </div>
@@ -1323,10 +1649,18 @@ onUnmounted(() => {
                 <div class="message-timestamp">{{ formatTime(message.timestamp) }}</div>
               </div>
               <div class="md-content"
+                :data-msg-id="message.id"
                 @touchstart.passive="onMsgTouchStart($event, message)"
                 @touchend="onMsgTouchEnd"
                 @touchmove="onMsgTouchEnd"
               >
+                <details v-if="message.reasoning" class="reasoning-block" :open="message.isStreaming && !message.content">
+                  <summary class="reasoning-summary">
+                    <span class="reasoning-icon">💭</span>
+                    <span>{{ message.isStreaming && !message.content ? '思考中...' : '思考过程' }}</span>
+                  </summary>
+                  <div class="reasoning-content">{{ message.reasoning }}</div>
+                </details>
                 <div v-html="renderContent(message)"></div>
                 <!-- 消息附件 -->
                 <div v-if="message.attachments && message.attachments.length > 0" class="message-attachments-preview">
@@ -1350,10 +1684,14 @@ onUnmounted(() => {
     <Teleport to="body">
       <div v-if="actionSheetVisible" class="action-sheet-overlay" @click="closeActionSheet">
         <div class="action-sheet" @click.stop>
-          <div class="action-sheet-item" @click="doCopyMessage">复制文本</div>
           <div class="action-sheet-item" @click="openEditMode">编辑消息</div>
-          <div class="action-sheet-item" @click="openReadMode">阅读模式</div>
+          <div class="action-sheet-item" @click="doCopyMessage">复制文本</div>
+          <div class="action-sheet-item" @click="doCreateBranch">创建分支</div>
           <div class="action-sheet-item forward-item" @click="openForwardPicker" v-if="agents.length > 0 && config.adminUsername">转发消息</div>
+          <div class="action-sheet-item" @click="doReadAloud" v-if="actionSheetMessage?.role === 'assistant'">{{ isSpeaking ? '停止朗读' : '朗读气泡' }}</div>
+          <div class="action-sheet-item capture-item" @click="doCaptureMessage">保存为图片</div>
+          <div class="action-sheet-item info-item" @click="openReadMode">阅读模式</div>
+          <div class="action-sheet-item regenerate-item" @click="doRegenerateReply" v-if="actionSheetMessage?.role === 'assistant'">重新回复</div>
           <div class="action-sheet-item delete-item" @click="doDeleteMessage">删除消息</div>
           <div class="action-sheet-cancel" @click="closeActionSheet">取消</div>
         </div>
@@ -1666,6 +2004,10 @@ onUnmounted(() => {
           </button>
           <div v-if="syncStatus && !activeAgent.agentDirId" class="sync-status">{{ syncStatus }}</div>
 
+          <div class="sidebar-actions">
+            <button class="sidebar-action-btn" @click="toggleTheme">{{ isLightTheme ? '🌙 深色模式' : '☀️ 浅色模式' }}</button>
+            <button class="sidebar-action-btn" @click="isSidebarOpen = false; isSettingsOpen = true">⚙️ 设置</button>
+          </div>
           <div class="sidebar-footer-info">
             VCP Mobile v1.1.0
           </div>

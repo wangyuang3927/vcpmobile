@@ -87,6 +87,7 @@ export const streamChat = async ({
   maxTokens,
   requestId,
   onChunk,
+  onReasoning,
   onError,
   signal,
 }) => {
@@ -142,13 +143,7 @@ export const streamChat = async ({
         const content = delta?.content ?? ''
         const reasoning = delta?.reasoning_content ?? ''
         
-        if (reasoning) {
-          // You might want to handle reasoning separately, 
-          // but for now we'll just ignore it if it's sent along with content
-          // to avoid the "double content" issue seen with some models.
-          // Or we could pass it to onChunk with a flag.
-        }
-        
+        if (reasoning) onReasoning?.(reasoning)
         if (content) onChunk?.(content)
       } catch (error) {
         onError?.(error)

@@ -7,7 +7,8 @@ const fs = require('fs').promises;
 
 module.exports = function (adminApiRouter, AGENT_MAP_FILE, parseAgentAssistantConfig) {
 
-    // 将 HTML 内容转为纯文本，避免图片请求和渲染卡顿
+    // 精简 HTML 内容：移除 style/script 和重型标签，但保留 <img>（表情图）和 Markdown 兼容结构
+    // ⚠️ 注意：此函数曾多次导致表情图丢失（见 docs/STICKER_DISPLAY_BUG.md），修改时务必保留 <img> 标签
     function simplifyContent(content, role) {
         if (!content || role !== 'assistant') return content;
         if (!/<[a-z][\s\S]*>/i.test(content)) return content;
@@ -17,7 +18,8 @@ module.exports = function (adminApiRouter, AGENT_MAP_FILE, parseAgentAssistantCo
         s = s.replace(/<br\s*\/?>/gi, '\n');
         s = s.replace(/<\/(p|div|li|h[1-6]|tr)>/gi, '\n');
         s = s.replace(/<li[^>]*>/gi, '• ');
-        s = s.replace(/<[^>]+>/g, '');
+        // 保留 <img> 标签（表情图/贴纸），只剥离其他 HTML 标签
+        s = s.replace(/<(?!\/?img\b)[^>]+>/gi, '');
         s = s.replace(/&nbsp;/gi, ' ');
         s = s.replace(/&amp;/gi, '&');
         s = s.replace(/&lt;/gi, '<');
