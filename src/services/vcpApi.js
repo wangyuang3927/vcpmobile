@@ -1,3 +1,5 @@
+import { logger } from '../utils/debugLogger'
+
 const normalizeBaseUrl = (baseUrl) => {
   let fixed = (baseUrl || '').trim()
   if (!fixed) return ''
@@ -34,14 +36,23 @@ const handleJsonResponse = async (response) => {
 export const fetchModels = async ({ baseUrl, apiKey }) => {
   const normalized = normalizeBaseUrl(baseUrl)
   if (!normalized) return []
-  const response = await fetch(`${normalized}/v1/models`, {
-    headers: buildHeaders(apiKey),
-  })
-  const data = await handleJsonResponse(response)
-  if (Array.isArray(data?.data)) {
-    return data.data.map((item) => item.id).filter(Boolean)
+  logger.info('API', `GET ${normalized}/v1/models`)
+  try {
+    const response = await fetch(`${normalized}/v1/models`, {
+      headers: buildHeaders(apiKey),
+    })
+    logger.info('API', `Models response: ${response.status}`)
+    const data = await handleJsonResponse(response)
+    if (Array.isArray(data?.data)) {
+      const models = data.data.map((item) => item.id).filter(Boolean)
+      logger.info('API', `Fetched ${models.length} models`)
+      return models
+    }
+    return []
+  } catch (error) {
+    logger.error('API', `fetchModels failed: ${error.message}`, { url: `${normalized}/v1/models` })
+    throw error
   }
-  return []
 }
 
 export const sendChatOnce = async ({
@@ -94,6 +105,7 @@ export const streamChat = async ({
   const normalized = normalizeBaseUrl(baseUrl)
   if (!normalized) throw new Error('Base URL is required')
 
+  logger.info('API', `POST ${normalized}/v1/chat/completions (stream)`, { model, temperature, maxTokens, msgCount: messages.length })
   const response = await fetch(`${normalized}/v1/chat/completions`, {
     method: 'POST',
     headers: buildHeaders(apiKey),
@@ -110,8 +122,10 @@ export const streamChat = async ({
 
   if (!response.ok || !response.body) {
     const body = await response.text()
+    logger.error('API', `Stream chat failed: HTTP ${response.status}`, { body: body?.slice(0, 200) })
     throw new Error(body || `HTTP ${response.status}`)
   }
+  logger.info('API', `Stream started: ${response.status}`)
 
   const decoder = new TextDecoder('utf-8')
   const reader = response.body.getReader()
@@ -156,13 +170,15 @@ export const interruptChat = async ({ baseUrl, apiKey, requestId }) => {
   const normalized = normalizeBaseUrl(baseUrl)
   if (!normalized) return
   try {
+    logger.info('API', `POST ${normalized}/v1/interrupt`, { requestId })
     await fetch(`${normalized}/v1/interrupt`, {
       method: 'POST',
       headers: buildHeaders(apiKey),
       body: JSON.stringify({ requestId }),
     })
+    logger.info('API', 'Interrupt sent')
   } catch (error) {
-    console.error('Interrupt failed:', error)
+    logger.error('API', `Interrupt failed: ${error.message}`)
   }
 }
 

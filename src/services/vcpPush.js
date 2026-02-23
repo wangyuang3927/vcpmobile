@@ -3,6 +3,7 @@
 // 前台用 WebSocket 实时接收，断线自动重连
 
 import { normalizeBaseUrl } from './vcpApi'
+import { logger } from '../utils/debugLogger'
 
 const TAG = '[VCPPush]'
 let ws = null
@@ -32,7 +33,7 @@ function scheduleReconnect() {
   if (reconnectTimer) return
   reconnectAttempts++
   const delay = Math.min(2000 * Math.pow(1.5, reconnectAttempts - 1), MAX_RECONNECT_DELAY)
-  console.log(`${TAG} 将在 ${Math.round(delay / 1000)}s 后重连 (第${reconnectAttempts}次)`)
+  logger.info('Push', `将在 ${Math.round(delay / 1000)}s 后重连 (第${reconnectAttempts}次)`)
   updateStatus('reconnecting')
   reconnectTimer = setTimeout(() => {
     reconnectTimer = null
@@ -47,7 +48,7 @@ function startHeartbeat() {
       try {
         ws.send(JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }))
       } catch (e) {
-        console.warn(`${TAG} 心跳发送失败:`, e.message)
+        logger.warn('Push', `心跳发送失败: ${e.message}`)
       }
     }
   }, HEARTBEAT_INTERVAL)
@@ -62,7 +63,7 @@ function stopHeartbeat() {
 
 export function connect(config) {
   if (!config || !config.baseUrl || !config.apiKey) {
-    console.warn(`${TAG} 缺少 baseUrl 或 apiKey，跳过连接`)
+    logger.warn('Push', '缺少 baseUrl 或 apiKey，跳过连接')
     return
   }
   currentConfig = config
@@ -73,19 +74,19 @@ export function connect(config) {
   const wsUrl = getWsUrl(config)
   if (!wsUrl) return
 
-  console.log(`${TAG} 正在连接 ${wsUrl.replace(/VCP_Key=.*/, 'VCP_Key=***')}`)
+  logger.info('Push', `正在连接 ${wsUrl.replace(/VCP_Key=.*/, 'VCP_Key=***')}`)
   updateStatus('connecting')
 
   try {
     ws = new WebSocket(wsUrl)
   } catch (err) {
-    console.error(`${TAG} WebSocket 创建失败:`, err)
+    logger.error('Push', `WebSocket 创建失败: ${err.message}`)
     scheduleReconnect()
     return
   }
 
   ws.onopen = () => {
-    console.log(`${TAG} ✅ 已连接`)
+    logger.info('Push', '✅ WebSocket 已连接')
     reconnectAttempts = 0
     updateStatus('connected')
     startHeartbeat()
@@ -96,22 +97,22 @@ export function connect(config) {
       const data = JSON.parse(event.data)
 
       if (data.type === 'connection_ack') {
-        console.log(`${TAG} 收到连接确认`)
+        logger.info('Push', '收到连接确认')
         return
       }
 
       if (data.type === 'heartbeat_ack') return
 
       // 所有其他消息交给回调处理
-      console.log(`${TAG} 📨 收到推送:`, data.type)
+      logger.info('Push', `📨 收到推送: ${data.type}`)
       if (onMessageCallback) onMessageCallback(data)
     } catch (err) {
-      console.error(`${TAG} 消息解析失败:`, err)
+      logger.error('Push', `消息解析失败: ${err.message}`)
     }
   }
 
   ws.onclose = (event) => {
-    console.log(`${TAG} 连接关闭 (code: ${event.code})`)
+    logger.info('Push', `连接关闭 (code: ${event.code})`)
     stopHeartbeat()
     ws = null
     updateStatus('disconnected')
@@ -122,7 +123,7 @@ export function connect(config) {
   }
 
   ws.onerror = (error) => {
-    console.error(`${TAG} WebSocket 错误:`, error)
+    logger.error('Push', `WebSocket 错误`)
   }
 }
 
@@ -172,7 +173,7 @@ if (typeof document !== 'undefined') {
     if (document.visibilityState === 'visible' && currentConfig) {
       // App 回到前台，检查 WebSocket 状态
       if (!ws || ws.readyState !== WebSocket.OPEN) {
-        console.log(`${TAG} App 回到前台，WebSocket 未连接，立即重连`)
+        logger.info('Push', 'App 回到前台，WebSocket 未连接，立即重连')
         reconnectAttempts = 0 // 重置重连计数
         if (reconnectTimer) {
           clearTimeout(reconnectTimer)

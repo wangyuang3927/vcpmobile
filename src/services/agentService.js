@@ -2,15 +2,14 @@
 // 从 VCPToolBox 服务端拉取 Agent 列表
 
 import { normalizeBaseUrl } from './vcpApi'
-
-const LOG_PREFIX = '[AgentService]'
+import { logger } from '../utils/debugLogger'
 
 function log(...args) {
-  console.log(LOG_PREFIX, ...args)
+  logger.info('Agent', args.join(' '))
 }
 
 function warn(...args) {
-  console.warn(LOG_PREFIX, ...args)
+  logger.warn('Agent', args.join(' '))
 }
 
 /**
@@ -35,12 +34,14 @@ export async function fetchAgentList(config) {
   if (!baseUrl) return { success: false, error: '未配置服务器地址' }
 
   try {
+    logger.info('Agent', `GET ${baseUrl}/admin_api/agents/mobile-list`)
     const response = await fetch(`${baseUrl}/admin_api/agents/mobile-list`, {
       headers: buildAdminHeaders(config),
     })
 
     if (!response.ok) {
       const text = await response.text()
+      logger.error('Agent', `fetchAgentList failed: HTTP ${response.status}`, { body: text?.slice(0, 200) })
       return { success: false, error: `HTTP ${response.status}: ${text}` }
     }
 

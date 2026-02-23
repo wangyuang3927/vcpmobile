@@ -3,18 +3,18 @@
 // 与 VCPToolBox 的 ChatSync 插件通信，实现跨设备消息级增量同步
 
 import { normalizeBaseUrl } from './vcpApi'
+import { logger } from '../utils/debugLogger'
 
-const SYNC_PREFIX = '[ChatSync]'
 const SYNC_TIMESTAMP_KEY = 'vcpSyncTimestamps' // localStorage key for per-topic sync timestamps
 
 // ========== 工具函数 ==========
 
 function log(...args) {
-  console.log(SYNC_PREFIX, ...args)
+  logger.info('Sync', args.join(' '))
 }
 
 function warn(...args) {
-  console.warn(SYNC_PREFIX, ...args)
+  logger.warn('Sync', args.join(' '))
 }
 
 /**
@@ -70,15 +70,19 @@ export async function checkSyncStatus(syncConfig) {
   if (!syncUrl) return { available: false, error: '未配置同步地址' }
 
   try {
+    logger.info('Sync', `Checking sync status: ${syncUrl}/status`)
     const response = await fetch(`${syncUrl}/status`, {
       headers: buildSyncHeaders(syncConfig),
     })
     if (!response.ok) {
+      logger.warn('Sync', `Sync status check failed: HTTP ${response.status}`)
       return { available: false, error: `HTTP ${response.status}` }
     }
     const data = await response.json()
+    logger.info('Sync', `Sync service available: ${data.success}`)
     return { available: data.success, data }
   } catch (error) {
+    logger.error('Sync', `Sync status check error: ${error.message}`)
     return { available: false, error: error.message }
   }
 }

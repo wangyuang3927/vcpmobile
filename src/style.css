@@ -208,6 +208,106 @@ body.light-theme .md-content hr {
 .push-dot.connected { background: #4caf50; }
 .push-dot.connecting, .push-dot.reconnecting { background: #ff9800; }
 .push-dot.disconnected { background: #666; }
+.push-dot { cursor: pointer; }
+
+/* Connection Diagnostic Panel */
+.connection-diag-banner {
+  position: fixed;
+  top: 0; left: 0; right: 0; bottom: 0;
+  background: rgba(0,0,0,0.5);
+  z-index: 1000;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 60px;
+}
+.connection-diag-content {
+  background: var(--bg-primary);
+  border-radius: 12px;
+  padding: 16px;
+  width: 90%;
+  max-width: 400px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+}
+.diag-title {
+  font-size: 16px;
+  font-weight: 600;
+  margin-bottom: 12px;
+  color: var(--text-primary);
+}
+.diag-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 0;
+  border-bottom: 1px solid var(--border-color);
+}
+.diag-label {
+  color: var(--secondary-text);
+  font-size: 13px;
+}
+.diag-value {
+  font-size: 13px;
+  color: var(--text-primary);
+  max-width: 60%;
+  text-align: right;
+  word-break: break-all;
+}
+.diag-connected { color: #4caf50; }
+.diag-connecting, .diag-reconnecting { color: #ff9800; }
+.diag-disconnected { color: #f44336; }
+.diag-unknown { color: var(--secondary-text); }
+.diag-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 12px;
+}
+.diag-actions .icon-button {
+  flex: 1;
+}
+.diag-message {
+  margin-top: 10px;
+  padding: 8px;
+  background: var(--bg-secondary);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--secondary-text);
+  word-break: break-all;
+}
+
+/* Debug Log Viewer */
+.debug-log-card {
+  max-height: 80vh;
+  display: flex;
+  flex-direction: column;
+}
+.debug-log-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px;
+  border-bottom: 1px solid var(--border-color);
+  flex-wrap: wrap;
+}
+.debug-log-actions .icon-button {
+  flex: 1;
+  min-width: 80px;
+}
+.debug-log-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px;
+  background: var(--bg-secondary);
+  max-height: 60vh;
+}
+.debug-log-content pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-wrap: break-word;
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--text-primary);
+  font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+}
 
 .header-actions {
   display: flex;

@@ -8,8 +8,15 @@ import { checkSyncStatus, syncTopic, mergeServerMessages, fullSync } from './ser
 import { connect as pushConnect, disconnect as pushDisconnect, onPushMessage, onStatusChange as onPushStatusChange } from './services/vcpPush'
 import { fetchAgentList, normalizeAgents, loadCachedAgents, saveCachedAgents, getActiveAgentId, saveActiveAgentId, fetchTopicHistory, appendToHistory, deleteTopicFromDesktop } from './services/agentService'
 import { getCachedMessages, setCachedMessages, clearAllCache } from './services/messageCache'
+import { logger } from './utils/debugLogger'
 
 const isLightTheme = ref(false)
+const isDebugLogOpen = ref(false)
+const debugLogContent = ref('')
+const isConnectionDiagOpen = ref(false)
+const httpStatus = ref('unknown')
+const httpStatusText = ref('未测试')
+const diagMessage = ref('')
 const isSettingsOpen = ref(false)
 const isSidebarOpen = ref(false)
 const isStreaming = ref(false)
@@ -924,13 +931,110 @@ const saveConfig = async () => {
   syncScreenshotConfig()
 }
 
+const pushStatusText = computed(() => {
+  const map = { connected: '已连接', connecting: '连接中...', reconnecting: '重连中...', disconnected: '未连接' }
+  return map[pushStatus.value] || pushStatus.value
+})
+
+const showConnectionDiag = () => {
+  isConnectionDiagOpen.value = true
+  diagMessage.value = ''
+  logger.info('UI', 'Connection diagnostics opened')
+}
+
+const runConnectionTest = async () => {
+  diagMessage.value = '正在测试...'
+  logger.info('Diag', 'Running connection test')
+  const baseUrl = normalizeBaseUrl(config.value.baseUrl)
+  if (!baseUrl) {
+    diagMessage.value = '未配置服务器地址'
+    httpStatus.value = 'disconnected'
+    httpStatusText.value = '未配置'
+    logger.warn('Diag', 'No baseUrl configured')
+    return
+  }
+
+  // Test HTTP
+  try {
+    const start = Date.now()
+    const resp = await fetch(`${baseUrl}/v1/models`, {
+      headers: { 'Content-Type': 'application/json', ...(config.value.apiKey ? { Authorization: `Bearer ${config.value.apiKey}` } : {}) },
+    })
+    const elapsed = Date.now() - start
+    if (resp.ok) {
+      httpStatus.value = 'connected'
+      httpStatusText.value = `正常 (${elapsed}ms)`
+      logger.info('Diag', `HTTP OK: ${resp.status} in ${elapsed}ms`)
+    } else {
+      httpStatus.value = 'disconnected'
+      httpStatusText.value = `HTTP ${resp.status}`
+      logger.error('Diag', `HTTP failed: ${resp.status}`)
+    }
+  } catch (e) {
+    httpStatus.value = 'disconnected'
+    httpStatusText.value = `连接失败: ${e.message}`
+    logger.error('Diag', `HTTP error: ${e.message}`)
+  }
+
+  // Test Sync (if enabled)
+  if (config.value.syncEnabled && config.value.adminUsername) {
+    try {
+      const syncResult = await checkSyncStatus({
+        baseUrl: config.value.baseUrl,
+        adminUsername: config.value.adminUsername,
+        adminPassword: config.value.adminPassword,
+      })
+      if (syncResult.available) {
+        diagMessage.value = `HTTP: ${httpStatusText.value} | 同步: 可用 | WebSocket: ${pushStatusText.value}`
+      } else {
+        diagMessage.value = `HTTP: ${httpStatusText.value} | 同步: ${syncResult.error} | WebSocket: ${pushStatusText.value}`
+      }
+    } catch (e) {
+      diagMessage.value = `HTTP: ${httpStatusText.value} | 同步: ${e.message} | WebSocket: ${pushStatusText.value}`
+    }
+  } else {
+    diagMessage.value = `HTTP: ${httpStatusText.value} | WebSocket: ${pushStatusText.value}`
+  }
+}
+
+const openDebugLog = () => {
+  debugLogContent.value = logger.exportLogs()
+  isDebugLogOpen.value = true
+  logger.info('UI', 'Debug log opened')
+}
+
+const closeDebugLog = () => {
+  isDebugLogOpen.value = false
+}
+
+const copyDebugLog = async () => {
+  try {
+    await navigator.clipboard.writeText(debugLogContent.value)
+    statusMessage.value = '日志已复制到剪贴板'
+    logger.info('UI', 'Debug log copied to clipboard')
+  } catch (error) {
+    statusMessage.value = '复制失败: ' + error.message
+    logger.error('UI', 'Failed to copy debug log', { error: error.message })
+  }
+  setTimeout(() => { if (statusMessage.value.includes('日志')) statusMessage.value = '' }, 2000)
+}
+
+const clearDebugLog = () => {
+  logger.clear()
+  debugLogContent.value = logger.exportLogs()
+  statusMessage.value = '日志已清空'
+  setTimeout(() => { if (statusMessage.value === '日志已清空') statusMessage.value = '' }, 2000)
+}
+
 const refreshModels = async () => {
   const baseUrl = normalizeBaseUrl(config.value.baseUrl)
   if (!baseUrl) {
     statusMessage.value = '请先在设置中配置后端地址。'
+    logger.warn('Config', 'Base URL not configured')
     return
   }
   try {
+    logger.info('API', `Fetching models from ${baseUrl}`)
     models.value = await fetchModels({
       baseUrl,
       apiKey: config.value.apiKey,
@@ -939,9 +1043,11 @@ const refreshModels = async () => {
       config.value.model = models.value[0]
     }
     statusMessage.value = '模型列表已更新'
+    logger.info('API', `Models fetched: ${models.value.length} models`, { models: models.value })
     setTimeout(() => { if (statusMessage.value === '模型列表已更新') statusMessage.value = '' }, 2000)
   } catch (error) {
     statusMessage.value = `获取模型失败: ${error.message || error}`
+    logger.error('API', 'Failed to fetch models', { error: error.message, baseUrl })
   }
 }
 
@@ -1663,6 +1769,8 @@ const closeAttachMenuOnOutsideClick = (e) => {
 }
 
 onMounted(async () => {
+  logger.info('App', 'VCPMobile starting...')
+  logger.info('App', `User Agent: ${navigator.userAgent}`)
   document.body.classList.toggle('light-theme', isLightTheme.value)
   document.addEventListener('click', closeAttachMenuOnOutsideClick)
   // 一次性缓存清理：旧版缓存中 <img> 表情图被服务端剥离，需要强制重新拉取
@@ -1670,13 +1778,16 @@ onMounted(async () => {
   if (!localStorage.getItem(CACHE_VER)) {
     await clearAllCache()
     localStorage.setItem(CACHE_VER, '1')
-    console.log('[App] 已清空旧版消息缓存，将从服务器重新拉取')
+    logger.info('App', '已清空旧版消息缓存，将从服务器重新拉取')
   }
   loadConfig()
+  logger.info('App', `Config loaded: baseUrl=${config.value.baseUrl ? '✅' : '❌'}, syncEnabled=${config.value.syncEnabled}`)
   checkVolumeKeyStatus() // 检查音量键快捷操作状态
   await loadAgents() // 先从缓存加载 Agent 列表
+  logger.info('App', `Agents loaded: ${agents.value.length} agents, active=${activeAgentId.value}`)
   syncScreenshotConfig() // 同步截图发送配置到原生层（需在 loadAgents 之后，确保 agentDirId 已加载）
   loadHistory()
+  logger.info('App', `History loaded: ${messages.value.length} messages in topic ${currentTopicId.value}`)
   // 富文本沙箱：设置事件桥接（input() → 聊天输入框）
   cleanupSandboxBridge = setupSandboxBridge((text) => {
     draftMessage.value = text
@@ -1685,6 +1796,7 @@ onMounted(async () => {
   // 为已有历史中的富文本消息挂载沙箱
   mountSandboxesForHistory()
   if (config.value.baseUrl) {
+    logger.info('App', 'Initializing connections...')
     refreshModels()
     refreshAgents() // 异步从服务端刷新 Agent 列表
     initPushConnection()
@@ -1692,7 +1804,10 @@ onMounted(async () => {
       // ChatSync 插件仅用于非 VCPChat Agent；VCPChat Agent 使用 fetchTopicHistory 直接同步
       setTimeout(() => backgroundSync(currentTopicId.value, messages.value), 2000)
     }
+  } else {
+    logger.warn('App', 'No baseUrl configured, skipping connections')
   }
+  logger.info('App', 'VCPMobile ready')
 })
 
 onUnmounted(() => {
@@ -1712,7 +1827,7 @@ onUnmounted(() => {
         <div class="header-title">
           <span class="agent-name">{{ activeAgent.name }}</span>
           <span class="agent-status">{{ activeAgent.status }}</span>
-          <span class="push-dot" :class="pushStatus" :title="pushStatus === 'connected' ? '推送已连接' : '推送未连接'"></span>
+          <span class="push-dot" :class="pushStatus" :title="pushStatus === 'connected' ? '推送已连接' : '推送未连接'" @click="showConnectionDiag"></span>
         </div>
       </div>
       <div class="header-actions">
@@ -1721,6 +1836,37 @@ onUnmounted(() => {
         </button>
       </div>
     </header>
+
+    <div v-if="isConnectionDiagOpen" class="connection-diag-banner" @click="isConnectionDiagOpen = false">
+      <div class="connection-diag-content" @click.stop>
+        <div class="diag-title">连接状态诊断</div>
+        <div class="diag-row">
+          <span class="diag-label">服务器地址</span>
+          <span class="diag-value">{{ config.baseUrl || '未配置' }}</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-label">WebSocket</span>
+          <span class="diag-value" :class="'diag-' + pushStatus">{{ pushStatusText }}</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-label">HTTP API</span>
+          <span class="diag-value" :class="'diag-' + httpStatus">{{ httpStatusText }}</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-label">聊天同步</span>
+          <span class="diag-value">{{ config.syncEnabled ? '已启用' : '未启用' }}</span>
+        </div>
+        <div class="diag-row">
+          <span class="diag-label">当前 Agent</span>
+          <span class="diag-value">{{ activeAgent.name }} {{ activeAgent.agentDirId ? '(VCPChat)' : '' }}</span>
+        </div>
+        <div class="diag-actions">
+          <button class="icon-button" @click="runConnectionTest">测试连接</button>
+          <button class="icon-button" @click="isConnectionDiagOpen = false; openDebugLog()">查看日志</button>
+        </div>
+        <div v-if="diagMessage" class="diag-message">{{ diagMessage }}</div>
+      </div>
+    </div>
 
     <main class="chat-body" :style="wallpaperBgStyle">
       <div v-if="isStreaming" class="stream-banner">
@@ -2007,6 +2153,11 @@ onUnmounted(() => {
               class="settings-textarea"
             ></textarea>
           </label>
+          <div class="settings-divider">调试日志</div>
+          <p class="settings-hint">查看应用运行日志，方便诊断问题和反馈 Bug。</p>
+          <button class="icon-button" type="button" @click="openDebugLog" style="width: 100%; margin-top: 8px;">
+            查看日志
+          </button>
         </div>
         <div class="settings-footer">
           <button v-if="!activeAgent.agentDirId" class="icon-button" type="button" @click="refreshModels">
@@ -2111,6 +2262,23 @@ onUnmounted(() => {
           <div class="sidebar-footer-info">
             VCP Mobile v1.1.0
           </div>
+        </div>
+      </div>
+    </div>
+
+    <div v-if="isDebugLogOpen" class="settings-panel" @click.self="closeDebugLog">
+      <div class="settings-card debug-log-card">
+        <div class="settings-header">
+          <h3>调试日志</h3>
+          <button class="icon-button" type="button" @click="closeDebugLog">关闭</button>
+        </div>
+        <div class="debug-log-actions">
+          <button class="icon-button" type="button" @click="copyDebugLog">📋 复制日志</button>
+          <button class="icon-button" type="button" @click="clearDebugLog">🗑️ 清空日志</button>
+          <button class="icon-button" type="button" @click="debugLogContent = logger.exportLogs()">🔄 刷新</button>
+        </div>
+        <div class="debug-log-content">
+          <pre>{{ debugLogContent }}</pre>
         </div>
       </div>
     </div>
