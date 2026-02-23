@@ -120,8 +120,15 @@ cp VCP_MOBILE_GUIDE.md vcp-mobile-release/VCP_MOBILE_GUIDE.md
 
 ## 7. Git 提交与推送
 
+> ⚠️ **不要将 APK 文件推送到 Git**！APK 文件太大（~45MB），会导致推送超时和仓库膨胀。
+> APK 仅保留在本地 `vcp-mobile-release/` 目录，通过其他渠道（如群文件、网盘）分发。
+
 ```bash
 cd /Users/jiaozi/Documents/vcp/vcp-mobile
+
+# 确保 APK 被 gitignore
+echo 'vcp-mobile-release/*.apk' >> .gitignore
+
 git add .
 git commit -m "release: vX.Y.Z - 简要描述"
 git tag vX.Y.Z
