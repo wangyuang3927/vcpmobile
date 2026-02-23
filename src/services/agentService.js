@@ -94,7 +94,7 @@ export async function fetchTopicHistory(config, agentDirId, topicId, ifModifiedS
   if (!agentDirId) return { success: false, error: '缺少 agentDirId' }
 
   try {
-    const params = new URLSearchParams({ agentDirId, topicId })
+    const params = new URLSearchParams({ agentDirId, topicId, raw: '1' })
     if (ifModifiedSince) params.set('ifModifiedSince', String(ifModifiedSince))
     const response = await fetch(`${baseUrl}/admin_api/agents/vcpchat-history?${params}`, {
       headers: buildAdminHeaders(config),

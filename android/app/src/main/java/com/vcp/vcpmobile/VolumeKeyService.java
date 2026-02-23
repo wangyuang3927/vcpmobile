@@ -44,6 +44,13 @@ public class VolumeKeyService extends AccessibilityService {
     private boolean longPressTriggered = false;
     private Runnable longPressRunnable = null;
 
+    // 音量下键长按录音状态
+    private boolean volumeDownDown = false;
+    private long volumeDownDownTime = 0;
+    private boolean volumeDownLongPressTriggered = false;
+    private Runnable volumeDownLongPressRunnable = null;
+    private boolean isVoiceRecording = false;
+
     // 全局开关（可通过 Capacitor 插件控制）
     private static volatile boolean serviceEnabled = true;
 
@@ -85,6 +92,12 @@ public class VolumeKeyService extends AccessibilityService {
     @Override
     protected boolean onKeyEvent(KeyEvent event) {
         if (!serviceEnabled) return false;
+
+        // 音量下键：长按录音
+        if (event.getKeyCode() == KeyEvent.KEYCODE_VOLUME_DOWN) {
+            return handleVolumeDown(event);
+        }
+
         if (event.getKeyCode() != KeyEvent.KEYCODE_VOLUME_UP) return false;
 
         int action = event.getAction();
@@ -173,6 +186,77 @@ public class VolumeKeyService extends AccessibilityService {
         Intent intent = new Intent(this, ClipboardReaderActivity.class);
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         startActivity(intent);
+    }
+
+    // ========== 音量下键处理：长按录音 ==========
+
+    private boolean handleVolumeDown(KeyEvent event) {
+        int action = event.getAction();
+
+        if (action == KeyEvent.ACTION_DOWN) {
+            if (!volumeDownDown) {
+                volumeDownDown = true;
+                volumeDownDownTime = System.currentTimeMillis();
+                volumeDownLongPressTriggered = false;
+
+                // 安排长按检测
+                if (volumeDownLongPressRunnable != null) handler.removeCallbacks(volumeDownLongPressRunnable);
+                volumeDownLongPressRunnable = () -> {
+                    if (volumeDownDown) {
+                        volumeDownLongPressTriggered = true;
+                        onVolumeDownLongPress();
+                    }
+                };
+                handler.postDelayed(volumeDownLongPressRunnable, LONG_PRESS_DURATION);
+            }
+            return true; // 消费按键
+
+        } else if (action == KeyEvent.ACTION_UP) {
+            volumeDownDown = false;
+
+            // 取消长按检测
+            if (volumeDownLongPressRunnable != null) {
+                handler.removeCallbacks(volumeDownLongPressRunnable);
+            }
+
+            if (volumeDownLongPressTriggered) {
+                // 长按已触发 → 松开时停止录音并发送
+                volumeDownLongPressTriggered = false;
+                onVolumeDownRelease();
+                return true;
+            }
+
+            // 短按：正常降低音量
+            adjustVolume(AudioManager.ADJUST_LOWER);
+            return true;
+        }
+
+        return false;
+    }
+
+    private void onVolumeDownLongPress() {
+        Log.i(TAG, "长按音量下键 → 开始录音");
+        showToast("VCP: 🎤 开始录音...");
+        isVoiceRecording = true;
+
+        Intent intent = new Intent(this, VoiceRecorderService.class);
+        intent.setAction(VoiceRecorderService.ACTION_START_RECORDING);
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent);
+        } else {
+            startService(intent);
+        }
+    }
+
+    private void onVolumeDownRelease() {
+        if (!isVoiceRecording) return;
+        Log.i(TAG, "松开音量下键 → 停止录音并发送");
+        showToast("VCP: 录音完成，正在发送...");
+        isVoiceRecording = false;
+
+        Intent intent = new Intent(this, VoiceRecorderService.class);
+        intent.setAction(VoiceRecorderService.ACTION_STOP_AND_SEND);
+        startService(intent);
     }
 
     private void adjustVolume(int direction) {

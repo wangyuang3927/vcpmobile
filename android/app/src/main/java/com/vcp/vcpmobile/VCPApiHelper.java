@@ -113,6 +113,57 @@ public class VCPApiHelper {
         return callCompletions(prefs, messages);
     }
 
+    /**
+     * 发送音频+文本消息给 AI（多模态）
+     * @param base64Audio 音频的 base64 编码
+     * @param mimeType 音频 MIME 类型（如 audio/mp4, audio/wav）
+     * @param userText 用户文本提示
+     * @return AI 回复内容
+     */
+    public static String chatAudio(SharedPreferences prefs, String base64Audio, String mimeType, String userText) throws Exception {
+        JSONArray messages = new JSONArray();
+
+        String systemPrompt = prefs.getString("systemPrompt", "");
+        if (systemPrompt != null && !systemPrompt.isEmpty()) {
+            messages.put(new JSONObject()
+                    .put("role", "system")
+                    .put("content", systemPrompt));
+        }
+
+        // 多模态用户消息：文本 + 音频
+        JSONArray contentParts = new JSONArray();
+        contentParts.put(new JSONObject()
+                .put("type", "text")
+                .put("text", userText));
+        contentParts.put(new JSONObject()
+                .put("type", "input_audio")
+                .put("input_audio", new JSONObject()
+                        .put("data", base64Audio)
+                        .put("format", mimeTypeToFormat(mimeType))));
+
+        messages.put(new JSONObject()
+                .put("role", "user")
+                .put("content", contentParts));
+
+        return callCompletions(prefs, messages);
+    }
+
+    /**
+     * 将 MIME 类型转为 OpenAI 兼容的 format 字符串
+     */
+    private static String mimeTypeToFormat(String mimeType) {
+        if (mimeType == null) return "mp4";
+        switch (mimeType) {
+            case "audio/wav": return "wav";
+            case "audio/mp3":
+            case "audio/mpeg": return "mp3";
+            case "audio/ogg": return "ogg";
+            case "audio/webm": return "webm";
+            case "audio/flac": return "flac";
+            default: return "mp4";
+        }
+    }
+
     private static final int MAX_RETRIES = 2;
 
     private static String callCompletions(SharedPreferences prefs, JSONArray messages) throws Exception {

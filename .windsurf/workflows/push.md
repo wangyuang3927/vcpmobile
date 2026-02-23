@@ -92,7 +92,22 @@ npx cap sync android
   cp android/app/build/outputs/apk/debug/app-debug.apk vcp-mobile-release/vcpmobile-vX.Y.Z.apk
   ```
 
-## 5. 打包发布文件
+## 5. 更新用户指南
+
+`VCP_MOBILE_GUIDE.md` 是用户了解如何部署和使用 VCPMobile 的核心文档，必须保持更新。检查以下内容是否需要更新：
+
+- **版本号**：文档顶部的「当前版本」是否匹配本次发布版本
+- **功能表格**（四、4.1）：新增功能是否已添加到核心功能表
+- **patch 目录结构**（六、6.1）：`patch/` 目录树是否与实际文件一致
+- **服务端改动步骤**（六、6.2）：替换文件列表是否与 patch 目录一致
+- **版本更新历史**（七）：本次版本是否已添加
+
+更新后同步到 release 目录：
+```bash
+cp VCP_MOBILE_GUIDE.md vcp-mobile-release/VCP_MOBILE_GUIDE.md
+```
+
+## 6. 打包发布文件
 
 // turbo
 - 确认 `vcp-mobile-release/` 目录包含：
@@ -100,9 +115,10 @@ npx cap sync android
   - `patch/vcptoolbox/` — VCPToolBox 差异文件（如有）
   - `patch/vcpchat/` — VCPChat 差异文件（如有）
   - `vcpmobile-vX.Y.Z.apk` — 最新编译的 APK
-  - `VCP_MOBILE_GUIDE.md` — 用户指南（如有更新则同步）
+  - `VCP_MOBILE_GUIDE.md` — 用户指南（已同步）
+  - `FEATURES.md` — 功能介绍（如有更新则同步）
 
-## 6. Git 提交与推送
+## 7. Git 提交与推送
 
 ```bash
 cd /Users/jiaozi/Documents/vcp/vcp-mobile
@@ -112,7 +128,7 @@ git tag vX.Y.Z
 git push origin main --tags
 ```
 
-## 7. 确认
+## 8. 确认
 
 - 确认 GitHub 上 https://github.com/wangyuang3927/vcpmobile 已更新
 - 向用户汇报发布完成

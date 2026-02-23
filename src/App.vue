@@ -672,6 +672,8 @@ const switchTopic = async (topicId) => {
   unmountAllSandboxes()
   clearRenderQueue()
   displayLimit.value = 20
+  stopVCPChatPoll()
+  vcpChatLastModified = 0
   
   currentTopicId.value = topicId
   const agent = activeAgent.value
@@ -735,10 +737,18 @@ const switchTopic = async (topicId) => {
           messages.value = localOnly
         }
       }
+      // 记录 lastModified 供轮询使用
+      if (result.success && result.lastModified) {
+        vcpChatLastModified = result.lastModified
+      }
       statusMessage.value = ''
+      // 启动轮询：定期检测桌面端新消息
+      startVCPChatPoll()
     } catch (e) {
       console.warn('[App] 后台同步失败:', e.message)
       statusMessage.value = ''
+      // 即使同步失败也启动轮询
+      startVCPChatPoll()
     }
   } else {
     // 非 VCPChat Agent：从 localStorage 加载，标记 fromHistory 启用渐进渲染
@@ -786,10 +796,21 @@ const draftMessage = ref('')
 const formatTime = (value) =>
   new Date(value).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
 
-// 去掉 HTML 行首缩进，避免 marked 把缩进的 HTML 当代码块
-const deIndentHtml = (text) => {
-  if (!text || !/<[a-z][\s\S]*>/i.test(text)) return text
-  return text.replace(/^[ \t]+(<!?[a-z/])/gim, '$1')
+// 去掉行首缩进，避免 marked 把 4+ 空格缩进的文本当代码块
+// 仅处理代码围栏（```）之外的内容，保留真正的代码块缩进
+const deIndentContent = (text) => {
+  if (!text) return text
+  const lines = text.split('\n')
+  let inCodeFence = false
+  return lines.map(line => {
+    if (/^\s*```/.test(line)) {
+      inCodeFence = !inCodeFence
+      return line
+    }
+    if (inCodeFence) return line
+    // 代码围栏外：去掉行首 4+ 空格/tab 缩进（保留 1-3 空格用于列表嵌套）
+    return line.replace(/^[ \t]{4,}/, '')
+  }).join('\n')
 }
 
 const renderContent = (message) => {
@@ -801,15 +822,15 @@ const renderContent = (message) => {
     const escaped = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
     return escaped.replace(/\n/g, '<br>')
   }
-  // VCPChat Agent 的 assistant 消息：去掉 HTML 缩进避免 marked 当代码块
+  // VCPChat Agent 的 assistant 消息：去掉行首缩进避免 marked 当代码块
   let content = message.content
   if (isVCPChat && message.role === 'assistant') {
-    content = deIndentHtml(content)
+    content = deIndentContent(content)
   }
   return renderMessageHtml(content, {
     messageId: message.id,
     role: message.role,
-    allowBubbleCss: !isVCPChat && config.value.enableAgentBubbleTheme,
+    allowBubbleCss: isVCPChat || config.value.enableAgentBubbleTheme,
     baseUrl: normalizeBaseUrl(config.value.baseUrl),
     imageKey: config.value.imageKey,
     isStreaming: message.isStreaming,
@@ -1202,7 +1223,16 @@ const removeAttachment = (id) => {
 const startRecording = async () => {
   try {
     const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    mediaRecorder.value = new MediaRecorder(stream)
+    // 选择 Gemini/NewAPI 支持的音频格式，按优先级尝试
+    const preferredTypes = ['audio/wav', 'audio/mpeg', 'audio/mp3', 'audio/ogg', 'audio/webm']
+    let selectedType = ''
+    for (const t of preferredTypes) {
+      if (MediaRecorder.isTypeSupported(t)) { selectedType = t; break }
+    }
+    const recorderOptions = selectedType ? { mimeType: selectedType } : {}
+    mediaRecorder.value = new MediaRecorder(stream, recorderOptions)
+    const actualMime = mediaRecorder.value.mimeType || selectedType || 'audio/webm'
+    console.log(`[App] 录音格式: ${actualMime}`)
     audioChunks.value = []
 
     mediaRecorder.value.ondataavailable = (event) => {
@@ -1210,13 +1240,16 @@ const startRecording = async () => {
     }
 
     mediaRecorder.value.onstop = async () => {
-      const audioBlob = new Blob(audioChunks.value, { type: 'audio/mp4' })
+      const audioBlob = new Blob(audioChunks.value, { type: actualMime })
       const reader = new FileReader()
+      // 根据 MIME 类型选择文件扩展名
+      const extMap = { 'audio/wav': 'wav', 'audio/mpeg': 'mp3', 'audio/mp3': 'mp3', 'audio/ogg': 'ogg', 'audio/webm': 'webm' }
+      const ext = extMap[actualMime.split(';')[0]] || 'webm'
       reader.onload = (e) => {
         pendingAttachments.value.push({
           id: `rec_${Date.now()}`,
-          name: `语音录制_${new Date().toLocaleTimeString()}.m4a`,
-          mimeType: 'audio/mp4',
+          name: `语音录制_${new Date().toLocaleTimeString()}.${ext}`,
+          mimeType: actualMime.split(';')[0],
           url: e.target.result,
           kind: 'audio'
         })
@@ -1427,6 +1460,65 @@ const backgroundSync = async (topicId, localMessages) => {
   }
 }
 
+// === VCPChat 桌面端消息轮询 ===
+// 前台时定期检测当前话题的 history.json 是否有更新（利用 ifModifiedSince，未变化时开销极小）
+let vcpChatPollTimer = null
+let vcpChatLastModified = 0 // 上次已知的 lastModified 时间戳
+const VCPCHAT_POLL_INTERVAL = 8000 // 8 秒轮询
+
+const startVCPChatPoll = () => {
+  stopVCPChatPoll()
+  const agent = activeAgent.value
+  if (!agent.agentDirId || !config.value.baseUrl || !config.value.adminUsername) return
+  vcpChatPollTimer = setInterval(() => pollVCPChatHistory(), VCPCHAT_POLL_INTERVAL)
+  console.log('[App] VCPChat 轮询已启动')
+}
+
+const stopVCPChatPoll = () => {
+  if (vcpChatPollTimer) { clearInterval(vcpChatPollTimer); vcpChatPollTimer = null }
+}
+
+const pollVCPChatHistory = async () => {
+  const agent = activeAgent.value
+  if (!agent.agentDirId || !currentTopicId.value || isStreaming.value) return
+  try {
+    const syncConfig = { baseUrl: config.value.baseUrl, adminUsername: config.value.adminUsername, adminPassword: config.value.adminPassword }
+    const result = await fetchTopicHistory(syncConfig, agent.agentDirId, currentTopicId.value, vcpChatLastModified)
+    if (!result.success || result.notModified) return
+    if (!result.messages || result.messages.length === 0) return
+    // 有新消息，更新 lastModified 并合并
+    vcpChatLastModified = result.lastModified || Date.now()
+    const localMap = new Map()
+    messages.value.forEach(m => { if (m.isLocal) localMap.set(m.id, m) })
+    const serverIds = new Set(result.messages.map(m => m.id))
+    const localOnly = messages.value.filter(m => m.isLocal && !serverIds.has(m.id))
+    const seen = new Set()
+    const dedup = (arr) => arr.filter(m => {
+      const prefix = `${m.role}_${(m.content || '').substring(0, 80)}_${m.timestamp || ''}`
+      if (seen.has(prefix)) return false
+      seen.add(prefix)
+      return true
+    })
+    const merged = dedup([
+      ...result.messages.map(m => localMap.has(m.id) ? localMap.get(m.id) : { ...m, fromHistory: true }),
+      ...localOnly,
+    ])
+    // 检查是否真的有变化（消息数或内容不同）
+    if (merged.length !== messages.value.length || JSON.stringify(merged.map(m => m.id)) !== JSON.stringify(messages.value.map(m => m.id))) {
+      messages.value = merged
+      const toCache = merged.map(({ fromHistory, ...rest }) => rest)
+      setCachedMessages(agent.agentDirId, currentTopicId.value, JSON.parse(JSON.stringify(toCache)), vcpChatLastModified)
+      clearRenderQueue()
+      enqueueHistoryRender(merged)
+      console.log(`[App] 轮询检测到桌面端新消息，已更新 ${merged.length} 条`)
+      statusMessage.value = '💬 检测到桌面端新消息'
+      setTimeout(() => { if (statusMessage.value === '💬 检测到桌面端新消息') statusMessage.value = '' }, 3000)
+    }
+  } catch (e) {
+    // 轮询失败静默处理
+  }
+}
+
 const manualSync = async () => {
   if (isSyncing.value) return
   if (!config.value.baseUrl || !config.value.adminUsername) {
@@ -1466,8 +1558,14 @@ const manualSync = async () => {
         try {
           const result = await fetchTopicHistory(syncConfig, agent.agentDirId, targetTopicId)
           if (result.success && result.messages.length > 0) {
-            messages.value = result.messages
+            messages.value = result.messages.map(m => m.isLocal ? m : { ...m, fromHistory: true })
             console.log(`[App] 加载了 ${result.messages.length} 条消息`)
+            // 缓存合并后的消息
+            const toCache = messages.value.map(({ fromHistory, ...rest }) => rest)
+            setCachedMessages(agent.agentDirId, targetTopicId, JSON.parse(JSON.stringify(toCache)), result.lastModified || Date.now())
+            // 重新启动渐进渲染队列（用于 sandbox 挂载）
+            clearRenderQueue()
+            enqueueHistoryRender(messages.value)
           } else {
             messages.value = []
           }
@@ -1590,7 +1688,8 @@ onMounted(async () => {
     refreshModels()
     refreshAgents() // 异步从服务端刷新 Agent 列表
     initPushConnection()
-    if (config.value.syncEnabled && config.value.adminUsername) {
+    if (config.value.syncEnabled && config.value.adminUsername && !activeAgent.value.agentDirId) {
+      // ChatSync 插件仅用于非 VCPChat Agent；VCPChat Agent 使用 fetchTopicHistory 直接同步
       setTimeout(() => backgroundSync(currentTopicId.value, messages.value), 2000)
     }
   }
@@ -1599,6 +1698,7 @@ onMounted(async () => {
 onUnmounted(() => {
   document.removeEventListener('click', closeAttachMenuOnOutsideClick)
   pushDisconnect()
+  stopVCPChatPoll()
   if (cleanupSandboxBridge) cleanupSandboxBridge()
   unmountAllSandboxes()
 })

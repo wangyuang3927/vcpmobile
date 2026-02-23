@@ -70,6 +70,12 @@
             android:exported="false"
             android:foregroundServiceType="shortService" />
 
+        <!-- 语音录制前台服务 -->
+        <service
+            android:name=".VoiceRecorderService"
+            android:exported="false"
+            android:foregroundServiceType="microphone" />
+
         <!-- 音量键快捷操作（AccessibilityService） -->
         <service
             android:name=".VolumeKeyService"
@@ -105,5 +111,6 @@
     <uses-permission android:name="android.permission.READ_MEDIA_IMAGES" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SHORT_SERVICE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 </manifest>
