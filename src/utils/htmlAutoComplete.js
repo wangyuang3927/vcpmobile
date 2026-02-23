@@ -176,6 +176,7 @@ export function hasVcpRoot(content) {
  */
 export function hasExecutableScript(content) {
   if (!content) return false
-  // <script> 标签 或 onclick/oninput 等事件属性
-  return /<script[\s>]/i.test(content) || /\bon\w+\s*=/i.test(content)
+  // 仅 <script> 标签才需要 iframe 沙箱执行
+  // onclick 等事件属性由主页面事件委托处理（data-vcp-click 转换）
+  return /<script[\s>]/i.test(content)
 }

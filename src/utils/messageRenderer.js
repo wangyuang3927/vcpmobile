@@ -688,14 +688,24 @@ export const renderMessageHtml = (text = '', options = {}) => {
   const rawHtml = marked.parse(processed)
   const sanitized = DOMPurify.sanitize(rawHtml, {
     USE_PROFILES: { html: true },
-    ADD_ATTR: ['class', 'target', 'rel', 'data-mermaid-code', 'style', 'id', 'onclick'],
+    ADD_ATTR: ['class', 'target', 'rel', 'data-mermaid-code', 'style', 'id', 'onclick', 'data-send'],
     ADD_TAGS: ['style', 'button']
   })
+
+  // Convert onclick="..." to data-vcp-click="..." for safe event delegation
+  // This allows pure JS buttons (input(), alert(), confirm()) to work without iframe sandbox
+  const withDelegatedEvents = sanitized.replace(
+    /\sonclick\s*=\s*"([^"]*)"/gi,
+    (_, handler) => ` data-vcp-click="${handler}" role="button" tabindex="0" style="cursor:pointer"`
+  ).replace(
+    /\sonclick\s*=\s*'([^']*)'/gi,
+    (_, handler) => ` data-vcp-click='${handler}' role="button" tabindex="0" style="cursor:pointer"`
+  )
 
   if (messageId) {
     const hasCssOrBubble = !!(allCss || hasCustomBubble)
     const scopeClass = hasCssOrBubble && !isStreaming ? 'vcp-bubble-scope custom-bubble-active' : 'vcp-bubble-scope'
-    return `<div class="${scopeClass}" data-vcp-bubble="${bubbleScopeId}"><div class="vcp-bubble-root" id="${bubbleScopeId}">${sanitized}</div></div>`
+    return `<div class="${scopeClass}" data-vcp-bubble="${bubbleScopeId}"><div class="vcp-bubble-root" id="${bubbleScopeId}">${withDelegatedEvents}</div></div>`
   }
-  return sanitized
+  return withDelegatedEvents
 }

@@ -834,7 +834,7 @@ const renderContent = (message) => {
   if (isVCPChat && message.role === 'assistant') {
     content = deIndentContent(content)
   }
-  return renderMessageHtml(content, {
+  const html = renderMessageHtml(content, {
     messageId: message.id,
     role: message.role,
     allowBubbleCss: isVCPChat || config.value.enableAgentBubbleTheme,
@@ -842,6 +842,13 @@ const renderContent = (message) => {
     imageKey: config.value.imageKey,
     isStreaming: message.isStreaming,
   })
+  // DEBUG: 检查按钮是否存在于渲染结果中
+  if (message.role === 'assistant' && !message.isStreaming && (content?.includes('<button') || content?.includes('onclick'))) {
+    logger.info('Render', `[ButtonDebug] raw content has button/onclick. HTML has <button>: ${html.includes('<button')}, has data-vcp-click: ${html.includes('data-vcp-click')}`)
+    logger.info('Render', `[ButtonDebug] raw snippet: ${content.substring(0, 300)}`)
+    logger.info('Render', `[ButtonDebug] html snippet: ${html.substring(0, 500)}`)
+  }
+  return html
 }
 
 const agentBubbleThemeSpec = `【VCP-Mobile 沉浸式气泡渲染协议】
@@ -1390,10 +1397,15 @@ const toggleRecording = () => {
 let cleanupSandboxBridge = null
 
 const mountSandboxForMessage = (message) => {
-  const container = document.querySelector(`[data-sandbox-id="${message.id?.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-24)}"]`)
-  if (!container) return
+  const safeId = message.id?.replace(/[^a-zA-Z0-9_-]/g, '_').slice(-24)
+  const container = document.querySelector(`[data-sandbox-id="${safeId}"]`)
+  if (!container) {
+    logger.warn('Sandbox', `Container not found for ${safeId}`)
+    return
+  }
   const baseUrl = normalizeBaseUrl(config.value.baseUrl)
-  mountSandbox(message.id, message.content, container, baseUrl, config.value.imageKey)
+  const ok = mountSandbox(message.id, message.content, container, baseUrl, config.value.imageKey)
+  logger.info('Sandbox', `Mount ${safeId}: ${ok ? 'OK' : 'FAILED'}, content has <button>: ${message.content?.includes('<button')}`)
 }
 
 // 页面加载时为已有历史消息挂载沙箱（分批处理，避免阻塞 UI）
@@ -1773,6 +1785,61 @@ onMounted(async () => {
   logger.info('App', `User Agent: ${navigator.userAgent}`)
   document.body.classList.toggle('light-theme', isLightTheme.value)
   document.addEventListener('click', closeAttachMenuOnOutsideClick)
+
+  // VCP 按钮事件委托（兼容 VCPChat 桌面端 processInteractiveButtons 机制）
+  // 1. VCPChat 风格：AI 输出普通 <button>，点击后发送 [[点击按钮:文字]] 给 AI
+  // 2. onclick 风格：带 data-vcp-click 属性的元素，执行 input()/alert()/confirm()
+  document.addEventListener('click', (e) => {
+    // --- 优先处理 data-vcp-click（onclick 转换后的按钮）---
+    const vcpClickEl = e.target.closest('[data-vcp-click]')
+    if (vcpClickEl) {
+      e.preventDefault()
+      e.stopPropagation()
+      const handler = vcpClickEl.getAttribute('data-vcp-click')
+      if (!handler) return
+      logger.info('Button', `VCP onclick button: ${handler}`)
+      try {
+        const safeInput = (text) => { draftMessage.value = String(text); sendMessage() }
+        const fn = new Function('input', 'alert', 'confirm', 'prompt', handler)
+        fn(safeInput, window.alert.bind(window), window.confirm.bind(window), window.prompt.bind(window))
+      } catch (err) {
+        logger.error('Button', `VCP onclick error: ${err.message}`)
+      }
+      return
+    }
+
+    // --- VCPChat 风格：消息气泡内的普通 <button> ---
+    const btn = e.target.closest('.md-content button, .vcp-bubble-root button')
+    if (!btn) return
+    // 跳过已禁用的按钮
+    if (btn.disabled) return
+    e.preventDefault()
+    e.stopPropagation()
+
+    // 获取发送文本：优先 data-send 属性，其次按钮文字
+    const sendText = btn.dataset.send || btn.textContent.trim()
+    if (!sendText) return
+
+    // 格式化为 VCPChat 兼容的按钮点击消息
+    let finalText = `[[点击按钮:${sendText}]]`
+    if (finalText.length > 500) {
+      finalText = `[[点击按钮:${sendText.substring(0, 480)}]]`
+    }
+
+    logger.info('Button', `VCPChat button clicked: ${sendText}`)
+
+    // 视觉反馈：禁用按钮 + 打勾
+    btn.disabled = true
+    btn.style.opacity = '0.6'
+    btn.style.cursor = 'not-allowed'
+    const originalText = btn.textContent
+    btn.textContent = originalText + ' ✓'
+
+    // 发送消息
+    draftMessage.value = finalText
+    sendMessage()
+  })
+
   // 一次性缓存清理：旧版缓存中 <img> 表情图被服务端剥离，需要强制重新拉取
   const CACHE_VER = 'vcpCacheVer_2'
   if (!localStorage.getItem(CACHE_VER)) {

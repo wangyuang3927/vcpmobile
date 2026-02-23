@@ -229,6 +229,7 @@ export function needsSandbox(content) {
   if (!content) return false
   const hasRoot = /<div[^>]*\bid\s*=\s*["']?vcp-root["']?/i.test(content)
   if (!hasRoot) return false
-  // 有 <script> 标签 或 onclick/oninput 等交互事件
-  return /<script[\s>]/i.test(content) || /\bon(?:click|input|change|submit|mouse|touch|key)\w*\s*=/i.test(content)
+  // 仅 <script> 标签才需要 iframe 沙箱
+  // onclick 等事件属性由主页面事件委托处理（data-vcp-click 转换）
+  return /<script[\s>]/i.test(content)
 }
