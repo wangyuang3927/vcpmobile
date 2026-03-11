@@ -2,11 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// Canonical chat truth is a Rust-owned graph:
-/// `Conversation -> MessageNode -> MessageVariant -> ordered MessagePart`.
-///
-/// The graph shape is the truth source. Android may project it for presentation, but
-/// must not invent missing branch, selection, or typed-part semantics.
+// Canonical chat truth is a Rust-owned graph:
+// `Conversation -> MessageNode -> MessageVariant -> ordered MessagePart`.
+//
+// The graph shape is the truth source. Android may project it for presentation, but
+// must not invent missing branch, selection, or typed-part semantics.
 pub type AgentId = Uuid;
 pub type TopicId = Uuid;
 pub type ConversationId = Uuid;
@@ -57,7 +57,6 @@ pub struct Topic {
     pub updated_at: DateTime<Utc>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Rust-owned conversation truth.
 ///
 /// Invariants:
@@ -67,6 +66,7 @@ pub struct Topic {
 ///   conversation has not materialized any nodes yet.
 /// - Active branch identity comes from Rust via the cursor plus each node's selected variant;
 ///   Android may project that path but must not invent it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Conversation {
     pub id: ConversationId,
     pub topic_id: TopicId,
@@ -84,12 +84,6 @@ pub struct Conversation {
     pub updated_at: DateTime<Utc>,
 }
 
-/// A stable turn slot in the conversation tree.
-///
-/// `id`, `conversation_id`, `parent_node_id`, and `role` define where this turn lives in the
-/// graph. Selecting a different variant changes the chosen realization for this turn but does
-/// not allocate a new node or change ancestry.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// Stable structural slot for one logical turn in the conversation graph.
 ///
 /// Invariants:
@@ -100,6 +94,7 @@ pub struct Conversation {
 ///   parent.
 /// - `select_index` is the canonical selected-variant pointer for the node and must resolve to an
 ///   existing variant in full Rust-owned node truth.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageNode {
     pub id: NodeId,
     pub conversation_id: ConversationId,
@@ -116,11 +111,6 @@ pub struct MessageNode {
     pub updated_at: DateTime<Utc>,
 }
 
-/// One concrete realization of a `MessageNode`.
-///
-/// Regenerate/retry flows append new variants on the same node when the logical turn slot
-/// stays the same. Once a variant reaches a terminal status, it remains durable history.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 /// One content revision or generation attempt for a node.
 ///
 /// Invariants:
@@ -128,6 +118,7 @@ pub struct MessageNode {
 /// - Assistant regenerate/retry for the same logical turn appends a new variant and moves
 ///   selection at the node; previously selected variants remain immutable history.
 /// - `Streaming` is the only non-terminal status. Terminal states should record `finished_at`.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageVariant {
     pub id: VariantId,
     pub node_id: NodeId,
@@ -180,19 +171,13 @@ pub enum MessagePartPayload {
     },
 }
 
-/// Ordered typed truth for a single `MessageVariant`.
-///
-/// `order_index` is stable within a variant. Parts may append while a variant is streaming,
-/// but later edits/regenerations must not rewrite old parts in place. Typed payloads are the
-/// canonical truth; markdown/text are content formats, not catch-all containers for tool,
-/// reasoning, or media semantics.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 /// Typed payload atom owned by one variant.
 ///
 /// Invariants:
 /// - A part belongs to exactly one variant and is never re-parented.
 /// - `order_index` is unique within the variant and reflects append order.
 /// - Typed payloads remain Rust truth even if Android later renders a flattened presentation.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagePart {
     pub id: PartId,
     pub variant_id: VariantId,

@@ -83,20 +83,20 @@ pub enum ChatEvent {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Transport shape for one node plus its variants.
 ///
 /// Canonical Rust/store truth may include every variant and use `node.select_index` against the
 /// full `variants` array. Client-facing selected-only projections must include exactly one variant
 /// and normalize `node.select_index` to `0` so the bundle stays self-consistent without Android
 /// fallback guesses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeBundle {
     pub node: MessageNode,
     pub variants: Vec<VariantBundle>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
 /// Transport shape for one variant and its ordered typed parts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantBundle {
     pub variant: MessageVariant,
     pub parts: Vec<MessagePart>,
