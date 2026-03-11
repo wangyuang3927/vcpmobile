@@ -110,16 +110,22 @@ impl FileStore {
         let mut items = self
             .list_conversations()?
             .into_iter()
-            .map(|stored| StoredConversationCatalogItem {
-                conversation_id: stored.conversation.id,
-                title: stored.conversation.title,
-                summary: stored.conversation.summary,
-                updated_at: stored.conversation.updated_at,
-                generation_state: stored.conversation.generation_state,
-                pinned: stored.conversation.pinned,
-                current_cursor: stored.conversation.current_cursor,
-                is_recoverable: cursor_resolves_to_leaf(&stored),
-                node_count: stored.nodes.len(),
+            .map(|stored| {
+                let is_recoverable = cursor_resolves_to_leaf(&stored);
+                let node_count = stored.nodes.len();
+                let conversation = stored.conversation;
+
+                StoredConversationCatalogItem {
+                    conversation_id: conversation.id,
+                    title: conversation.title,
+                    summary: conversation.summary,
+                    updated_at: conversation.updated_at,
+                    generation_state: conversation.generation_state,
+                    pinned: conversation.pinned,
+                    current_cursor: conversation.current_cursor,
+                    is_recoverable,
+                    node_count,
+                }
             })
             .collect::<Vec<_>>();
 
