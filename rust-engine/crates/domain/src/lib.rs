@@ -325,6 +325,11 @@ impl ProviderConfig {
         };
         let base_url_alias = self.base_url.trim().to_string();
         let existing_local_id = self.local_id.trim().to_string();
+        let requested_default_preset_id = self
+            .default_preset_local_id
+            .as_ref()
+            .map(|value| value.trim().to_string())
+            .filter(|value| !value.is_empty());
 
         if existing_local_id.is_empty()
             || !is_stable_local_id(&existing_local_id, PROVIDER_LOCAL_ID_PREFIX)
@@ -340,22 +345,32 @@ impl ProviderConfig {
         self.register_reference_alias(seed);
         self.register_reference_alias(base_url_alias);
 
+        let mut migrated_default_preset_id = None;
         for (index, preset) in self.presets.iter_mut().enumerate() {
+            let previous_local_id = preset.local_id.trim().to_string();
+            let previous_name = preset.name.trim().to_string();
             preset.ensure_local_id(&self.local_id, index);
+
+            if migrated_default_preset_id.is_none()
+                && requested_default_preset_id
+                    .as_ref()
+                    .is_some_and(|default_id| {
+                        default_id == &preset.local_id
+                            || default_id == &previous_local_id
+                            || default_id == &previous_name
+                    })
+            {
+                migrated_default_preset_id = Some(preset.local_id.clone());
+            }
         }
 
-        if self
-            .default_preset_local_id
-            .as_ref()
-            .is_some_and(|default_id| {
-                !self
-                    .presets
-                    .iter()
-                    .any(|preset| preset.local_id == *default_id)
-            })
-        {
-            self.default_preset_local_id = None;
-        }
+        self.default_preset_local_id = requested_default_preset_id.and_then(|default_id| {
+            self.presets
+                .iter()
+                .any(|preset| preset.local_id == default_id)
+                .then_some(default_id)
+                .or(migrated_default_preset_id)
+        });
     }
 
     pub fn matches_reference(&self, reference: &str) -> bool {

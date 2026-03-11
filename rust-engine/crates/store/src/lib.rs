@@ -543,6 +543,47 @@ mod tests {
     }
 
     #[test]
+    fn load_migrates_legacy_default_preset_reference() {
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                "https://default-preset.example.com/v1": {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Legacy Default Preset",
+                    "base_url": "https://default-preset.example.com/v1",
+                    "default_preset_local_id": "balanced",
+                    "presets": [
+                        { "name": "balanced" },
+                        { "name": "fast" }
+                    ],
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-default-preset");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let provider = store
+            .list_providers()
+            .expect("list providers")
+            .into_iter()
+            .next()
+            .expect("provider exists");
+
+        assert_eq!(
+            provider.default_preset_local_id,
+            Some(provider.presets[0].local_id.clone())
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn provider_crud_round_trip_works_by_local_id() {
         let path = temp_store_path("provider-crud");
         let store = FileStore::new(&path);
