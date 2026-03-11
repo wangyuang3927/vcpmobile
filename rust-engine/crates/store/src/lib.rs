@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, btree_map::Entry},
     fs,
     path::{Path, PathBuf},
 };
@@ -36,17 +36,94 @@ pub struct StoreData {
     pub provider_configs: BTreeMap<String, ProviderConfig>,
 }
 
+#[derive(Debug, Clone)]
+struct NormalizedProviderRecord {
+    provider: ProviderConfig,
+    origin: ProviderNormalizationOrigin,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+struct ProviderNormalizationOrigin {
+    canonical_key: bool,
+    canonical_embedded_id: bool,
+}
+
+impl NormalizedProviderRecord {
+    fn from_raw_key(key: &str, original_local_id: &str, provider: ProviderConfig) -> Self {
+        Self {
+            origin: ProviderNormalizationOrigin::from_raw_key(
+                key,
+                original_local_id,
+                &provider.local_id,
+            ),
+            provider,
+        }
+    }
+
+    fn merge(mut self, other: Self) -> Self {
+        let keep_self = self.origin > other.origin
+            || (self.origin == other.origin
+                && self.provider.updated_at >= other.provider.updated_at);
+
+        if keep_self {
+            merge_duplicate_provider_metadata(&mut self.provider, other.provider);
+            self
+        } else {
+            let mut other = other;
+            merge_duplicate_provider_metadata(&mut other.provider, self.provider);
+            other
+        }
+    }
+}
+
+impl ProviderNormalizationOrigin {
+    fn from_raw_key(key: &str, original_local_id: &str, normalized_local_id: &str) -> Self {
+        let key = key.trim();
+        let original_local_id = original_local_id.trim();
+        let normalized_local_id = normalized_local_id.trim();
+
+        Self {
+            canonical_key: key == normalized_local_id,
+            canonical_embedded_id: original_local_id == normalized_local_id,
+        }
+    }
+}
+
+fn merge_duplicate_provider_metadata(primary: &mut ProviderConfig, duplicate: ProviderConfig) {
+    primary.created_at = primary.created_at.min(duplicate.created_at);
+    primary.updated_at = primary.updated_at.max(duplicate.updated_at);
+    primary.register_reference_alias(duplicate.base_url.as_str());
+    for alias in duplicate.reference_aliases {
+        primary.register_reference_alias(alias);
+    }
+}
+
 impl StoreData {
     fn normalize_provider_configs(&mut self) {
         let mut normalized = BTreeMap::new();
 
         for (key, mut provider) in std::mem::take(&mut self.provider_configs) {
+            let original_local_id = provider.local_id.clone();
             // Legacy stores may key providers by endpoint; normalize them back to stable local IDs.
             provider.ensure_stable_ids(&key);
-            normalized.insert(provider.local_id.clone(), provider);
+            let local_id = provider.local_id.clone();
+            let incoming =
+                NormalizedProviderRecord::from_raw_key(&key, &original_local_id, provider);
+            match normalized.entry(local_id) {
+                Entry::Vacant(slot) => {
+                    slot.insert(incoming);
+                }
+                Entry::Occupied(mut slot) => {
+                    let merged = slot.get().clone().merge(incoming);
+                    slot.insert(merged);
+                }
+            }
         }
 
-        self.provider_configs = normalized;
+        self.provider_configs = normalized
+            .into_iter()
+            .map(|(local_id, record)| (local_id, record.provider))
+            .collect();
     }
 }
 
@@ -683,6 +760,100 @@ mod tests {
         assert_eq!(
             stored_provider["presets"][0]["local_id"].as_str(),
             Some(default_preset_local_id)
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_prefers_canonical_provider_record_when_legacy_duplicate_collides() {
+        let canonical_local_id = "provider_local_canonical123";
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                canonical_local_id: {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Canonical Provider",
+                    "base_url": "https://current.example.com/v1",
+                    "presets": [
+                        {
+                            "local_id": "provider_preset_local_balanced123",
+                            "name": "balanced"
+                        }
+                    ],
+                    "default_preset_local_id": "provider_preset_local_balanced123",
+                    "reference_aliases": ["https://older.example.com/v1"],
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                },
+                "https://legacy.example.com/v1": {
+                    "local_id": canonical_local_id,
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Legacy Duplicate",
+                    "base_url": "https://legacy.example.com/v1",
+                    "reference_aliases": ["imported-provider-id"],
+                    "created_at": "2026-03-10T00:00:00Z",
+                    "updated_at": "2026-03-12T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-duplicate-collision");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let provider = store
+            .get_provider(canonical_local_id)
+            .expect("load provider")
+            .expect("provider exists");
+
+        assert_eq!(provider.display_name, "Canonical Provider");
+        assert_eq!(provider.base_url, "https://current.example.com/v1");
+        assert_eq!(
+            provider.default_preset_local_id,
+            Some("provider_preset_local_balanced123".to_string())
+        );
+        assert_eq!(provider.presets.len(), 1);
+        assert_eq!(
+            provider.created_at.to_rfc3339(),
+            "2026-03-10T00:00:00+00:00"
+        );
+        assert_eq!(
+            provider.updated_at.to_rfc3339(),
+            "2026-03-12T00:00:00+00:00"
+        );
+        assert!(
+            provider
+                .reference_aliases
+                .contains(&"https://older.example.com/v1".to_string())
+        );
+        assert!(
+            provider
+                .reference_aliases
+                .contains(&"https://legacy.example.com/v1".to_string())
+        );
+        assert!(
+            provider
+                .reference_aliases
+                .contains(&"imported-provider-id".to_string())
+        );
+        assert_eq!(
+            store
+                .resolve_provider_reference("https://legacy.example.com/v1")
+                .expect("resolve legacy endpoint")
+                .expect("provider via legacy endpoint")
+                .local_id,
+            canonical_local_id
+        );
+        assert_eq!(
+            store
+                .resolve_provider_reference("imported-provider-id")
+                .expect("resolve imported alias")
+                .expect("provider via imported alias")
+                .local_id,
+            canonical_local_id
         );
 
         fs::remove_file(path).ok();
