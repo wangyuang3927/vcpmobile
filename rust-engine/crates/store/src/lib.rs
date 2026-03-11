@@ -630,6 +630,65 @@ mod tests {
     }
 
     #[test]
+    fn save_rewrites_legacy_provider_records_into_canonical_stable_ids() {
+        let legacy = serde_json::json!({
+            "provider_configs": {
+                "https://legacy-save.example.com/v1": {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Legacy Save Provider",
+                    "base_url": "https://legacy-save.example.com/v1",
+                    "default_preset_local_id": "balanced-v1",
+                    "presets": [
+                        { "local_id": "balanced-v1", "name": "balanced" }
+                    ],
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-canonical-save");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy fixture"),
+        )
+        .expect("write legacy fixture");
+
+        let store = FileStore::new(&path);
+        let data = store.load().expect("load legacy fixture");
+        store.save(&data).expect("save canonical store");
+
+        let saved_raw = fs::read_to_string(&path).expect("read canonical store");
+        let saved_json: serde_json::Value =
+            serde_json::from_str(&saved_raw).expect("parse canonical store");
+        let providers = saved_json["provider_configs"]
+            .as_object()
+            .expect("provider_configs object");
+
+        assert_eq!(providers.len(), 1);
+        let (stored_key, stored_provider) = providers.iter().next().expect("stored provider");
+        assert!(stored_key.starts_with(PROVIDER_LOCAL_ID_PREFIX));
+        assert_eq!(
+            stored_provider["local_id"].as_str(),
+            Some(stored_key.as_str())
+        );
+        assert_eq!(
+            stored_provider["reference_aliases"],
+            serde_json::json!(["https://legacy-save.example.com/v1"])
+        );
+
+        let default_preset_local_id = stored_provider["default_preset_local_id"]
+            .as_str()
+            .expect("default preset local id");
+        assert!(default_preset_local_id.starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX));
+        assert_eq!(
+            stored_provider["presets"][0]["local_id"].as_str(),
+            Some(default_preset_local_id)
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn provider_crud_round_trip_works_by_local_id() {
         let path = temp_store_path("provider-crud");
         let store = FileStore::new(&path);
