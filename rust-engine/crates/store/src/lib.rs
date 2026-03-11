@@ -6,10 +6,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use vcpmobile_domain::{
-    Conversation, ConversationId, GenerationState, NodeId, PROVIDER_LOCAL_ID_PREFIX,
-    PROVIDER_PRESET_LOCAL_ID_PREFIX, ProviderConfig,
-};
+use vcpmobile_domain::{Conversation, ConversationId, GenerationState, NodeId, ProviderConfig};
 use vcpmobile_protocol::NodeBundle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -219,7 +216,8 @@ mod tests {
     use std::{env, fs};
     use uuid::Uuid;
     use vcpmobile_domain::{
-        ProviderAdapterKind, ProviderBodyFragment, ProviderModelCatalogEntry, ProviderPreset,
+        PROVIDER_LOCAL_ID_PREFIX, PROVIDER_PRESET_LOCAL_ID_PREFIX, ProviderAdapterKind,
+        ProviderBodyFragment, ProviderModelCatalogEntry, ProviderPreset,
     };
 
     fn temp_store_path(name: &str) -> PathBuf {
