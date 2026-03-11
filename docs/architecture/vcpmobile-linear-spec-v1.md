@@ -102,6 +102,8 @@ External Upstream
 
 - Rust 维护 conversation / node / variant / part 的领域真相
 - Android 不再以 `content + reasoning + ast` 三元组充当最终真相
+- `Conversation.current_cursor` 是当前选中分支的叶子 `NodeId`，不是 `VariantId`
+- `MessageNode.select_index` 是节点当前选中 variant 的唯一真相源；Android 只能投影，不能补真相
 
 ### FR-2 Typed Event Stream
 
@@ -118,6 +120,7 @@ External Upstream
 
 - Rust 提供事实型 catalog facade
 - Android 可恢复最近可恢复会话
+- catalog 中的 `current_cursor` 继续携带选中分支的叶子 `NodeId`，供恢复链路使用
 - `current / recent / failed` 等分组仍由客户端 presentation 决定
 
 ### FR-4 Android State Separation

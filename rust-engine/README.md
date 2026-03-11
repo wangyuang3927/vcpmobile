@@ -64,4 +64,5 @@ HOST=127.0.0.1 PORT=4001 cargo run -p vcpmobile-bridge-http
 注意：
 
 - Rust 提供事实型 catalog 投影与 recoverability
+- `current_cursor` 是当前选中分支的叶子 `NodeId`，不是 variant identity，也不是客户端 UI 行号
 - `current / recent / failed` 这类展示分组仍留给客户端决定
