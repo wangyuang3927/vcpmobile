@@ -1,5 +1,5 @@
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs,
     path::{Path, PathBuf},
 };
@@ -118,8 +118,7 @@ impl FileStore {
                 generation_state: stored.conversation.generation_state,
                 pinned: stored.conversation.pinned,
                 current_cursor: stored.conversation.current_cursor,
-                is_recoverable: stored.conversation.current_cursor.is_some()
-                    && !stored.nodes.is_empty(),
+                is_recoverable: cursor_resolves_to_leaf(&stored),
                 node_count: stored.nodes.len(),
             })
             .collect::<Vec<_>>();
@@ -129,11 +128,58 @@ impl FileStore {
     }
 }
 
+fn cursor_resolves_to_leaf(stored: &StoredConversation) -> bool {
+    let Some(mut current_cursor) = stored.conversation.current_cursor else {
+        return false;
+    };
+    let node_index = stored
+        .nodes
+        .iter()
+        .map(|bundle| (bundle.node.id, bundle))
+        .collect::<BTreeMap<_, _>>();
+    let Some(cursor_node) = node_index.get(&current_cursor) else {
+        return false;
+    };
+    if cursor_node.node.conversation_id != stored.conversation.id {
+        return false;
+    }
+    if stored.nodes.iter().any(|bundle| {
+        bundle.node.conversation_id == stored.conversation.id
+            && bundle.node.parent_node_id == Some(current_cursor)
+    }) {
+        return false;
+    }
+
+    let mut visited = BTreeSet::new();
+    loop {
+        if !visited.insert(current_cursor) {
+            return false;
+        }
+        let Some(bundle) = node_index.get(&current_cursor) else {
+            return false;
+        };
+        if bundle.node.conversation_id != stored.conversation.id {
+            return false;
+        }
+        current_cursor = match bundle.node.parent_node_id {
+            Some(parent_node_id) => parent_node_id,
+            None => break,
+        };
+    }
+
+    true
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::{env, fs};
     use uuid::Uuid;
+    use vcpmobile_domain::{
+        AgentId, Conversation, GenerationState, MessageNode, MessageRole, MessageVariant, TopicId,
+        VariantStatus,
+    };
+    use vcpmobile_protocol::VariantBundle;
 
     fn temp_store_path(name: &str) -> PathBuf {
         env::temp_dir().join(format!("vcpmobile-store-{name}-{}.json", Uuid::new_v4()))
@@ -166,6 +212,124 @@ mod tests {
                 .all(|item| !item.conversation_id.to_string().is_empty() && !item.title.is_empty())
         );
         assert!(items.iter().all(|item| item.node_count > 0));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn catalog_marks_missing_cursor_conversation_not_recoverable() {
+        let path = temp_store_path("missing-cursor");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+
+        store
+            .upsert_conversation(StoredConversation {
+                conversation: Conversation {
+                    id: conversation_id,
+                    topic_id: TopicId::new_v4(),
+                    agent_id: AgentId::new_v4(),
+                    title: "broken".to_string(),
+                    summary: None,
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: Some(NodeId::new_v4()),
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: vec![NodeBundle {
+                    node: MessageNode {
+                        id: node_id,
+                        conversation_id,
+                        parent_node_id: None,
+                        role: MessageRole::Assistant,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: variant_id,
+                            node_id,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![],
+                    }],
+                }],
+            })
+            .expect("write stored conversation");
+
+        let items = store
+            .list_conversation_catalog()
+            .expect("load catalog projection");
+
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].is_recoverable);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn catalog_marks_missing_branch_ancestor_not_recoverable() {
+        let path = temp_store_path("missing-ancestor");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+
+        store
+            .upsert_conversation(StoredConversation {
+                conversation: Conversation {
+                    id: conversation_id,
+                    topic_id: TopicId::new_v4(),
+                    agent_id: AgentId::new_v4(),
+                    title: "broken ancestry".to_string(),
+                    summary: None,
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: Some(node_id),
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: vec![NodeBundle {
+                    node: MessageNode {
+                        id: node_id,
+                        conversation_id,
+                        parent_node_id: Some(NodeId::new_v4()),
+                        role: MessageRole::Assistant,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: variant_id,
+                            node_id,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![],
+                    }],
+                }],
+            })
+            .expect("write stored conversation");
+
+        let items = store
+            .list_conversation_catalog()
+            .expect("load catalog projection");
+
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].is_recoverable);
 
         fs::remove_file(path).ok();
     }

@@ -30,6 +30,8 @@ class ChatViewModel @Inject constructor(
     private val recoveryStore: RecoveryStore,
 ) : ViewModel() {
 
+    private var pendingOptimisticUserMessageId: String? = null
+
     private val _detailState = MutableStateFlow(ChatDetailReducer.initialState())
     val detailState: StateFlow<ChatDetailState> = _detailState.asStateFlow()
 
@@ -47,9 +49,12 @@ class ChatViewModel @Inject constructor(
 
     fun sendMessage() {
         val userInput = _draftState.value.currentInput.trim()
-        if (userInput.isEmpty()) return
+        if (userInput.isEmpty() || _detailState.value.isTyping) return
 
         dispatchDetail(ChatDetailAction.UserMessageSubmitted(userInput))
+        pendingOptimisticUserMessageId = _detailState.value.messages.lastOrNull()
+            ?.takeIf { it.sender == MessageSender.USER && it.nodeId == null && it.variantId == null }
+            ?.id
         _draftState.value = ChatDraftState()
 
         viewModelScope.launch {
@@ -85,6 +90,7 @@ class ChatViewModel @Inject constructor(
 
                         is HubStreamEvent.Error -> {
                             renderBuffer.clear()
+                            discardPendingOptimisticUserMessage()
                             dispatchGeneration(ChatGenerationPhase.IDLE, null)
                             dispatchDetail(
                                 ChatDetailAction.SystemMessageAppended(
@@ -143,6 +149,7 @@ class ChatViewModel @Inject constructor(
                 }
             } catch (error: Throwable) {
                 renderBuffer.clear()
+                discardPendingOptimisticUserMessage()
                 dispatchGeneration(ChatGenerationPhase.IDLE, null)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
@@ -162,6 +169,7 @@ class ChatViewModel @Inject constructor(
 
     fun startNewConversation() {
         val previousConversationId = _detailState.value.conversationId
+        pendingOptimisticUserMessageId = null
         dispatchDetail(ChatDetailAction.StartNewConversation)
         dispatchDetail(ChatDetailAction.ConversationCatalogExpandedChanged(false))
         viewModelScope.launch {
@@ -328,7 +336,11 @@ class ChatViewModel @Inject constructor(
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
-        val snapshotContent = parts.toCompatibilityProjection().content.ifBlank { content }
+        val fallbackMessageId = if (sender == MessageSender.USER) {
+            pendingOptimisticUserMessageId
+        } else {
+            null
+        }
         val result = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = _detailState.value,
             messageId = messageId,
@@ -340,34 +352,33 @@ class ChatViewModel @Inject constructor(
             variantId = variantId,
             parts = parts,
             partTypes = partTypes,
-            fallbackMessageId = optimisticSnapshotFallbackMessageId(
-                sender = sender,
-                content = snapshotContent,
-            ),
+            fallbackMessageId = fallbackMessageId,
+            fallbackNodeId = nodeId,
         )
         _detailState.value = result.state
+        if (sender == MessageSender.USER && fallbackMessageId != null) {
+            pendingOptimisticUserMessageId = null
+        }
         return result.messageId
-    }
-
-    private fun optimisticSnapshotFallbackMessageId(
-        sender: MessageSender,
-        content: String,
-    ): String? {
-        if (sender != MessageSender.USER || content.isBlank()) return null
-        return _detailState.value.messages
-            .asReversed()
-            .firstOrNull { message ->
-                message.sender == MessageSender.USER &&
-                    message.nodeId == null &&
-                    message.variantId == null &&
-                    message.content == content
-            }
-            ?.id
     }
 
     private fun currentMessage(messageId: String?): ChatMessage? {
         if (messageId == null) return null
         return _detailState.value.messages.firstOrNull { it.id == messageId }
+    }
+
+    private fun discardPendingOptimisticUserMessage() {
+        val pendingId = pendingOptimisticUserMessageId ?: return
+        val pendingMessage = _detailState.value.messages.firstOrNull { it.id == pendingId }
+        if (
+            pendingMessage != null &&
+            pendingMessage.sender == MessageSender.USER &&
+            pendingMessage.nodeId == null &&
+            pendingMessage.variantId == null
+        ) {
+            dispatchDetail(ChatDetailAction.MessageRemoved(pendingId))
+        }
+        pendingOptimisticUserMessageId = null
     }
 
     private fun handleRustChatEnvelope(
@@ -454,6 +465,7 @@ class ChatViewModel @Inject constructor(
             }
 
             "generation_failed" -> {
+                discardPendingOptimisticUserMessage()
                 dispatchGeneration(ChatGenerationPhase.FAILED, currentMessageKey)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
@@ -464,6 +476,7 @@ class ChatViewModel @Inject constructor(
             }
 
             "engine_error" -> {
+                discardPendingOptimisticUserMessage()
                 dispatchGeneration(ChatGenerationPhase.FAILED, currentMessageKey)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
@@ -482,6 +495,7 @@ class ChatViewModel @Inject constructor(
         val conversationId = envelope.conversationId ?: return
         val snapshots = RustChatEventParser.extractSnapshotMessages(envelope.data)
         if (snapshots.isEmpty()) return
+        pendingOptimisticUserMessageId = null
 
         val messages = snapshots.map { snapshot ->
             ChatMessage(

@@ -463,6 +463,108 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
+    fun `send message ignores second submit while first request is active`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(streamEvents = emptyFlow())
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("same text")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.onInputChanged("same text")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val userMessages = viewModel.detailState.value.messages.filter { it.sender == MessageSender.USER }
+
+        assertEquals(1, repository.observeStreamRequests.size)
+        assertEquals(1, userMessages.size)
+        assertEquals("same text", userMessages.single().content)
+        assertEquals(ChatGenerationPhase.REQUESTING, viewModel.detailState.value.generation.phase)
+    }
+
+    @Test
+    fun `retry after pre snapshot failure does not leave stale optimistic user placeholder`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEventQueue = listOf(
+                flow {
+                    emit(HubStreamEvent.Error(HubStreamFailureException("fail before snapshot")))
+                },
+                flow {
+                    emit(HubStreamEvent.Opened)
+                    emit(
+                        HubStreamEvent.Message(
+                            event = "chat_event",
+                            data = """
+                            {
+                              "conversation_id":"conversation-stream",
+                              "payload":{
+                                "event":"conversation_snapshot",
+                                "data":{
+                                  "nodes":[
+                                    {
+                                      "node":{"id":"node-user","role":"user","select_index":0},
+                                      "variants":[
+                                        {
+                                          "variant":{"id":"variant-user"},
+                                          "parts":[
+                                            {"payload":{"type":"text","text":"same text"}}
+                                          ]
+                                        }
+                                      ]
+                                    },
+                                    {
+                                      "node":{"id":"node-assistant","role":"assistant","select_index":0},
+                                      "variants":[
+                                        {
+                                          "variant":{"id":"variant-assistant"},
+                                          "parts":[
+                                            {"payload":{"type":"text","text":"ok"}}
+                                          ]
+                                        }
+                                      ]
+                                    }
+                                  ]
+                                }
+                              }
+                            }
+                            """.trimIndent()
+                        )
+                    )
+                    emit(HubStreamEvent.Completed)
+                },
+            ),
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("same text")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertTrue(
+            viewModel.detailState.value.messages.none {
+                it.sender == MessageSender.USER && it.nodeId == null
+            }
+        )
+
+        viewModel.onInputChanged("same text")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val userMessages = viewModel.detailState.value.messages.filter { it.sender == MessageSender.USER }
+        assertEquals(2, repository.observeStreamRequests.size)
+        assertEquals(1, userMessages.size)
+        assertEquals("node-user:variant-user", userMessages.single().id)
+        assertTrue(
+            viewModel.detailState.value.messages.none {
+                it.sender == MessageSender.USER && it.nodeId == null
+            }
+        )
+    }
+
+    @Test
     fun `stream relay error exits streaming and appends one visible network error`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             streamEvents = flow {
@@ -636,6 +738,82 @@ class ChatViewModelRecoveryTest {
         assertEquals(listOf("reasoning", "markdown_block"), streamedMessages.single().partTypes)
     }
 
+    @Test
+    fun `stream node upsert replaces selected variant on existing node without duplicate bubble`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"conversation_snapshot",
+                            "data":{
+                              "nodes":[
+                                {
+                                  "node":{"id":"node-stream","role":"assistant","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-old"},
+                                      "parts":[
+                                        {"payload":{"type":"text","text":"old"}}
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"conversation_node_upsert",
+                            "data":{
+                              "node":{
+                                "node":{"id":"node-stream","role":"assistant","select_index":0},
+                                "variants":[
+                                  {
+                                    "variant":{"id":"variant-new"},
+                                    "parts":[
+                                      {"payload":{"type":"text","text":"new"}}
+                                    ]
+                                  }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("stream me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val streamedMessages = viewModel.detailState.value.messages.filter { it.nodeId == "node-stream" }
+        assertEquals(1, streamedMessages.size)
+        assertEquals("node-stream:variant-new", streamedMessages.single().id)
+        assertEquals("new", streamedMessages.single().content)
+        assertEquals("variant-new", streamedMessages.single().variantId)
+    }
+
     private fun snapshotEnvelope(
         conversationId: String,
         nodeId: String,
@@ -678,12 +856,19 @@ private class FakeHubChatRepository(
     private val snapshotEnvelope: RustChatEventEnvelope? = null,
     private val failSnapshot: Boolean = false,
     private val streamEvents: Flow<HubStreamEvent> = emptyFlow(),
+    streamEventQueue: List<Flow<HubStreamEvent>> = emptyList(),
 ) : HubChatRepository {
+    val observeStreamRequests = mutableListOf<HubSendMessageRequest>()
+    private val streamEventQueue = ArrayDeque(streamEventQueue)
+
     override suspend fun sendMessage(request: HubSendMessageRequest): HubSendMessageResponse {
         return HubSendMessageResponse("", "", "")
     }
 
-    override fun observeStream(request: HubSendMessageRequest): Flow<HubStreamEvent> = streamEvents
+    override fun observeStream(request: HubSendMessageRequest): Flow<HubStreamEvent> {
+        observeStreamRequests += request
+        return streamEventQueue.removeFirstOrNull() ?: streamEvents
+    }
 
     override suspend fun listConversations(): List<HubConversationSummary> = conversations
 

@@ -175,6 +175,43 @@ class ChatDetailReducerTest {
     }
 
     @Test
+    fun `snapshot replace updates selected variant for existing node without duplicating bubble`() {
+        val existingMessage = ChatMessage(
+            id = "node-1:variant-old",
+            sender = MessageSender.AGENT,
+            content = "old",
+            nodeId = "node-1",
+            variantId = "variant-old",
+            parts = listOf(UiMessagePart(type = "text", text = "old")),
+            partTypes = listOf("text"),
+            timestampMillis = 1234L,
+        )
+        val initial = ChatDetailReducer.initialState()
+        val state = initial.copy(messages = initial.messages + existingMessage)
+
+        val result = ChatDetailReducer.replaceOrUpsertSnapshot(
+            state = state,
+            messageId = "node-1:variant-new",
+            sender = MessageSender.AGENT,
+            content = "new",
+            nodeId = "node-1",
+            variantId = "variant-new",
+            parts = listOf(UiMessagePart(type = "text", text = "new")),
+            partTypes = listOf("text"),
+            fallbackNodeId = "node-1",
+        )
+
+        assertEquals(state.messages.size, result.state.messages.size)
+        val updated = result.state.messages.last()
+        assertEquals("node-1:variant-new", updated.id)
+        assertEquals("node-1", updated.nodeId)
+        assertEquals("variant-new", updated.variantId)
+        assertEquals("new", updated.content)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "new")), updated.parts)
+        assertEquals(existingMessage.timestampMillis, updated.timestampMillis)
+    }
+
+    @Test
     fun `parts-aware append derives compatibility fields from ordered parts`() {
         val started = ChatDetailReducer.reduce(
             ChatDetailReducer.initialState(),
@@ -210,6 +247,48 @@ class ChatDetailReducerTest {
             listOf("reasoning", "markdown_block", "code_block"),
             lastMessage.partTypes
         )
+    }
+
+    @Test
+    fun `assistant delta switches selected variant on same node without duplicating bubble`() {
+        val existingMessage = ChatMessage(
+            id = "node-2:variant-old",
+            sender = MessageSender.AGENT,
+            content = "old",
+            nodeId = "node-2",
+            variantId = "variant-old",
+            parts = listOf(UiMessagePart(type = "text", text = "old")),
+            partTypes = listOf("text"),
+            timestampMillis = 5678L,
+        )
+        val initial = ChatDetailReducer.initialState()
+        val state = initial.copy(
+            messages = initial.messages + existingMessage,
+            generation = ChatGenerationState(
+                phase = ChatGenerationPhase.STREAMING,
+                activeMessageKey = "node-2:variant-new",
+            ),
+        )
+
+        val result = ChatDetailReducer.appendAssistantDelta(
+            state = state,
+            currentMessageId = "node-2:variant-new",
+            sender = MessageSender.AGENT,
+            appendText = "new",
+            nodeId = "node-2",
+            variantId = "variant-new",
+            parts = listOf(UiMessagePart(type = "text", text = "new")),
+            partTypes = listOf("text"),
+        )
+
+        assertEquals(state.messages.size, result.state.messages.size)
+        val updated = result.state.messages.last()
+        assertEquals("node-2:variant-new", updated.id)
+        assertEquals("node-2", updated.nodeId)
+        assertEquals("variant-new", updated.variantId)
+        assertEquals("new", updated.content)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "new")), updated.parts)
+        assertEquals(existingMessage.timestampMillis, updated.timestampMillis)
     }
 
     @Test

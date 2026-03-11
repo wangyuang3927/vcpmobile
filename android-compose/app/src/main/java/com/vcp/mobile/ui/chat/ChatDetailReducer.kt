@@ -9,6 +9,7 @@ import java.util.UUID
 sealed interface ChatDetailAction {
     data object StartNewConversation : ChatDetailAction
     data class UserMessageSubmitted(val text: String) : ChatDetailAction
+    data class MessageRemoved(val messageId: String) : ChatDetailAction
     data class ConversationBound(val conversationId: String) : ChatDetailAction
     data class ConversationHydrated(
         val conversationId: String,
@@ -92,6 +93,11 @@ object ChatDetailReducer {
                 )
             )
 
+            is ChatDetailAction.MessageRemoved -> state.copy(
+                messages = state.messages.filterNot { it.id == action.messageId },
+                contentVersion = state.contentVersion + 1,
+            )
+
             is ChatDetailAction.ConversationBound -> state.copy(
                 conversationId = action.conversationId,
             )
@@ -155,8 +161,7 @@ object ChatDetailReducer {
                 messages = state.messages + ChatMessage(
                     sender = action.sender,
                     content = action.text,
-                )
-                ,
+                ),
                 contentVersion = state.contentVersion + 1,
             )
         }
@@ -176,10 +181,14 @@ object ChatDetailReducer {
     ): AssistantDeltaResult {
         val targetId = currentMessageId ?: UUID.randomUUID().toString()
         val targetIndex = state.messages.indexOfFirst { it.id == targetId }
+        val nodeReplacementIndex = when {
+            targetIndex != -1 || nodeId.isNullOrBlank() -> -1
+            else -> state.messages.indexOfFirst { it.nodeId == nodeId }
+        }
 
         val updatedMessages = if (targetIndex == -1) {
             val compatibilityProjection = parts.toCompatibilityProjection()
-            state.messages + ChatMessage(
+            val replacement = ChatMessage(
                 id = targetId,
                 sender = sender,
                 content = compatibilityProjection.content.ifBlank { appendText },
@@ -190,6 +199,14 @@ object ChatDetailReducer {
                 parts = parts,
                 partTypes = compatibilityProjection.partTypes.ifEmpty { partTypes },
             )
+            if (nodeReplacementIndex == -1) {
+                state.messages + replacement
+            } else {
+                state.messages.toMutableList().apply {
+                    val previous = this[nodeReplacementIndex]
+                    this[nodeReplacementIndex] = replacement.copy(timestampMillis = previous.timestampMillis)
+                }
+            }
         } else {
             state.messages.toMutableList().apply {
                 val previous = this[targetIndex]
@@ -244,6 +261,7 @@ object ChatDetailReducer {
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
         fallbackMessageId: String? = null,
+        fallbackNodeId: String? = null,
     ): AssistantDeltaResult {
         val compatibilityProjection = parts.toCompatibilityProjection()
         val targetIndex = state.messages.indexOfFirst { it.id == messageId }
@@ -251,6 +269,10 @@ object ChatDetailReducer {
             targetIndex != -1 -> targetIndex
             fallbackMessageId.isNullOrBlank() -> -1
             else -> state.messages.indexOfFirst { it.id == fallbackMessageId }
+        }
+        val nodeReplacementIndex = when {
+            replacementIndex != -1 || fallbackNodeId.isNullOrBlank() -> -1
+            else -> state.messages.indexOfFirst { it.nodeId == fallbackNodeId }
         }
         val replacement = ChatMessage(
             id = messageId,
@@ -264,12 +286,13 @@ object ChatDetailReducer {
             partTypes = compatibilityProjection.partTypes.ifEmpty { partTypes },
         )
 
-        val updatedMessages = if (replacementIndex == -1) {
+        val updatedMessages = if (replacementIndex == -1 && nodeReplacementIndex == -1) {
             state.messages + replacement
         } else {
             state.messages.toMutableList().apply {
-                val previous = this[replacementIndex]
-                this[replacementIndex] = replacement.copy(timestampMillis = previous.timestampMillis)
+                val resolvedIndex = if (replacementIndex != -1) replacementIndex else nodeReplacementIndex
+                val previous = this[resolvedIndex]
+                this[resolvedIndex] = replacement.copy(timestampMillis = previous.timestampMillis)
             }
         }
 

@@ -32,6 +32,10 @@ pub enum ChatEvent {
     ConversationListInvalidate {
         reason: String,
     },
+    /// Full selected-branch snapshot for one conversation.
+    ///
+    /// Recovery/hydration surfaces and live send flows both use this event to materialize the
+    /// complete currently selected branch from root to `Conversation.current_cursor`.
     ConversationSnapshot {
         conversation: Conversation,
         nodes: Vec<NodeBundle>,
@@ -42,7 +46,9 @@ pub enum ChatEvent {
     /// Selection-only mutation for an existing node.
     ///
     /// Reducers must treat this as a variant switch on the same `MessageNode`, not as a new
-    /// branch or a signal to synthesize missing parts on the client.
+    /// branch or a signal to synthesize missing parts on the client. This event is only valid
+    /// for recipients that already hold the full variant array for the node; selected-only
+    /// payload surfaces must use `ConversationNodeUpsert` or `ConversationSnapshot` instead.
     ConversationNodeSelect {
         node_id: NodeId,
         select_index: usize,
