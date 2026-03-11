@@ -187,6 +187,15 @@ MessagePart
 不要把一切都塞回 markdown 字符串。  
 markdown 只是 text/content 的一种来源，不是领域真相。
 
+## 4.5 Invariants
+
+- `Conversation.current_cursor` 指向当前选中分支的叶子 `MessageNode`，不是 `MessageVariant`。
+- `MessageNode.select_index` 是节点当前选中 variant 的唯一真相源；Android 只能投影，不能补真相。
+- `MessageVariant` 是同一节点的一次具体实现，不自带 branch identity；branch 由 `current_cursor + parent_node_id` 链恢复。
+- `conversation.node.select` 只切换同一 `MessageNode` 的选中 variant，不改写 node identity、parent links 或 parts。
+- assistant regenerate/retry 发生在同一 `MessageNode` 上：追加一个新的 `MessageVariant` 并切换选中项。
+- 编辑已持久化 user turn 时，必须从原 parent 新建 `MessageNode` 分支，而不是原地改写旧节点内容。
+
 ---
 
 ## 5. Typed Event 协议
