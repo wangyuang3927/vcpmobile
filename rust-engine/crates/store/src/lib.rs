@@ -11,6 +11,9 @@ use vcpmobile_protocol::NodeBundle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredConversation {
+    /// Full Rust-owned conversation truth persisted for recovery.
+    ///
+    /// `nodes` keeps `NodeBundle` truth, including the selected-variant pointer on each node.
     pub conversation: Conversation,
     pub nodes: Vec<NodeBundle>,
 }
@@ -23,6 +26,9 @@ pub struct StoredConversationCatalogItem {
     pub updated_at: chrono::DateTime<chrono::Utc>,
     pub generation_state: GenerationState,
     pub pinned: bool,
+    /// Active branch anchor for recovery/catalog projection.
+    ///
+    /// This is the selected leaf `NodeId`, never a variant identity or a UI row index.
     pub current_cursor: Option<NodeId>,
     pub is_recoverable: bool,
     pub node_count: usize,
@@ -112,7 +118,8 @@ impl FileStore {
                 generation_state: stored.conversation.generation_state,
                 pinned: stored.conversation.pinned,
                 current_cursor: stored.conversation.current_cursor,
-                is_recoverable: stored.conversation.current_cursor.is_some() && !stored.nodes.is_empty(),
+                is_recoverable: stored.conversation.current_cursor.is_some()
+                    && !stored.nodes.is_empty(),
                 node_count: stored.nodes.len(),
             })
             .collect::<Vec<_>>();
@@ -148,12 +155,14 @@ mod tests {
 
         assert!(!items.is_empty());
         assert!(
-            items.windows(2)
+            items
+                .windows(2)
                 .all(|pair| pair[0].updated_at >= pair[1].updated_at),
             "catalog should be sorted by updated_at desc"
         );
         assert!(
-            items.iter()
+            items
+                .iter()
                 .all(|item| !item.conversation_id.to_string().is_empty() && !item.title.is_empty())
         );
         assert!(items.iter().all(|item| item.node_count > 0));

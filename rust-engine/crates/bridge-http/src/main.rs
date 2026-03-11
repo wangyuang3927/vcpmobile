@@ -44,6 +44,9 @@ struct ConversationListItem {
     title: String,
     updated_at: chrono::DateTime<chrono::Utc>,
     generation_state: GenerationState,
+    /// Selected branch leaf in Rust truth.
+    ///
+    /// This mirrors `Conversation.current_cursor` and is always a node identity.
     current_cursor: Option<uuid::Uuid>,
 }
 
@@ -55,6 +58,9 @@ struct ConversationCatalogItem {
     updated_at: chrono::DateTime<chrono::Utc>,
     generation_state: GenerationState,
     pinned: bool,
+    /// Selected branch leaf in Rust truth.
+    ///
+    /// This mirrors `Conversation.current_cursor` and is always a node identity.
     current_cursor: Option<uuid::Uuid>,
     is_recoverable: bool,
     node_count: usize,
