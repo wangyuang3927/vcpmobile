@@ -232,7 +232,7 @@ object ChatDetailReducer {
         )
     }
 
-    fun replaceOrUpsertAssistantSnapshot(
+    fun replaceOrUpsertSnapshot(
         state: ChatDetailState,
         messageId: String,
         sender: MessageSender,
@@ -243,9 +243,15 @@ object ChatDetailReducer {
         variantId: String? = null,
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
+        fallbackMessageId: String? = null,
     ): AssistantDeltaResult {
         val compatibilityProjection = parts.toCompatibilityProjection()
         val targetIndex = state.messages.indexOfFirst { it.id == messageId }
+        val replacementIndex = when {
+            targetIndex != -1 -> targetIndex
+            fallbackMessageId.isNullOrBlank() -> -1
+            else -> state.messages.indexOfFirst { it.id == fallbackMessageId }
+        }
         val replacement = ChatMessage(
             id = messageId,
             sender = sender,
@@ -258,12 +264,12 @@ object ChatDetailReducer {
             partTypes = compatibilityProjection.partTypes.ifEmpty { partTypes },
         )
 
-        val updatedMessages = if (targetIndex == -1) {
+        val updatedMessages = if (replacementIndex == -1) {
             state.messages + replacement
         } else {
             state.messages.toMutableList().apply {
-                val previous = this[targetIndex]
-                this[targetIndex] = replacement.copy(timestampMillis = previous.timestampMillis)
+                val previous = this[replacementIndex]
+                this[replacementIndex] = replacement.copy(timestampMillis = previous.timestampMillis)
             }
         }
 

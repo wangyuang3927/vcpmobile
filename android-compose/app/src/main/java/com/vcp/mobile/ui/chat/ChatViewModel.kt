@@ -317,7 +317,7 @@ class ChatViewModel @Inject constructor(
         return result.messageId
     }
 
-    private fun replaceAssistantSnapshot(
+    private fun replaceSnapshotMessage(
         messageId: String,
         sender: MessageSender,
         content: String,
@@ -328,7 +328,8 @@ class ChatViewModel @Inject constructor(
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
-        val result = ChatDetailReducer.replaceOrUpsertAssistantSnapshot(
+        val snapshotContent = parts.toCompatibilityProjection().content.ifBlank { content }
+        val result = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = _detailState.value,
             messageId = messageId,
             sender = sender,
@@ -339,9 +340,29 @@ class ChatViewModel @Inject constructor(
             variantId = variantId,
             parts = parts,
             partTypes = partTypes,
+            fallbackMessageId = optimisticSnapshotFallbackMessageId(
+                sender = sender,
+                content = snapshotContent,
+            ),
         )
         _detailState.value = result.state
         return result.messageId
+    }
+
+    private fun optimisticSnapshotFallbackMessageId(
+        sender: MessageSender,
+        content: String,
+    ): String? {
+        if (sender != MessageSender.USER || content.isBlank()) return null
+        return _detailState.value.messages
+            .asReversed()
+            .firstOrNull { message ->
+                message.sender == MessageSender.USER &&
+                    message.nodeId == null &&
+                    message.variantId == null &&
+                    message.content == content
+            }
+            ?.id
     }
 
     private fun currentMessage(messageId: String?): ChatMessage? {
@@ -361,7 +382,7 @@ class ChatViewModel @Inject constructor(
                 var latestMessageKey: String? = currentMessageKey
                 snapshots.forEachIndexed { index, snapshot ->
                     val messageKey = snapshot.identity.messageKey
-                    latestMessageKey = replaceAssistantSnapshot(
+                    latestMessageKey = replaceSnapshotMessage(
                         messageId = messageKey,
                         sender = snapshot.role.toMessageSender(),
                         content = snapshot.delta.appendedText,
@@ -415,7 +436,7 @@ class ChatViewModel @Inject constructor(
             "conversation_node_upsert" -> {
                 val snapshot = RustChatEventParser.extractNodeUpsertMessage(envelope.data)
                     ?: return currentMessageKey
-                replaceAssistantSnapshot(
+                replaceSnapshotMessage(
                     messageId = snapshot.identity.messageKey,
                     sender = snapshot.role.toMessageSender(),
                     content = snapshot.delta.appendedText,

@@ -391,6 +391,78 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
+    fun `stream snapshot reconciles optimistic user message with rust identity`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"conversation_snapshot",
+                            "data":{
+                              "nodes":[
+                                {
+                                  "node":{"id":"node-user","role":"user","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-user"},
+                                      "parts":[
+                                        {"payload":{"type":"text","text":"stream me"}}
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "node":{"id":"node-assistant","role":"assistant","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-assistant"},
+                                      "parts":[
+                                        {"payload":{"type":"reasoning","text":"thinking"}},
+                                        {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("stream me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.detailState.value
+        val userMessages = state.messages.filter { it.sender == MessageSender.USER }
+        val assistantMessages = state.messages.filter { it.id == "node-assistant:variant-assistant" }
+
+        assertEquals("conversation-stream", state.conversationId)
+        assertEquals(1, userMessages.size)
+        assertEquals(1, assistantMessages.size)
+        assertEquals("node-user:variant-user", userMessages.single().id)
+        assertEquals("node-user", userMessages.single().nodeId)
+        assertEquals("variant-user", userMessages.single().variantId)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "stream me")), userMessages.single().parts)
+        assertEquals(listOf("text"), userMessages.single().partTypes)
+        assertTrue(
+            state.messages.none { it.sender == MessageSender.USER && it.nodeId == null && it.content == "stream me" }
+        )
+    }
+
+    @Test
     fun `stream relay error exits streaming and appends one visible network error`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             streamEvents = flow {

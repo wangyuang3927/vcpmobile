@@ -105,6 +105,7 @@ impl SessionEngine {
             now,
         );
         let user_node_id = user_node.node.id;
+        let user_snapshot_node = selected_variant_snapshot_projection(&user_node);
         stored.nodes.push(user_node);
 
         let assistant_node =
@@ -118,7 +119,12 @@ impl SessionEngine {
         stored.nodes.push(assistant_node.clone());
         self.store.upsert_conversation(stored.clone())?;
 
-        let assistant_snapshot_nodes = vec![selected_variant_snapshot_projection(&assistant_node)];
+        // Materialize both persisted nodes so the client never has to keep a synthetic user turn
+        // alive without Rust-owned node/variant identity.
+        let snapshot_nodes = vec![
+            user_snapshot_node,
+            selected_variant_snapshot_projection(&assistant_node),
+        ];
         let assistant_delta_parts = streaming_delta_parts(&assistant_node);
 
         Ok(vec![
@@ -126,7 +132,7 @@ impl SessionEngine {
                 Some(stored.conversation.id),
                 ChatEvent::ConversationSnapshot {
                     conversation: stored.conversation.clone(),
-                    nodes: assistant_snapshot_nodes,
+                    nodes: snapshot_nodes,
                 },
             ),
             EventEnvelope::new(
@@ -658,6 +664,56 @@ mod tests {
         assert_eq!(delta_parts.len(), 1);
         assert!(matches!(
             delta_parts[0].payload,
+            MessagePartPayload::MarkdownBlock { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_snapshot_carries_new_user_and_assistant_nodes() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+            })
+            .expect("send message");
+
+        let snapshot_nodes = match &events[0].payload {
+            ChatEvent::ConversationSnapshot { nodes, .. } => nodes,
+            other => panic!("expected conversation_snapshot, got {other:?}"),
+        };
+
+        assert_eq!(
+            snapshot_nodes.len(),
+            2,
+            "send snapshot should materialize both new nodes"
+        );
+        assert_eq!(snapshot_nodes[0].node.role, MessageRole::User);
+        assert_eq!(snapshot_nodes[0].node.parent_node_id, None);
+        assert_eq!(snapshot_nodes[0].node.select_index, 0);
+        assert_eq!(snapshot_nodes[0].variants.len(), 1);
+        assert!(matches!(
+            snapshot_nodes[0].variants[0].parts[0].payload,
+            MessagePartPayload::Text { .. }
+        ));
+        assert_eq!(snapshot_nodes[1].node.role, MessageRole::Assistant);
+        assert_eq!(
+            snapshot_nodes[1].node.parent_node_id,
+            Some(snapshot_nodes[0].node.id),
+            "assistant snapshot should preserve the persisted user-node edge"
+        );
+        assert_eq!(snapshot_nodes[1].node.select_index, 0);
+        assert_eq!(snapshot_nodes[1].variants.len(), 1);
+        assert_eq!(snapshot_nodes[1].variants[0].parts.len(), 2);
+        assert!(matches!(
+            snapshot_nodes[1].variants[0].parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(
+            snapshot_nodes[1].variants[0].parts[1].payload,
             MessagePartPayload::MarkdownBlock { .. }
         ));
 

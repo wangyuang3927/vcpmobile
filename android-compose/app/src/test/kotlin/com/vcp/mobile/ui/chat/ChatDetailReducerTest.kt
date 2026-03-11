@@ -95,7 +95,7 @@ class ChatDetailReducerTest {
             )
         )
 
-        val first = ChatDetailReducer.replaceOrUpsertAssistantSnapshot(
+        val first = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = started,
             messageId = "node-1:variant-1",
             sender = MessageSender.AGENT,
@@ -109,7 +109,7 @@ class ChatDetailReducerTest {
             ),
             partTypes = listOf("reasoning", "markdown_block"),
         )
-        val second = ChatDetailReducer.replaceOrUpsertAssistantSnapshot(
+        val second = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = first.state,
             messageId = "node-1:variant-1",
             sender = MessageSender.AGENT,
@@ -140,6 +140,38 @@ class ChatDetailReducerTest {
         assertEquals(listOf("reasoning", "markdown_block"), lastMessage.partTypes)
         assertEquals("node-1:variant-1", second.state.generation.activeMessageKey)
         assertTrue(second.state.contentVersion > started.contentVersion)
+    }
+
+    @Test
+    fun `snapshot replace can reconcile optimistic user placeholder with rust identity`() {
+        val submitted = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.UserMessageSubmitted("hi")
+        )
+        val optimisticUser = submitted.messages.last()
+
+        val result = ChatDetailReducer.replaceOrUpsertSnapshot(
+            state = submitted,
+            messageId = "node-user:variant-user",
+            sender = MessageSender.USER,
+            content = "hi",
+            nodeId = "node-user",
+            variantId = "variant-user",
+            parts = listOf(UiMessagePart(type = "text", text = "hi")),
+            partTypes = listOf("text"),
+            fallbackMessageId = optimisticUser.id,
+        )
+
+        assertEquals(submitted.messages.size, result.state.messages.size)
+        val reconciledUser = result.state.messages.last()
+        assertEquals("node-user:variant-user", reconciledUser.id)
+        assertEquals(MessageSender.USER, reconciledUser.sender)
+        assertEquals("hi", reconciledUser.content)
+        assertEquals("node-user", reconciledUser.nodeId)
+        assertEquals("variant-user", reconciledUser.variantId)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "hi")), reconciledUser.parts)
+        assertEquals(listOf("text"), reconciledUser.partTypes)
+        assertEquals(optimisticUser.timestampMillis, reconciledUser.timestampMillis)
     }
 
     @Test
