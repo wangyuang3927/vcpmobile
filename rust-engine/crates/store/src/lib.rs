@@ -176,8 +176,7 @@ mod tests {
     use std::{env, fs};
     use uuid::Uuid;
     use vcpmobile_domain::{
-        AgentId, Conversation, GenerationState, MessageNode, MessageRole, MessageVariant, TopicId,
-        VariantStatus,
+        AgentId, MessageNode, MessageRole, MessageVariant, TopicId, VariantStatus,
     };
     use vcpmobile_protocol::VariantBundle;
 
