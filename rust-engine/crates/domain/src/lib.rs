@@ -456,3 +456,84 @@ fn fnv1a_64(bytes: &[u8], offset_basis: u64) -> u64 {
     }
     hash
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_provider(base_url: &str) -> ProviderConfig {
+        ProviderConfig::new(
+            ProviderAdapterKind::OpenAiCompatible,
+            "Sample Provider",
+            base_url,
+        )
+    }
+
+    #[test]
+    fn ensure_stable_ids_keeps_stable_provider_id_across_base_url_edits() {
+        let mut provider = sample_provider("https://old.example.com/v1");
+        let local_id = provider.local_id.clone();
+        let old_base_url = provider.base_url.clone();
+
+        provider.base_url = "https://new.example.com/v1".to_string();
+        provider.ensure_stable_ids(&local_id);
+
+        assert_eq!(provider.local_id, local_id);
+        assert!(provider.matches_reference(&provider.local_id));
+        assert!(provider.matches_reference(&old_base_url));
+        assert!(provider.matches_reference("https://new.example.com/v1"));
+    }
+
+    #[test]
+    fn ensure_stable_ids_remaps_default_preset_reference_from_legacy_name() {
+        let mut provider = sample_provider("https://preset-name.example.com/v1");
+        let provider_local_id = provider.local_id.clone();
+
+        let mut balanced = ProviderPreset::new("balanced");
+        balanced.local_id.clear();
+        let mut fast = ProviderPreset::new("fast");
+        fast.local_id.clear();
+
+        provider.presets = vec![balanced, fast];
+        provider.default_preset_local_id = Some("balanced".to_string());
+
+        provider.ensure_stable_ids(&provider_local_id);
+
+        assert_eq!(
+            provider.default_preset_local_id,
+            Some(provider.presets[0].local_id.clone())
+        );
+        assert!(
+            provider.presets[0]
+                .local_id
+                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
+        );
+    }
+
+    #[test]
+    fn ensure_stable_ids_remaps_default_preset_reference_from_nonstable_preset_id() {
+        let mut provider = sample_provider("https://preset-id.example.com/v1");
+        let provider_local_id = provider.local_id.clone();
+
+        let mut balanced = ProviderPreset::new("balanced");
+        balanced.local_id = "balanced-v1".to_string();
+        let mut fast = ProviderPreset::new("fast");
+        fast.local_id = "fast-v1".to_string();
+
+        provider.presets = vec![balanced, fast];
+        provider.default_preset_local_id = Some("balanced-v1".to_string());
+
+        provider.ensure_stable_ids(&provider_local_id);
+
+        assert_eq!(
+            provider.default_preset_local_id,
+            Some(provider.presets[0].local_id.clone())
+        );
+        assert_ne!(provider.presets[0].local_id, "balanced-v1");
+        assert!(
+            provider.presets[0]
+                .local_id
+                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
+        );
+    }
+}
