@@ -1,0 +1,321 @@
+package com.vcp.mobile.data.network
+
+import java.io.IOException
+import kotlinx.coroutines.channels.awaitClose
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.callbackFlow
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
+import org.json.JSONArray
+import org.json.JSONObject
+
+/**
+ * Hub API 客户端（OkHttp + SSE）。
+ *
+ * 当前首发策略：
+ * - `relay.error` 视为终止性协议错误：上报并结束流，不做自动重试。
+ * - 网络 / HTTP 失败视为终止性传输错误：上报并结束流，不做自动重试。
+ * - 普通事件里的坏 role / 坏 JSON 仅降级为 `role = null`，不打断流。
+ * - snapshot hydrate 为单次拉取；坏 payload 直接抛出显式异常，由上层决定手动重开/恢复。
+ */
+class OkHttpSseHubApiClient(
+    private val okHttpClient: OkHttpClient,
+    private val baseUrl: String,
+    private val bearerTokenProvider: () -> String = { "" }
+) : HubApiClient {
+
+    companion object {
+        const val HUB_CHAT_PATH = "/api/chat"
+        const val HUB_CONVERSATIONS_PATH = "/api/chat/conversations"
+        const val HUB_CATALOG_PATH = "/api/chat/catalog"
+        const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
+        const val CONTENT_TYPE_JSON = "application/json"
+        const val ACCEPT_SSE = "text/event-stream"
+
+        private const val EVENT_RELAY_DONE = "relay.done"
+        private const val EVENT_RELAY_ERROR = "relay.error"
+    }
+
+    override suspend fun sendMessage(request: HubSendMessageRequest): HubSendMessageResponse {
+        val httpRequest = Request.Builder()
+            .url("$baseUrl$HUB_CHAT_PATH")
+            .post(request.toUpstreamJsonBody().toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            .apply {
+                addHeader("Accept", CONTENT_TYPE_JSON)
+                addHeader("Content-Type", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string().orEmpty()
+                throw IllegalStateException("Hub request failed: ${response.code} ${response.message} $errorBody")
+            }
+
+            val bodyText = response.body?.string().orEmpty()
+            return HubSendMessageResponse(
+                requestId = response.header("x-request-id").orEmpty(),
+                assistantMessage = bodyText,
+                rawBody = bodyText
+            )
+        }
+    }
+
+    override fun streamEvents(request: HubSendMessageRequest): Flow<HubStreamEvent> = callbackFlow {
+        val eventRequest = Request.Builder()
+            .url("$baseUrl$HUB_CHAT_PATH")
+            .post(request.toUpstreamJsonBody().toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            .apply {
+                addHeader("Accept", ACCEPT_SSE)
+                addHeader("Content-Type", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        val listener = object : EventSourceListener() {
+            var terminalEventDispatched = false
+
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                trySend(HubStreamEvent.Opened)
+            }
+
+            override fun onEvent(
+                eventSource: EventSource,
+                id: String?,
+                type: String?,
+                data: String
+            ) {
+                when (val event = dispatchSseEvent(type, data)) {
+                    HubStreamEvent.Completed -> {
+                        emitTerminal(event)
+                        eventSource.cancel()
+                        close()
+                    }
+
+                    is HubStreamEvent.Error -> {
+                        emitTerminal(event)
+                        eventSource.cancel()
+                        close()
+                    }
+
+                    else -> trySend(event)
+                }
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                emitTerminal(HubStreamEvent.Completed)
+                close()
+            }
+
+            override fun onFailure(
+                eventSource: EventSource,
+                t: Throwable?,
+                response: Response?
+            ) {
+                val throwable = classifyStreamFailure(t = t, response = response)
+                emitTerminal(HubStreamEvent.Error(throwable))
+                close()
+            }
+
+            private fun emitTerminal(event: HubStreamEvent) {
+                if (terminalEventDispatched) return
+                terminalEventDispatched = true
+                trySend(event)
+            }
+        }
+
+        val eventSource = EventSources.createFactory(okHttpClient)
+            .newEventSource(eventRequest, listener)
+
+        awaitClose {
+            eventSource.cancel()
+        }
+    }
+
+    override suspend fun listConversations(): List<HubConversationSummary> {
+        return runCatching { requestConversationList(HUB_CATALOG_PATH) }
+            .recoverCatching { requestConversationList(HUB_CONVERSATIONS_PATH) }
+            .getOrThrow()
+    }
+
+    private fun requestConversationList(path: String): List<HubConversationSummary> {
+        val httpRequest = Request.Builder()
+            .url("$baseUrl$path")
+            .get()
+            .apply {
+                addHeader("Accept", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string().orEmpty()
+                throw IllegalStateException("Hub list failed [$path]: ${response.code} ${response.message} $errorBody")
+            }
+
+            val bodyText = response.body?.string().orEmpty()
+            val array = JSONArray(bodyText)
+            return buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    add(
+                        HubConversationSummary(
+                            conversationId = item.optString("conversation_id"),
+                            title = item.optString("title"),
+                            updatedAt = item.optString("updated_at"),
+                            generationState = item.optString("generation_state"),
+                            currentCursor = item.optString("current_cursor").takeIf { it.isNotBlank() },
+                            summary = item.optString("summary").takeIf { it.isNotBlank() },
+                            pinned = item.optBoolean("pinned", false),
+                            isRecoverable = item.optBoolean("is_recoverable", true),
+                            nodeCount = item.optInt("node_count", 0),
+                        )
+                    )
+                }
+            }
+        }
+    }
+
+    override suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope? {
+        val httpRequest = Request.Builder()
+            .url("$baseUrl$HUB_CHAT_STREAM_PATH/$conversationId")
+            .get()
+            .apply {
+                addHeader("Accept", ACCEPT_SSE)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string().orEmpty()
+                throw IllegalStateException("Hub hydrate failed: ${response.code} ${response.message} $errorBody")
+            }
+
+            val raw = response.body?.string().orEmpty()
+            return parseSnapshotEnvelope(raw)
+        }
+    }
+
+    internal fun parseSnapshotEnvelope(raw: String): RustChatEventEnvelope? {
+        val payload = raw.lineSequence()
+            .filter { it.startsWith("data: ") }
+            .map { it.removePrefix("data: ").trim() }
+            .firstOrNull()
+            ?: return null
+
+        return RustChatEventParser.parseEnvelope(payload)
+            ?: throw HubSnapshotParseException(
+                "Hub snapshot payload malformed; manual reopen required"
+            )
+    }
+
+    internal fun dispatchSseEvent(eventName: String?, data: String): HubStreamEvent {
+        val normalizedEvent = eventName?.trim().orEmpty().ifEmpty { "message" }
+
+        return when (normalizedEvent) {
+            EVENT_RELAY_DONE -> HubStreamEvent.Completed
+            EVENT_RELAY_ERROR -> HubStreamEvent.Error(
+                HubRelayErrorException(data.ifBlank { "Hub relay.error" })
+            )
+
+            else -> HubStreamEvent.Message(
+                event = normalizedEvent,
+                data = data,
+                role = resolveRole(data)
+            )
+        }
+    }
+
+    internal fun classifyStreamFailure(t: Throwable?, response: Response?): Throwable {
+        if (t is HubRelayErrorException || t is HubSnapshotParseException) {
+            return t
+        }
+
+        val code = response?.code
+        val message = response?.message.orEmpty().trim()
+
+        return when {
+            code != null -> HubStreamFailureException(
+                message = buildString {
+                    append("Hub SSE stream failed")
+                    append(" (HTTP ").append(code)
+                    if (message.isNotBlank()) {
+                        append(' ').append(message)
+                    }
+                    append(") — no auto retry; resend or reopen the conversation manually")
+                },
+                cause = t
+            )
+
+            t is IOException -> HubStreamFailureException(
+                message = "Hub SSE network failure — no auto retry; resend or reopen the conversation manually",
+                cause = t
+            )
+
+            t != null -> HubStreamFailureException(
+                message = "Hub SSE stream terminated unexpectedly — no auto retry; resend or reopen the conversation manually",
+                cause = t
+            )
+
+            else -> HubStreamFailureException(
+                message = "Hub SSE stream failed — no auto retry; resend or reopen the conversation manually"
+            )
+        }
+    }
+
+    private fun resolveRole(data: String): String? {
+        return runCatching {
+            val json = JSONObject(data)
+            json.optString("role").takeIf { it.isNotBlank() }
+        }.getOrNull()?.toMessageSender()?.toRole()
+    }
+
+    private fun HubSendMessageRequest.toUpstreamJsonBody(): String {
+        val messagesJson = JSONArray().apply {
+            messages.forEach { message ->
+                put(
+                    JSONObject()
+                        .put("role", message.role)
+                        .put("content", message.content)
+                )
+            }
+        }
+
+        return JSONObject()
+            .put("model", model)
+            .put("stream", stream)
+            .put("messages", messagesJson)
+            .apply {
+                conversationId?.takeIf { it.isNotBlank() }?.let { put("conversation_id", it) }
+            }
+            .toString()
+    }
+}
+
+internal class HubRelayErrorException(message: String) : IllegalStateException(
+    message.ifBlank { "Hub relay.error" }
+)
+
+internal class HubStreamFailureException(
+    message: String,
+    cause: Throwable? = null
+) : IllegalStateException(message, cause)
+
+internal class HubSnapshotParseException(message: String) : IllegalStateException(message)

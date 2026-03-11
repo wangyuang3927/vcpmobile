@@ -1,34 +1,28 @@
-# Logs
-logs
-*.log
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-lerna-debug.log*
-
-node_modules
-dist
-dist-ssr
-*.local
-
-# Editor directories and files
+# General
+.DS_Store
+.idea/
 .vscode/*
 !.vscode/extensions.json
-.idea
-.DS_Store
-*.suo
-*.ntvs*
-*.njsproj
-*.sln
-*.sw?
+*.log
 
-# Android build artifacts
-android/app/build/
-android/build/
-android/.gradle/
-android/app/src/main/assets/public/
-android/app/src/main/assets/capacitor.config.json
-android/local.properties
-*.apk
-*.aab
+# Python
+__pycache__/
+*.pyc
+
+# Rust
+rust-engine/target/
+
+# Android Compose
+android-compose/.gradle/
+android-compose/build/
+android-compose/app/build/
+android-compose/local.properties
+android-compose/keystore.properties
+android-compose/*.jks
+android-compose/*.keystore
+
+# Runtime / local agent state
+.codex/
+.harness/
+.runtime/
+RELEASE_READY/

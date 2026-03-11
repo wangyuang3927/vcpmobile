@@ -1,0 +1,2218 @@
+{
+  "conversations": {
+    "17a3a8d9-da67-4d5b-bd92-f5deb4f87bf5": {
+      "conversation": {
+        "id": "17a3a8d9-da67-4d5b-bd92-f5deb4f87bf5",
+        "topic_id": "82d75692-4114-4dbd-abbf-26574350a6b3",
+        "agent_id": "495fde1f-0d49-4da3-8641-e49dc480c281",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "d978131d-8585-4369-b51f-8a55e650ca11",
+        "created_at": "2026-03-11T06:16:40.793885690Z",
+        "updated_at": "2026-03-11T06:16:40.793885690Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "d978131d-8585-4369-b51f-8a55e650ca11",
+            "conversation_id": "17a3a8d9-da67-4d5b-bd92-f5deb4f87bf5",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:16:40.793885690Z",
+            "updated_at": "2026-03-11T06:16:40.793885690Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "8a98db7a-81e2-4421-8b27-b3b6fbfda7bc",
+                "node_id": "d978131d-8585-4369-b51f-8a55e650ca11",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:16:40.793885690Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "958b5be0-b2ea-4278-a743-9e9f4ee343a5",
+                  "variant_id": "8a98db7a-81e2-4421-8b27-b3b6fbfda7bc",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "20874211-c61c-483e-84b4-4b8213315792": {
+      "conversation": {
+        "id": "20874211-c61c-483e-84b4-4b8213315792",
+        "topic_id": "c2db881d-39e4-4229-8b81-13838987306b",
+        "agent_id": "c453b61c-5d31-4f05-8c11-5c8e6d378df1",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "f36c40b1-b8bc-48ae-ba80-06c36f091b9b",
+        "created_at": "2026-03-11T04:02:26.746944766Z",
+        "updated_at": "2026-03-11T04:02:26.746944766Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "f36c40b1-b8bc-48ae-ba80-06c36f091b9b",
+            "conversation_id": "20874211-c61c-483e-84b4-4b8213315792",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T04:02:26.746944766Z",
+            "updated_at": "2026-03-11T04:02:26.746944766Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "2996b974-8ab4-4707-8642-7cf975a75bd5",
+                "node_id": "f36c40b1-b8bc-48ae-ba80-06c36f091b9b",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T04:02:26.746944766Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "3b45ca75-a7ad-4835-802e-fb9602a33afd",
+                  "variant_id": "2996b974-8ab4-4707-8642-7cf975a75bd5",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "35828719-28e1-43ab-a650-42eb0b0dd45b": {
+      "conversation": {
+        "id": "35828719-28e1-43ab-a650-42eb0b0dd45b",
+        "topic_id": "ecc2a087-bcf6-4b64-89e1-5ee36adb6f27",
+        "agent_id": "179e1179-28ce-4ddb-8075-dbfae95d9de5",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "937d3cdf-b88f-4650-9993-adcffa742c39",
+        "created_at": "2026-03-11T06:17:29.805556148Z",
+        "updated_at": "2026-03-11T06:17:29.805556148Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "937d3cdf-b88f-4650-9993-adcffa742c39",
+            "conversation_id": "35828719-28e1-43ab-a650-42eb0b0dd45b",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:17:29.805556148Z",
+            "updated_at": "2026-03-11T06:17:29.805556148Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "f88b8987-ecc4-4cc9-9990-ec0b8c6fd4bf",
+                "node_id": "937d3cdf-b88f-4650-9993-adcffa742c39",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:17:29.805556148Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "395f3978-82f5-4328-ae1a-bf8d2233033f",
+                  "variant_id": "f88b8987-ecc4-4cc9-9990-ec0b8c6fd4bf",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "35f8cd75-3242-497e-ba1e-6b74658f1f58": {
+      "conversation": {
+        "id": "35f8cd75-3242-497e-ba1e-6b74658f1f58",
+        "topic_id": "597e6364-e843-49a1-ba54-974489d7302f",
+        "agent_id": "538e930a-f5f8-4b5b-a156-dfa01b28aaa4",
+        "title": "first msg",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "ddec259d-00d4-4c3a-8448-79f98361c454",
+        "created_at": "2026-03-11T03:55:04.876226065Z",
+        "updated_at": "2026-03-11T03:55:05.897167776Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "8932bc6b-21c4-44f7-8a4f-833278f63f85",
+            "conversation_id": "35f8cd75-3242-497e-ba1e-6b74658f1f58",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:55:04.876226065Z",
+            "updated_at": "2026-03-11T03:55:04.876226065Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "9d61358e-47bf-4028-a1d1-7a38b6f710de",
+                "node_id": "8932bc6b-21c4-44f7-8a4f-833278f63f85",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:55:04.876226065Z",
+                "finished_at": "2026-03-11T03:55:04.876226065Z"
+              },
+              "parts": [
+                {
+                  "id": "c933b9d1-85a3-435a-98e9-611cbc914dc4",
+                  "variant_id": "9d61358e-47bf-4028-a1d1-7a38b6f710de",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "first msg"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "cf5eef67-26a1-48b5-9eab-1ed283431e66",
+            "conversation_id": "35f8cd75-3242-497e-ba1e-6b74658f1f58",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:55:04.876226065Z",
+            "updated_at": "2026-03-11T03:55:04.876226065Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "dc4facac-a35f-4e82-a5c7-7e674ea0e46d",
+                "node_id": "cf5eef67-26a1-48b5-9eab-1ed283431e66",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:55:04.876226065Z",
+                "finished_at": "2026-03-11T03:55:04.876226065Z"
+              },
+              "parts": [
+                {
+                  "id": "9dceeec8-3629-4f3e-80be-165057c5cf67",
+                  "variant_id": "dc4facac-a35f-4e82-a5c7-7e674ea0e46d",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：first msg"
+                  }
+                },
+                {
+                  "id": "d3cb911f-284e-4298-8235-a0c5faa7a778",
+                  "variant_id": "dc4facac-a35f-4e82-a5c7-7e674ea0e46d",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：first msg"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "af90ac52-ae45-4f98-94a3-6937f87e318f",
+            "conversation_id": "35f8cd75-3242-497e-ba1e-6b74658f1f58",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:55:05.897167776Z",
+            "updated_at": "2026-03-11T03:55:05.897167776Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "6e97df56-31f8-4dc3-870f-c6b3fce7b3e5",
+                "node_id": "af90ac52-ae45-4f98-94a3-6937f87e318f",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:55:05.897167776Z",
+                "finished_at": "2026-03-11T03:55:05.897167776Z"
+              },
+              "parts": [
+                {
+                  "id": "bd049f0d-9005-4c20-a3d8-d9cca7b987f3",
+                  "variant_id": "6e97df56-31f8-4dc3-870f-c6b3fce7b3e5",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "second msg"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "ddec259d-00d4-4c3a-8448-79f98361c454",
+            "conversation_id": "35f8cd75-3242-497e-ba1e-6b74658f1f58",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:55:05.897167776Z",
+            "updated_at": "2026-03-11T03:55:05.897167776Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "84a13577-3ee0-4f9a-bc18-4f0e16562add",
+                "node_id": "ddec259d-00d4-4c3a-8448-79f98361c454",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:55:05.897167776Z",
+                "finished_at": "2026-03-11T03:55:05.897167776Z"
+              },
+              "parts": [
+                {
+                  "id": "45e0e2f2-3c6e-4bd3-85f3-d0c59deddefa",
+                  "variant_id": "84a13577-3ee0-4f9a-bc18-4f0e16562add",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：second msg"
+                  }
+                },
+                {
+                  "id": "e056b81e-a0db-4a6b-8a65-6fba09c01afb",
+                  "variant_id": "84a13577-3ee0-4f9a-bc18-4f0e16562add",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：second msg"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "388e4448-e8a1-46d3-8dde-8746af41ab85": {
+      "conversation": {
+        "id": "388e4448-e8a1-46d3-8dde-8746af41ab85",
+        "topic_id": "3184f529-7631-462a-98a2-60bd4dfaf3a3",
+        "agent_id": "68c316f9-2dee-42cd-be63-84fcb45616e9",
+        "title": "node upsert smoke",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "9a47e8d7-db7c-46df-be25-e569c877da8f",
+        "created_at": "2026-03-11T07:25:27.673086430Z",
+        "updated_at": "2026-03-11T07:25:27.673086430Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "140ce09c-c4aa-4940-b3ea-9f33fe4da21b",
+            "conversation_id": "388e4448-e8a1-46d3-8dde-8746af41ab85",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T07:25:27.673086430Z",
+            "updated_at": "2026-03-11T07:25:27.673086430Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "7ed97021-7050-4ba3-ae45-e4a46e9e50e6",
+                "node_id": "140ce09c-c4aa-4940-b3ea-9f33fe4da21b",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T07:25:27.673086430Z",
+                "finished_at": "2026-03-11T07:25:27.673086430Z"
+              },
+              "parts": [
+                {
+                  "id": "f55e6e10-c8c1-45d0-bbdc-c52068c42ebc",
+                  "variant_id": "7ed97021-7050-4ba3-ae45-e4a46e9e50e6",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "node upsert smoke"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "9a47e8d7-db7c-46df-be25-e569c877da8f",
+            "conversation_id": "388e4448-e8a1-46d3-8dde-8746af41ab85",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T07:25:27.673086430Z",
+            "updated_at": "2026-03-11T07:25:27.673086430Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "54a0f6d8-7c91-4ed0-bee4-b69b141ee6fc",
+                "node_id": "9a47e8d7-db7c-46df-be25-e569c877da8f",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T07:25:27.673086430Z",
+                "finished_at": "2026-03-11T07:25:27.673086430Z"
+              },
+              "parts": [
+                {
+                  "id": "d0bd7774-9d48-4567-8761-ee212e7445c0",
+                  "variant_id": "54a0f6d8-7c91-4ed0-bee4-b69b141ee6fc",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：node upsert smoke"
+                  }
+                },
+                {
+                  "id": "ee576107-45e8-485b-b7f2-637b65b2d69c",
+                  "variant_id": "54a0f6d8-7c91-4ed0-bee4-b69b141ee6fc",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "markdown_block",
+                    "markdown": "Rust Engine 已接收你的消息：**node upsert smoke**\n\n- 来源：Rust session engine\n- 形态：markdown_block"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "3e115e8d-bd9c-46aa-9fbe-bfbdcfdbe969": {
+      "conversation": {
+        "id": "3e115e8d-bd9c-46aa-9fbe-bfbdcfdbe969",
+        "topic_id": "597e6364-e843-49a1-ba54-974489d7302f",
+        "agent_id": "538e930a-f5f8-4b5b-a156-dfa01b28aaa4",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "b1812d53-7ea8-44f9-8272-5a6d33155364",
+        "created_at": "2026-03-11T03:54:35.838863142Z",
+        "updated_at": "2026-03-11T03:54:35.838863142Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "b1812d53-7ea8-44f9-8272-5a6d33155364",
+            "conversation_id": "3e115e8d-bd9c-46aa-9fbe-bfbdcfdbe969",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:54:35.838863142Z",
+            "updated_at": "2026-03-11T03:54:35.838863142Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "dd182a32-bc6b-416f-89a7-a6d5405a87a1",
+                "node_id": "b1812d53-7ea8-44f9-8272-5a6d33155364",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:54:35.838863142Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "25fa3c4f-6636-461e-8534-fa9f893765c0",
+                  "variant_id": "dd182a32-bc6b-416f-89a7-a6d5405a87a1",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "47b54d56-da67-4168-b76a-ccc24be28b99": {
+      "conversation": {
+        "id": "47b54d56-da67-4168-b76a-ccc24be28b99",
+        "topic_id": "10e3ae19-3d0a-49c8-992b-f7c72dc7e80f",
+        "agent_id": "0fdd336c-2b09-4c37-8f78-eb32703aee81",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "774f80bd-a2c4-46fe-b27d-ac1ba9f3534e",
+        "created_at": "2026-03-11T06:34:34.739469293Z",
+        "updated_at": "2026-03-11T06:34:34.739469293Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "774f80bd-a2c4-46fe-b27d-ac1ba9f3534e",
+            "conversation_id": "47b54d56-da67-4168-b76a-ccc24be28b99",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:34.739469293Z",
+            "updated_at": "2026-03-11T06:34:34.739469293Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "11ecfd07-9e3d-48e8-9df9-012995a45fdd",
+                "node_id": "774f80bd-a2c4-46fe-b27d-ac1ba9f3534e",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:34.739469293Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "147082c3-6cd4-49b1-832c-a49e31eeb67f",
+                  "variant_id": "11ecfd07-9e3d-48e8-9df9-012995a45fdd",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "4a475ca3-6092-4f93-9b48-caca0dd9164f": {
+      "conversation": {
+        "id": "4a475ca3-6092-4f93-9b48-caca0dd9164f",
+        "topic_id": "3185cc28-5b5a-4640-b308-e6b3dd623a96",
+        "agent_id": "4be51ea9-175a-46f1-b489-bd697bebcf75",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "386244a8-87e7-4c01-b532-74b44abebdc7",
+        "created_at": "2026-03-11T06:37:26.815687039Z",
+        "updated_at": "2026-03-11T06:37:26.815687039Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "386244a8-87e7-4c01-b532-74b44abebdc7",
+            "conversation_id": "4a475ca3-6092-4f93-9b48-caca0dd9164f",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:37:26.815687039Z",
+            "updated_at": "2026-03-11T06:37:26.815687039Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "bcf0edc2-c99a-42b0-91c4-c4efdd5ce5eb",
+                "node_id": "386244a8-87e7-4c01-b532-74b44abebdc7",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:37:26.815687039Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "4b5a02eb-ee2b-41ee-acfb-27cb3c6a1a82",
+                  "variant_id": "bcf0edc2-c99a-42b0-91c4-c4efdd5ce5eb",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "4a8f8e83-6e18-4443-a859-e77d7cbc4443": {
+      "conversation": {
+        "id": "4a8f8e83-6e18-4443-a859-e77d7cbc4443",
+        "topic_id": "d6672249-13d8-471d-89b5-775b4bf2aa4e",
+        "agent_id": "86ea9182-2968-4998-9f77-b8b1cc2b9833",
+        "title": "你好 rust",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "ee39c9dc-c714-4687-ad18-0aef458a4020",
+        "created_at": "2026-03-11T04:02:53.274449364Z",
+        "updated_at": "2026-03-11T04:02:53.274449364Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "c71584af-34d5-4eac-a9e5-fcbacf499be5",
+            "conversation_id": "4a8f8e83-6e18-4443-a859-e77d7cbc4443",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T04:02:53.274449364Z",
+            "updated_at": "2026-03-11T04:02:53.274449364Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "fb74d2cd-3d17-4c20-b117-f27311f577b5",
+                "node_id": "c71584af-34d5-4eac-a9e5-fcbacf499be5",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T04:02:53.274449364Z",
+                "finished_at": "2026-03-11T04:02:53.274449364Z"
+              },
+              "parts": [
+                {
+                  "id": "7a547584-8578-4b35-a7a2-e4af6e61848a",
+                  "variant_id": "fb74d2cd-3d17-4c20-b117-f27311f577b5",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "你好 rust"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "ee39c9dc-c714-4687-ad18-0aef458a4020",
+            "conversation_id": "4a8f8e83-6e18-4443-a859-e77d7cbc4443",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T04:02:53.274449364Z",
+            "updated_at": "2026-03-11T04:02:53.274449364Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "23eea20b-fae9-47b7-a41f-c8a66af3c0d2",
+                "node_id": "ee39c9dc-c714-4687-ad18-0aef458a4020",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T04:02:53.274449364Z",
+                "finished_at": "2026-03-11T04:02:53.274449364Z"
+              },
+              "parts": [
+                {
+                  "id": "17db23fe-922b-4a46-bc3f-73fac0c7e3cc",
+                  "variant_id": "23eea20b-fae9-47b7-a41f-c8a66af3c0d2",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：你好 rust"
+                  }
+                },
+                {
+                  "id": "98d1250f-441b-49cf-bd4b-4f4dfb9f7842",
+                  "variant_id": "23eea20b-fae9-47b7-a41f-c8a66af3c0d2",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：你好 rust"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "546921ae-2860-42a7-b18a-e54d2e809c0f": {
+      "conversation": {
+        "id": "546921ae-2860-42a7-b18a-e54d2e809c0f",
+        "topic_id": "4cb77ab3-1654-43c2-bff0-2102f50a46fd",
+        "agent_id": "5fe47530-b834-4b54-ab57-d9054f5b561d",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "3bf12e38-db6b-4152-be28-8a74b9ca17d5",
+        "created_at": "2026-03-11T03:51:13.428588825Z",
+        "updated_at": "2026-03-11T03:51:13.428588825Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "3bf12e38-db6b-4152-be28-8a74b9ca17d5",
+            "conversation_id": "546921ae-2860-42a7-b18a-e54d2e809c0f",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:13.428588825Z",
+            "updated_at": "2026-03-11T03:51:13.428588825Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "f314f437-e6b0-4df3-867d-2a5cb1015188",
+                "node_id": "3bf12e38-db6b-4152-be28-8a74b9ca17d5",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:13.428588825Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "39782da6-29cd-46cc-8562-f9f26641c8cb",
+                  "variant_id": "f314f437-e6b0-4df3-867d-2a5cb1015188",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "563256e3-b049-4592-b2a1-572313743d46": {
+      "conversation": {
+        "id": "563256e3-b049-4592-b2a1-572313743d46",
+        "topic_id": "10e3ae19-3d0a-49c8-992b-f7c72dc7e80f",
+        "agent_id": "0fdd336c-2b09-4c37-8f78-eb32703aee81",
+        "title": "rich content smoke",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "3ccd1333-2404-486b-9794-369d15a3d63a",
+        "created_at": "2026-03-11T06:34:43.193471275Z",
+        "updated_at": "2026-03-11T06:34:43.193471275Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "57c1308f-cec7-439a-8fb7-bee26a214d84",
+            "conversation_id": "563256e3-b049-4592-b2a1-572313743d46",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:43.193471275Z",
+            "updated_at": "2026-03-11T06:34:43.193471275Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "bffd5b4a-89c0-4bed-873e-8d684f1e773a",
+                "node_id": "57c1308f-cec7-439a-8fb7-bee26a214d84",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:43.193471275Z",
+                "finished_at": "2026-03-11T06:34:43.193471275Z"
+              },
+              "parts": [
+                {
+                  "id": "4cbb2241-0cc7-4675-a3a5-58a4b33722c6",
+                  "variant_id": "bffd5b4a-89c0-4bed-873e-8d684f1e773a",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "rich content smoke"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "3ccd1333-2404-486b-9794-369d15a3d63a",
+            "conversation_id": "563256e3-b049-4592-b2a1-572313743d46",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:43.193471275Z",
+            "updated_at": "2026-03-11T06:34:43.193471275Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "133ac386-794f-4fed-8ae1-89034563da60",
+                "node_id": "3ccd1333-2404-486b-9794-369d15a3d63a",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:43.193471275Z",
+                "finished_at": "2026-03-11T06:34:43.193471275Z"
+              },
+              "parts": [
+                {
+                  "id": "5abb414e-8802-4b07-b20d-fff9e8fd736f",
+                  "variant_id": "133ac386-794f-4fed-8ae1-89034563da60",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：rich content smoke"
+                  }
+                },
+                {
+                  "id": "bf0214f4-250d-4e30-a263-086da03cd778",
+                  "variant_id": "133ac386-794f-4fed-8ae1-89034563da60",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "markdown_block",
+                    "markdown": "Rust Engine 已接收你的消息：**rich content smoke**\n\n- 来源：Rust session engine\n- 形态：markdown_block"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "6227d1ac-47dc-4b3c-ad68-d3d50cae10fb": {
+      "conversation": {
+        "id": "6227d1ac-47dc-4b3c-ad68-d3d50cae10fb",
+        "topic_id": "e88baefb-491d-4fe3-b24a-440c1bb19ea1",
+        "agent_id": "012dad53-d98d-47bb-aa8e-1064553c4dec",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "705b85e2-42bf-40d0-9932-6bec1619af42",
+        "created_at": "2026-03-11T03:44:46.966893168Z",
+        "updated_at": "2026-03-11T03:44:46.966893168Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "705b85e2-42bf-40d0-9932-6bec1619af42",
+            "conversation_id": "6227d1ac-47dc-4b3c-ad68-d3d50cae10fb",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:44:46.966893168Z",
+            "updated_at": "2026-03-11T03:44:46.966893168Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "75c7b11c-b338-48fb-889c-62a447c13cd8",
+                "node_id": "705b85e2-42bf-40d0-9932-6bec1619af42",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:44:46.966893168Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "47adddff-ac4b-4a99-b7bb-383b2841b450",
+                  "variant_id": "75c7b11c-b338-48fb-889c-62a447c13cd8",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "6a86043c-19d2-40ac-9e25-6cb6a24a7a7c": {
+      "conversation": {
+        "id": "6a86043c-19d2-40ac-9e25-6cb6a24a7a7c",
+        "topic_id": "b23908f5-0cf1-42c4-83a6-b4a734c7cdd0",
+        "agent_id": "120f148a-4873-4f52-8998-db43c8c3f5df",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "a67b8295-4f84-479a-91fa-7a7a51b92c13",
+        "created_at": "2026-03-11T03:45:46.065077198Z",
+        "updated_at": "2026-03-11T03:45:46.065077198Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "a67b8295-4f84-479a-91fa-7a7a51b92c13",
+            "conversation_id": "6a86043c-19d2-40ac-9e25-6cb6a24a7a7c",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:45:46.065077198Z",
+            "updated_at": "2026-03-11T03:45:46.065077198Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "37f6bab4-9a0d-4ba4-85dd-bc4b49e75f75",
+                "node_id": "a67b8295-4f84-479a-91fa-7a7a51b92c13",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:45:46.065077198Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "760ddc30-16c1-4b15-8fdf-5d3ca1517310",
+                  "variant_id": "37f6bab4-9a0d-4ba4-85dd-bc4b49e75f75",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "7e65fe20-a360-40b2-9dd4-a40950c5326b": {
+      "conversation": {
+        "id": "7e65fe20-a360-40b2-9dd4-a40950c5326b",
+        "topic_id": "440063dd-f246-42a8-b6e9-7f89bdd1c66b",
+        "agent_id": "6dd8b846-419c-4091-bd10-fbe2921c3ee4",
+        "title": "不要重复文本",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "da0f2ad1-2364-4952-bc9b-f26583cb6a60",
+        "created_at": "2026-03-11T03:46:50.671401945Z",
+        "updated_at": "2026-03-11T03:46:50.671401945Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "7a8c1716-4481-4ac0-a5f3-96d74ad4c533",
+            "conversation_id": "7e65fe20-a360-40b2-9dd4-a40950c5326b",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:46:50.671401945Z",
+            "updated_at": "2026-03-11T03:46:50.671401945Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "6868681a-c1d7-4ee3-aa79-6fbfa81ab142",
+                "node_id": "7a8c1716-4481-4ac0-a5f3-96d74ad4c533",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:46:50.671401945Z",
+                "finished_at": "2026-03-11T03:46:50.671401945Z"
+              },
+              "parts": [
+                {
+                  "id": "9ac95b4e-27d5-4f63-b799-c9cbea66c63e",
+                  "variant_id": "6868681a-c1d7-4ee3-aa79-6fbfa81ab142",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "不要重复文本"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "da0f2ad1-2364-4952-bc9b-f26583cb6a60",
+            "conversation_id": "7e65fe20-a360-40b2-9dd4-a40950c5326b",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:46:50.671401945Z",
+            "updated_at": "2026-03-11T03:46:50.671401945Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "3bf1c94c-6cc3-4ee5-ae66-e3db17a6cbb0",
+                "node_id": "da0f2ad1-2364-4952-bc9b-f26583cb6a60",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:46:50.671401945Z",
+                "finished_at": "2026-03-11T03:46:50.671401945Z"
+              },
+              "parts": [
+                {
+                  "id": "188e4d61-4f29-438c-b6fa-c7864ed0bbe4",
+                  "variant_id": "3bf1c94c-6cc3-4ee5-ae66-e3db17a6cbb0",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：不要重复文本"
+                  }
+                },
+                {
+                  "id": "33b641ef-e2d0-4e0b-8b63-b8b376415c6c",
+                  "variant_id": "3bf1c94c-6cc3-4ee5-ae66-e3db17a6cbb0",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：不要重复文本"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "8f5e563f-8632-467c-8c05-f8e422f8ae59": {
+      "conversation": {
+        "id": "8f5e563f-8632-467c-8c05-f8e422f8ae59",
+        "topic_id": "d6672249-13d8-471d-89b5-775b4bf2aa4e",
+        "agent_id": "86ea9182-2968-4998-9f77-b8b1cc2b9833",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "9247ac44-1347-4cf0-a817-f538973c1f5d",
+        "created_at": "2026-03-11T04:02:43.940005981Z",
+        "updated_at": "2026-03-11T04:02:43.940005981Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "9247ac44-1347-4cf0-a817-f538973c1f5d",
+            "conversation_id": "8f5e563f-8632-467c-8c05-f8e422f8ae59",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T04:02:43.940005981Z",
+            "updated_at": "2026-03-11T04:02:43.940005981Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "ec3b75e7-8aad-40fd-9e89-dc74b0d0c3d9",
+                "node_id": "9247ac44-1347-4cf0-a817-f538973c1f5d",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T04:02:43.940005981Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "f1af17f3-ea5f-4d0e-9cfd-dd789d7282dd",
+                  "variant_id": "ec3b75e7-8aad-40fd-9e89-dc74b0d0c3d9",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "9c31f11e-b0ca-4351-8611-127a3096d495": {
+      "conversation": {
+        "id": "9c31f11e-b0ca-4351-8611-127a3096d495",
+        "topic_id": "e88baefb-491d-4fe3-b24a-440c1bb19ea1",
+        "agent_id": "012dad53-d98d-47bb-aa8e-1064553c4dec",
+        "title": "不要重复文本",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "d0f59941-d059-4222-a1ba-f0f0203b359e",
+        "created_at": "2026-03-11T03:45:45.438188304Z",
+        "updated_at": "2026-03-11T03:45:45.438188304Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "79165153-db3d-49ea-b7af-badedf90f6ef",
+            "conversation_id": "9c31f11e-b0ca-4351-8611-127a3096d495",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:45:45.438188304Z",
+            "updated_at": "2026-03-11T03:45:45.438188304Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "156ca42a-abea-4a25-a10e-281753a4fc10",
+                "node_id": "79165153-db3d-49ea-b7af-badedf90f6ef",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:45:45.438188304Z",
+                "finished_at": "2026-03-11T03:45:45.438188304Z"
+              },
+              "parts": [
+                {
+                  "id": "47b48a77-f9a6-4ec9-be42-e28a7f5e9acf",
+                  "variant_id": "156ca42a-abea-4a25-a10e-281753a4fc10",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "不要重复文本"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "d0f59941-d059-4222-a1ba-f0f0203b359e",
+            "conversation_id": "9c31f11e-b0ca-4351-8611-127a3096d495",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:45:45.438188304Z",
+            "updated_at": "2026-03-11T03:45:45.438188304Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "9861221d-b547-4842-877a-7a628b507b8c",
+                "node_id": "d0f59941-d059-4222-a1ba-f0f0203b359e",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:45:45.438188304Z",
+                "finished_at": "2026-03-11T03:45:45.438188304Z"
+              },
+              "parts": [
+                {
+                  "id": "8445a563-2c68-4cb2-88a3-959827c06e80",
+                  "variant_id": "9861221d-b547-4842-877a-7a628b507b8c",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：不要重复文本"
+                  }
+                },
+                {
+                  "id": "37370b1e-215a-44eb-9650-c29c19c7239a",
+                  "variant_id": "9861221d-b547-4842-877a-7a628b507b8c",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：不要重复文本"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "a3cb8fc8-a47a-43bd-99bf-677b086da5d3": {
+      "conversation": {
+        "id": "a3cb8fc8-a47a-43bd-99bf-677b086da5d3",
+        "topic_id": "e88baefb-491d-4fe3-b24a-440c1bb19ea1",
+        "agent_id": "012dad53-d98d-47bb-aa8e-1064553c4dec",
+        "title": "rust 接管得更深一点",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "8f2e90ac-f077-40e4-a721-414f7e893612",
+        "created_at": "2026-03-11T03:45:04.021424376Z",
+        "updated_at": "2026-03-11T03:45:04.021424376Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "942f03dd-a623-44d1-ba38-53937210209c",
+            "conversation_id": "a3cb8fc8-a47a-43bd-99bf-677b086da5d3",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:45:04.021424376Z",
+            "updated_at": "2026-03-11T03:45:04.021424376Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "223fef6e-7679-4b39-aee1-674d03f594e1",
+                "node_id": "942f03dd-a623-44d1-ba38-53937210209c",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:45:04.021424376Z",
+                "finished_at": "2026-03-11T03:45:04.021424376Z"
+              },
+              "parts": [
+                {
+                  "id": "fabb9c89-ac08-4c2a-80c2-79b45a86eee4",
+                  "variant_id": "223fef6e-7679-4b39-aee1-674d03f594e1",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "rust 接管得更深一点"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "8f2e90ac-f077-40e4-a721-414f7e893612",
+            "conversation_id": "a3cb8fc8-a47a-43bd-99bf-677b086da5d3",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:45:04.021424376Z",
+            "updated_at": "2026-03-11T03:45:04.021424376Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "273a9dfe-e1d9-4ec7-9ec1-4942a923a571",
+                "node_id": "8f2e90ac-f077-40e4-a721-414f7e893612",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:45:04.021424376Z",
+                "finished_at": "2026-03-11T03:45:04.021424376Z"
+              },
+              "parts": [
+                {
+                  "id": "9bc22b18-2243-4db8-840f-4e394240ca0f",
+                  "variant_id": "273a9dfe-e1d9-4ec7-9ec1-4942a923a571",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：rust 接管得更深一点"
+                  }
+                },
+                {
+                  "id": "722a6cf4-ae3b-4b8e-b848-b199cbf6036b",
+                  "variant_id": "273a9dfe-e1d9-4ec7-9ec1-4942a923a571",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：rust 接管得更深一点"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "a4f7d8ce-a39b-4202-a2f7-51dc22d98615": {
+      "conversation": {
+        "id": "a4f7d8ce-a39b-4202-a2f7-51dc22d98615",
+        "topic_id": "4cb77ab3-1654-43c2-bff0-2102f50a46fd",
+        "agent_id": "5fe47530-b834-4b54-ab57-d9054f5b561d",
+        "title": "wrong id ping",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "a0151d4a-f08d-4253-8ea6-8b078b2c48b9",
+        "created_at": "2026-03-11T03:51:33.473731864Z",
+        "updated_at": "2026-03-11T03:51:33.473731864Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "ac196ac4-f6c3-4219-81ac-da3999b5bdda",
+            "conversation_id": "a4f7d8ce-a39b-4202-a2f7-51dc22d98615",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:33.473731864Z",
+            "updated_at": "2026-03-11T03:51:33.473731864Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "855984f3-933e-45db-a22a-6aacbd36fc5e",
+                "node_id": "ac196ac4-f6c3-4219-81ac-da3999b5bdda",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:33.473731864Z",
+                "finished_at": "2026-03-11T03:51:33.473731864Z"
+              },
+              "parts": [
+                {
+                  "id": "acf7d9cd-72ce-475c-a021-092b17234080",
+                  "variant_id": "855984f3-933e-45db-a22a-6aacbd36fc5e",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "wrong id ping"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "a0151d4a-f08d-4253-8ea6-8b078b2c48b9",
+            "conversation_id": "a4f7d8ce-a39b-4202-a2f7-51dc22d98615",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:33.473731864Z",
+            "updated_at": "2026-03-11T03:51:33.473731864Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "4fa4658d-54e0-4d98-a3af-1ac56255f382",
+                "node_id": "a0151d4a-f08d-4253-8ea6-8b078b2c48b9",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:33.473731864Z",
+                "finished_at": "2026-03-11T03:51:33.473731864Z"
+              },
+              "parts": [
+                {
+                  "id": "1ad80ee5-1a67-40e1-ad69-81fabd635e33",
+                  "variant_id": "4fa4658d-54e0-4d98-a3af-1ac56255f382",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：wrong id ping"
+                  }
+                },
+                {
+                  "id": "8bb5d1ec-99f2-4215-960d-052e00c22864",
+                  "variant_id": "4fa4658d-54e0-4d98-a3af-1ac56255f382",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：wrong id ping"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "a7a01d3f-1a2e-4e18-b20e-a763578535b4": {
+      "conversation": {
+        "id": "a7a01d3f-1a2e-4e18-b20e-a763578535b4",
+        "topic_id": "3184f529-7631-462a-98a2-60bd4dfaf3a3",
+        "agent_id": "68c316f9-2dee-42cd-be63-84fcb45616e9",
+        "title": "snapshot truth smo…",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "564f7bcb-75f3-4220-b779-8873dd52c59f",
+        "created_at": "2026-03-11T07:27:18.377187601Z",
+        "updated_at": "2026-03-11T07:27:18.377187601Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "4aacc2c1-ffd6-4316-9bb4-da761ad0111c",
+            "conversation_id": "a7a01d3f-1a2e-4e18-b20e-a763578535b4",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T07:27:18.377187601Z",
+            "updated_at": "2026-03-11T07:27:18.377187601Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "7d2461d6-e7ed-4d81-8f62-84e4eb522e78",
+                "node_id": "4aacc2c1-ffd6-4316-9bb4-da761ad0111c",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T07:27:18.377187601Z",
+                "finished_at": "2026-03-11T07:27:18.377187601Z"
+              },
+              "parts": [
+                {
+                  "id": "fd944d7a-bdbc-4e91-b79f-985971d45f87",
+                  "variant_id": "7d2461d6-e7ed-4d81-8f62-84e4eb522e78",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "snapshot truth smoke"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "564f7bcb-75f3-4220-b779-8873dd52c59f",
+            "conversation_id": "a7a01d3f-1a2e-4e18-b20e-a763578535b4",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T07:27:18.377187601Z",
+            "updated_at": "2026-03-11T07:27:18.377187601Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "772b3d93-b8ad-4961-82ec-23f47aeffffb",
+                "node_id": "564f7bcb-75f3-4220-b779-8873dd52c59f",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T07:27:18.377187601Z",
+                "finished_at": "2026-03-11T07:27:18.377187601Z"
+              },
+              "parts": [
+                {
+                  "id": "5d8a32bc-3e60-4895-950e-59ef9a809846",
+                  "variant_id": "772b3d93-b8ad-4961-82ec-23f47aeffffb",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：snapshot truth smo…"
+                  }
+                },
+                {
+                  "id": "9adcdb3e-7c69-4a18-a852-1f34d072609f",
+                  "variant_id": "772b3d93-b8ad-4961-82ec-23f47aeffffb",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "markdown_block",
+                    "markdown": "Rust Engine 已接收你的消息：**snapshot truth smoke**\n\n- 来源：Rust session engine\n- 形态：markdown_block"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "a9b37067-1e1e-4285-aa97-ad63a0fbcd4c": {
+      "conversation": {
+        "id": "a9b37067-1e1e-4285-aa97-ad63a0fbcd4c",
+        "topic_id": "58568ba0-d070-4715-b321-6937c39bb4c0",
+        "agent_id": "eb08ff04-291b-4da3-bd89-81f848f7db35",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "2ed22405-5968-4e5b-8583-f8ed3ba0d306",
+        "created_at": "2026-03-11T06:17:05.321862966Z",
+        "updated_at": "2026-03-11T06:17:05.321862966Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "2ed22405-5968-4e5b-8583-f8ed3ba0d306",
+            "conversation_id": "a9b37067-1e1e-4285-aa97-ad63a0fbcd4c",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:17:05.321862966Z",
+            "updated_at": "2026-03-11T06:17:05.321862966Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "8898c7d5-2548-4c73-a599-5a354f0279d6",
+                "node_id": "2ed22405-5968-4e5b-8583-f8ed3ba0d306",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:17:05.321862966Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "05315b76-3757-446e-92c0-6dfe7f6cce9c",
+                  "variant_id": "8898c7d5-2548-4c73-a599-5a354f0279d6",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "b9c8b3f5-583c-40a9-aae7-846e1fd2c00f": {
+      "conversation": {
+        "id": "b9c8b3f5-583c-40a9-aae7-846e1fd2c00f",
+        "topic_id": "440063dd-f246-42a8-b6e9-7f89bdd1c66b",
+        "agent_id": "6dd8b846-419c-4091-bd10-fbe2921c3ee4",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "5adfe8f0-e6ce-46d4-894a-4e3814c089c4",
+        "created_at": "2026-03-11T03:46:47.823713483Z",
+        "updated_at": "2026-03-11T03:46:47.823713483Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "5adfe8f0-e6ce-46d4-894a-4e3814c089c4",
+            "conversation_id": "b9c8b3f5-583c-40a9-aae7-846e1fd2c00f",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:46:47.823713483Z",
+            "updated_at": "2026-03-11T03:46:47.823713483Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "33a15fdb-54b2-41e4-af84-ff30d4c204f2",
+                "node_id": "5adfe8f0-e6ce-46d4-894a-4e3814c089c4",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:46:47.823713483Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "f8f03be1-995f-4e94-b0f3-c49b9f75fa25",
+                  "variant_id": "33a15fdb-54b2-41e4-af84-ff30d4c204f2",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "d2da7067-1db6-44f4-a2e8-1cd5ae204254": {
+      "conversation": {
+        "id": "d2da7067-1db6-44f4-a2e8-1cd5ae204254",
+        "topic_id": "4cb77ab3-1654-43c2-bff0-2102f50a46fd",
+        "agent_id": "5fe47530-b834-4b54-ab57-d9054f5b561d",
+        "title": "first ping",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "d9a23acf-285f-4651-a78c-a2840bdfc645",
+        "created_at": "2026-03-11T03:51:21.904603197Z",
+        "updated_at": "2026-03-11T03:51:33.416872306Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "a5c98f0f-1487-4783-937b-2d794b479a31",
+            "conversation_id": "d2da7067-1db6-44f4-a2e8-1cd5ae204254",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:21.904603197Z",
+            "updated_at": "2026-03-11T03:51:21.904603197Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "a207537e-c7a7-4f34-b957-e1f8c0abd9e7",
+                "node_id": "a5c98f0f-1487-4783-937b-2d794b479a31",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:21.904603197Z",
+                "finished_at": "2026-03-11T03:51:21.904603197Z"
+              },
+              "parts": [
+                {
+                  "id": "4a2f4f1c-d44e-46ca-b194-08ca2c2b23ce",
+                  "variant_id": "a207537e-c7a7-4f34-b957-e1f8c0abd9e7",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "first ping"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "26154f3a-705f-499a-975c-7b4804462343",
+            "conversation_id": "d2da7067-1db6-44f4-a2e8-1cd5ae204254",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:21.904603197Z",
+            "updated_at": "2026-03-11T03:51:21.904603197Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "361938c7-5f80-4d23-be4a-c1221bcc17db",
+                "node_id": "26154f3a-705f-499a-975c-7b4804462343",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:21.904603197Z",
+                "finished_at": "2026-03-11T03:51:21.904603197Z"
+              },
+              "parts": [
+                {
+                  "id": "600ef550-d148-4e01-bdbe-a995690e29c4",
+                  "variant_id": "361938c7-5f80-4d23-be4a-c1221bcc17db",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：first ping"
+                  }
+                },
+                {
+                  "id": "49c25e65-1c25-4070-8855-a021426d77b4",
+                  "variant_id": "361938c7-5f80-4d23-be4a-c1221bcc17db",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：first ping"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "f56692da-d7d5-4fca-b0a2-153ea866e872",
+            "conversation_id": "d2da7067-1db6-44f4-a2e8-1cd5ae204254",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:33.416872306Z",
+            "updated_at": "2026-03-11T03:51:33.416872306Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "820caf00-0c27-4677-aa80-6e9fe68645be",
+                "node_id": "f56692da-d7d5-4fca-b0a2-153ea866e872",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:33.416872306Z",
+                "finished_at": "2026-03-11T03:51:33.416872306Z"
+              },
+              "parts": [
+                {
+                  "id": "564f0ea9-d4bb-439f-b64a-9af1265a6cf9",
+                  "variant_id": "820caf00-0c27-4677-aa80-6e9fe68645be",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "second ping"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "d9a23acf-285f-4651-a78c-a2840bdfc645",
+            "conversation_id": "d2da7067-1db6-44f4-a2e8-1cd5ae204254",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T03:51:33.416872306Z",
+            "updated_at": "2026-03-11T03:51:33.416872306Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "6104d728-9901-4645-ae4d-37ea8d81b55d",
+                "node_id": "d9a23acf-285f-4651-a78c-a2840bdfc645",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T03:51:33.416872306Z",
+                "finished_at": "2026-03-11T03:51:33.416872306Z"
+              },
+              "parts": [
+                {
+                  "id": "a9c33bbb-27f5-49f1-b9c9-fcedf9676c00",
+                  "variant_id": "6104d728-9901-4645-ae4d-37ea8d81b55d",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：second ping"
+                  }
+                },
+                {
+                  "id": "294c2a06-f779-4754-9a1e-8cbcfdbccee3",
+                  "variant_id": "6104d728-9901-4645-ae4d-37ea8d81b55d",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：second ping"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "dafd97c4-4aac-497c-985a-42f38235b11f": {
+      "conversation": {
+        "id": "dafd97c4-4aac-497c-985a-42f38235b11f",
+        "topic_id": "10e3ae19-3d0a-49c8-992b-f7c72dc7e80f",
+        "agent_id": "0fdd336c-2b09-4c37-8f78-eb32703aee81",
+        "title": "first from verify …",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "ab4ff706-5065-4b0b-8df4-c1bbab80665d",
+        "created_at": "2026-03-11T06:34:43.205774174Z",
+        "updated_at": "2026-03-11T06:34:44.250778221Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "4575ae56-c7d1-4bca-ae5f-a116479e4ca0",
+            "conversation_id": "dafd97c4-4aac-497c-985a-42f38235b11f",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:43.205774174Z",
+            "updated_at": "2026-03-11T06:34:43.205774174Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "9e280b03-9408-4d42-8791-30fe5b6239e5",
+                "node_id": "4575ae56-c7d1-4bca-ae5f-a116479e4ca0",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:43.205774174Z",
+                "finished_at": "2026-03-11T06:34:43.205774174Z"
+              },
+              "parts": [
+                {
+                  "id": "18cf240b-7d13-4577-a425-0e411c0ad482",
+                  "variant_id": "9e280b03-9408-4d42-8791-30fe5b6239e5",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "first from verify script"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "6d972ecf-9345-46a2-8d4e-2c4d21d39bde",
+            "conversation_id": "dafd97c4-4aac-497c-985a-42f38235b11f",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:43.205774174Z",
+            "updated_at": "2026-03-11T06:34:43.205774174Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "1534ff59-8b2a-4c8c-b33d-80c7e8897c6b",
+                "node_id": "6d972ecf-9345-46a2-8d4e-2c4d21d39bde",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:43.205774174Z",
+                "finished_at": "2026-03-11T06:34:43.205774174Z"
+              },
+              "parts": [
+                {
+                  "id": "b88303fb-43eb-4ecc-be30-7abece36adac",
+                  "variant_id": "1534ff59-8b2a-4c8c-b33d-80c7e8897c6b",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：first from verify …"
+                  }
+                },
+                {
+                  "id": "fa320e8a-a86d-4a76-a811-45696d29b599",
+                  "variant_id": "1534ff59-8b2a-4c8c-b33d-80c7e8897c6b",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "markdown_block",
+                    "markdown": "Rust Engine 已接收你的消息：**first from verify script**\n\n- 来源：Rust session engine\n- 形态：markdown_block"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "df77cc1f-e2d4-4558-b361-c38335f2635a",
+            "conversation_id": "dafd97c4-4aac-497c-985a-42f38235b11f",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:44.250778221Z",
+            "updated_at": "2026-03-11T06:34:44.250778221Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "7c973be4-4138-4bd8-8d1e-e9dd72904bab",
+                "node_id": "df77cc1f-e2d4-4558-b361-c38335f2635a",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:44.250778221Z",
+                "finished_at": "2026-03-11T06:34:44.250778221Z"
+              },
+              "parts": [
+                {
+                  "id": "f46bff0f-973c-4606-ad7a-e5256f3200e8",
+                  "variant_id": "7c973be4-4138-4bd8-8d1e-e9dd72904bab",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "second from verify script"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "ab4ff706-5065-4b0b-8df4-c1bbab80665d",
+            "conversation_id": "dafd97c4-4aac-497c-985a-42f38235b11f",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:34:44.250778221Z",
+            "updated_at": "2026-03-11T06:34:44.250778221Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "cfa43324-8e6a-4e25-a5fe-3c4345bd9770",
+                "node_id": "ab4ff706-5065-4b0b-8df4-c1bbab80665d",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:34:44.250778221Z",
+                "finished_at": "2026-03-11T06:34:44.250778221Z"
+              },
+              "parts": [
+                {
+                  "id": "2f943cc4-e695-4d23-8a24-5cb2c5b6c1b6",
+                  "variant_id": "cfa43324-8e6a-4e25-a5fe-3c4345bd9770",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：second from verify…"
+                  }
+                },
+                {
+                  "id": "3bbe34a2-d01d-4908-a755-24a8c78d139f",
+                  "variant_id": "cfa43324-8e6a-4e25-a5fe-3c4345bd9770",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "markdown_block",
+                    "markdown": "Rust Engine 已接收你的消息：**second from verify script**\n\n- 来源：Rust session engine\n- 形态：markdown_block"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "e509455d-67e7-46a9-bbb1-32cb21167ae7": {
+      "conversation": {
+        "id": "e509455d-67e7-46a9-bbb1-32cb21167ae7",
+        "topic_id": "3184f529-7631-462a-98a2-60bd4dfaf3a3",
+        "agent_id": "68c316f9-2dee-42cd-be63-84fcb45616e9",
+        "title": "新对话",
+        "summary": "Rust engine demo session",
+        "pinned": false,
+        "generation_state": "streaming",
+        "current_cursor": "0f4a6db6-b3a0-4d80-8fba-566f6c7a5660",
+        "created_at": "2026-03-11T07:25:07.537969877Z",
+        "updated_at": "2026-03-11T07:25:07.537969877Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "0f4a6db6-b3a0-4d80-8fba-566f6c7a5660",
+            "conversation_id": "e509455d-67e7-46a9-bbb1-32cb21167ae7",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T07:25:07.537969877Z",
+            "updated_at": "2026-03-11T07:25:07.537969877Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "3fee61b4-cc25-429e-bebc-2aa660cd3c8c",
+                "node_id": "0f4a6db6-b3a0-4d80-8fba-566f6c7a5660",
+                "status": "streaming",
+                "model_id": "demo-model",
+                "usage_json": null,
+                "created_at": "2026-03-11T07:25:07.537969877Z",
+                "finished_at": null
+              },
+              "parts": [
+                {
+                  "id": "496151c5-75f0-450e-b10b-417fa3070638",
+                  "variant_id": "3fee61b4-cc25-429e-bebc-2aa660cd3c8c",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在整理回答结构…"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "f5aae07d-f90f-41c1-a524-4e739f404879": {
+      "conversation": {
+        "id": "f5aae07d-f90f-41c1-a524-4e739f404879",
+        "topic_id": "ecc2a087-bcf6-4b64-89e1-5ee36adb6f27",
+        "agent_id": "179e1179-28ce-4ddb-8075-dbfae95d9de5",
+        "title": "first from verify …",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "1a17a130-3a12-4604-8eaa-bda674b22375",
+        "created_at": "2026-03-11T06:17:38.500307404Z",
+        "updated_at": "2026-03-11T06:17:39.569193453Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "fa13733f-ae81-415c-9bb9-5de5f035c9f6",
+            "conversation_id": "f5aae07d-f90f-41c1-a524-4e739f404879",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:17:38.500307404Z",
+            "updated_at": "2026-03-11T06:17:38.500307404Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "f86eaf5e-65d3-4e52-b5ce-5e8c1ffc9b2d",
+                "node_id": "fa13733f-ae81-415c-9bb9-5de5f035c9f6",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T06:17:38.500307404Z",
+                "finished_at": "2026-03-11T06:17:38.500307404Z"
+              },
+              "parts": [
+                {
+                  "id": "0cc4f4f8-8b6c-4101-9a55-ca09c1515f21",
+                  "variant_id": "f86eaf5e-65d3-4e52-b5ce-5e8c1ffc9b2d",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "first from verify script"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "b0f4519f-0d82-4dc6-a7d4-68e58f396ba7",
+            "conversation_id": "f5aae07d-f90f-41c1-a524-4e739f404879",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:17:38.500307404Z",
+            "updated_at": "2026-03-11T06:17:38.500307404Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "2ec003d2-5092-4e0b-8a4e-4f7a9a7ec1ae",
+                "node_id": "b0f4519f-0d82-4dc6-a7d4-68e58f396ba7",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:17:38.500307404Z",
+                "finished_at": "2026-03-11T06:17:38.500307404Z"
+              },
+              "parts": [
+                {
+                  "id": "f2beebb1-ec8c-44d1-a2ff-981071a3e597",
+                  "variant_id": "2ec003d2-5092-4e0b-8a4e-4f7a9a7ec1ae",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：first from verify …"
+                  }
+                },
+                {
+                  "id": "bfc8c59b-4d04-4103-bbe1-85603f181880",
+                  "variant_id": "2ec003d2-5092-4e0b-8a4e-4f7a9a7ec1ae",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：first from verify script"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "66b81310-6a6d-4497-975d-7d65dd9dc3f2",
+            "conversation_id": "f5aae07d-f90f-41c1-a524-4e739f404879",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:17:39.569193453Z",
+            "updated_at": "2026-03-11T06:17:39.569193453Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "726a24bd-00e3-42eb-822c-39027c66a996",
+                "node_id": "66b81310-6a6d-4497-975d-7d65dd9dc3f2",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T06:17:39.569193453Z",
+                "finished_at": "2026-03-11T06:17:39.569193453Z"
+              },
+              "parts": [
+                {
+                  "id": "31365b9d-412d-4210-9dcd-5d33b8c6bbf6",
+                  "variant_id": "726a24bd-00e3-42eb-822c-39027c66a996",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "second from verify script"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "1a17a130-3a12-4604-8eaa-bda674b22375",
+            "conversation_id": "f5aae07d-f90f-41c1-a524-4e739f404879",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:17:39.569193453Z",
+            "updated_at": "2026-03-11T06:17:39.569193453Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "614548f9-db6a-4232-a106-f6fbfb19fc8e",
+                "node_id": "1a17a130-3a12-4604-8eaa-bda674b22375",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:17:39.569193453Z",
+                "finished_at": "2026-03-11T06:17:39.569193453Z"
+              },
+              "parts": [
+                {
+                  "id": "94734122-cf7b-4f2b-9ac0-8a24748977d8",
+                  "variant_id": "614548f9-db6a-4232-a106-f6fbfb19fc8e",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：second from verify…"
+                  }
+                },
+                {
+                  "id": "9ec9d351-da65-46f3-bc47-669684403fd0",
+                  "variant_id": "614548f9-db6a-4232-a106-f6fbfb19fc8e",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "text",
+                    "text": "Rust Engine 已接收你的消息：second from verify script"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    },
+    "fd7dd60e-85cc-4c9f-bb54-f550453c6dbe": {
+      "conversation": {
+        "id": "fd7dd60e-85cc-4c9f-bb54-f550453c6dbe",
+        "topic_id": "3185cc28-5b5a-4640-b308-e6b3dd623a96",
+        "agent_id": "4be51ea9-175a-46f1-b489-bd697bebcf75",
+        "title": "selected variant t…",
+        "summary": "Rust session store conversation",
+        "pinned": false,
+        "generation_state": "idle",
+        "current_cursor": "ac88c7f1-611c-4a4e-a6af-6a2fb663cba1",
+        "created_at": "2026-03-11T06:37:54.671501481Z",
+        "updated_at": "2026-03-11T06:37:54.671501481Z"
+      },
+      "nodes": [
+        {
+          "node": {
+            "id": "de9c3cde-b540-4f53-9dd5-e75bdaaf2562",
+            "conversation_id": "fd7dd60e-85cc-4c9f-bb54-f550453c6dbe",
+            "parent_node_id": null,
+            "role": "user",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:37:54.671501481Z",
+            "updated_at": "2026-03-11T06:37:54.671501481Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "29dd6719-1953-47ea-b815-2d00bc5f9de2",
+                "node_id": "de9c3cde-b540-4f53-9dd5-e75bdaaf2562",
+                "status": "completed",
+                "model_id": null,
+                "usage_json": null,
+                "created_at": "2026-03-11T06:37:54.671501481Z",
+                "finished_at": "2026-03-11T06:37:54.671501481Z"
+              },
+              "parts": [
+                {
+                  "id": "73f4faf4-3949-44e7-9ec7-b4ee7171b87e",
+                  "variant_id": "29dd6719-1953-47ea-b815-2d00bc5f9de2",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "text",
+                    "text": "selected variant truth smoke"
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "node": {
+            "id": "ac88c7f1-611c-4a4e-a6af-6a2fb663cba1",
+            "conversation_id": "fd7dd60e-85cc-4c9f-bb54-f550453c6dbe",
+            "parent_node_id": null,
+            "role": "assistant",
+            "select_index": 0,
+            "created_at": "2026-03-11T06:37:54.671501481Z",
+            "updated_at": "2026-03-11T06:37:54.671501481Z"
+          },
+          "variants": [
+            {
+              "variant": {
+                "id": "f47aa89d-a6f2-420d-96ae-ce16114e4950",
+                "node_id": "ac88c7f1-611c-4a4e-a6af-6a2fb663cba1",
+                "status": "completed",
+                "model_id": "rust-session-engine",
+                "usage_json": null,
+                "created_at": "2026-03-11T06:37:54.671501481Z",
+                "finished_at": "2026-03-11T06:37:54.671501481Z"
+              },
+              "parts": [
+                {
+                  "id": "42a4bdc6-d063-4c2b-ae1d-5578d4cb7f7b",
+                  "variant_id": "f47aa89d-a6f2-420d-96ae-ce16114e4950",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "正在基于用户消息生成回复：selected variant t…"
+                  }
+                },
+                {
+                  "id": "49eb3b7d-95d4-4034-b028-6179efb1962e",
+                  "variant_id": "f47aa89d-a6f2-420d-96ae-ce16114e4950",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "markdown_block",
+                    "markdown": "Rust Engine 已接收你的消息：**selected variant truth smoke**\n\n- 来源：Rust session engine\n- 形态：markdown_block"
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      ]
+    }
+  }
+}
