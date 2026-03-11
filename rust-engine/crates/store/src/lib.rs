@@ -584,6 +584,52 @@ mod tests {
     }
 
     #[test]
+    fn load_migrates_legacy_default_preset_reference_from_nonstable_preset_id() {
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                "https://default-preset-id.example.com/v1": {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Legacy Default Preset ID",
+                    "base_url": "https://default-preset-id.example.com/v1",
+                    "default_preset_local_id": "balanced-v1",
+                    "presets": [
+                        { "local_id": "balanced-v1", "name": "balanced" },
+                        { "local_id": "fast-v1", "name": "fast" }
+                    ],
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-default-preset-id");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let provider = store
+            .list_providers()
+            .expect("list providers")
+            .into_iter()
+            .next()
+            .expect("provider exists");
+
+        assert_eq!(
+            provider.default_preset_local_id,
+            Some(provider.presets[0].local_id.clone())
+        );
+        assert!(
+            provider.presets[0]
+                .local_id
+                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn provider_crud_round_trip_works_by_local_id() {
         let path = temp_store_path("provider-crud");
         let store = FileStore::new(&path);

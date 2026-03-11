@@ -406,6 +406,7 @@ Migration compatibility boundary:
 - Rust store normalization must migrate those keys into stable `local_id` keys
 - the old endpoint should remain resolvable through `reference_aliases`
 - editing `base_url` must never rewrite historical references to the provider
+- legacy `default_preset_local_id` values must be remapped onto the normalized preset `local_id` when preset identities are migrated
 
 ### 10.2 Two P0 Paths
 
