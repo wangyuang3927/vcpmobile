@@ -39,6 +39,10 @@ pub enum ChatEvent {
     ConversationNodeUpsert {
         node: NodeBundle,
     },
+    /// Selection-only mutation for an existing node.
+    ///
+    /// Reducers must treat this as a variant switch on the same `MessageNode`, not as a new
+    /// branch or a signal to synthesize missing parts on the client.
     ConversationNodeSelect {
         node_id: NodeId,
         select_index: usize,
@@ -80,12 +84,19 @@ pub enum ChatEvent {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Transport shape for one node plus its variants.
+///
+/// Canonical Rust/store truth may include every variant and use `node.select_index` against the
+/// full `variants` array. Client-facing selected-only projections must include exactly one variant
+/// and normalize `node.select_index` to `0` so the bundle stays self-consistent without Android
+/// fallback guesses.
 pub struct NodeBundle {
     pub node: MessageNode,
     pub variants: Vec<VariantBundle>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+/// Transport shape for one variant and its ordered typed parts.
 pub struct VariantBundle {
     pub variant: MessageVariant,
     pub parts: Vec<MessagePart>,

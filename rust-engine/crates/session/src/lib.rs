@@ -267,9 +267,11 @@ fn selected_variant_snapshot_projection(bundle: &NodeBundle) -> NodeBundle {
         .get(bundle.node.select_index)
         .or_else(|| bundle.variants.first())
         .cloned();
+    let mut node = bundle.node.clone();
+    node.select_index = 0;
 
     NodeBundle {
-        node: bundle.node.clone(),
+        node,
         variants: selected_variant.into_iter().collect(),
     }
 }
@@ -503,6 +505,72 @@ mod tests {
             parts[1].payload,
             MessagePartPayload::MarkdownBlock { .. }
         ));
+    }
+
+    #[test]
+    fn selected_variant_snapshot_projection_rebases_selected_variant_to_index_zero() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let first_variant_id = Uuid::new_v4();
+        let second_variant_id = Uuid::new_v4();
+        let bundle = NodeBundle {
+            node: MessageNode {
+                id: node_id,
+                conversation_id,
+                parent_node_id: None,
+                role: MessageRole::Assistant,
+                select_index: 1,
+                created_at: now,
+                updated_at: now,
+            },
+            variants: vec![
+                VariantBundle {
+                    variant: MessageVariant {
+                        id: first_variant_id,
+                        node_id,
+                        status: VariantStatus::Completed,
+                        model_id: Some("rust-session-engine".to_string()),
+                        usage_json: None,
+                        created_at: now,
+                        finished_at: Some(now),
+                    },
+                    parts: vec![MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id: first_variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Text {
+                            text: "old".to_string(),
+                        },
+                    }],
+                },
+                VariantBundle {
+                    variant: MessageVariant {
+                        id: second_variant_id,
+                        node_id,
+                        status: VariantStatus::Completed,
+                        model_id: Some("rust-session-engine".to_string()),
+                        usage_json: None,
+                        created_at: now,
+                        finished_at: Some(now),
+                    },
+                    parts: vec![MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id: second_variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Text {
+                            text: "selected".to_string(),
+                        },
+                    }],
+                },
+            ],
+        };
+
+        let projected = selected_variant_snapshot_projection(&bundle);
+
+        assert_eq!(projected.node.select_index, 0);
+        assert_eq!(projected.variants.len(), 1);
+        assert_eq!(projected.variants[0].variant.id, second_variant_id);
     }
 
     #[test]
