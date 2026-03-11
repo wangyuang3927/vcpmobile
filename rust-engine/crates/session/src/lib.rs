@@ -98,10 +98,17 @@ impl SessionEngine {
             },
         };
 
-        let user_node = build_user_node(stored.conversation.id, text, now);
+        let user_node = build_user_node(
+            stored.conversation.id,
+            stored.conversation.current_cursor,
+            text,
+            now,
+        );
+        let user_node_id = user_node.node.id;
         stored.nodes.push(user_node);
 
-        let assistant_node = build_assistant_node(stored.conversation.id, text, now);
+        let assistant_node =
+            build_assistant_node(stored.conversation.id, Some(user_node_id), text, now);
         let assistant_node_id = assistant_node.node.id;
         let assistant_variant_id = assistant_node.variants[0].variant.id;
 
@@ -175,6 +182,7 @@ fn assistant_markdown_reply(user_text: &str) -> String {
 
 fn build_user_node(
     conversation_id: ConversationId,
+    parent_node_id: Option<NodeId>,
     text: &str,
     now: chrono::DateTime<Utc>,
 ) -> NodeBundle {
@@ -184,7 +192,7 @@ fn build_user_node(
         node: MessageNode {
             id: node_id,
             conversation_id,
-            parent_node_id: None,
+            parent_node_id,
             role: MessageRole::User,
             select_index: 0,
             created_at: now,
@@ -214,6 +222,7 @@ fn build_user_node(
 
 fn build_assistant_node(
     conversation_id: ConversationId,
+    parent_node_id: Option<NodeId>,
     text: &str,
     now: chrono::DateTime<Utc>,
 ) -> NodeBundle {
@@ -223,7 +232,7 @@ fn build_assistant_node(
         node: MessageNode {
             id: node_id,
             conversation_id,
-            parent_node_id: None,
+            parent_node_id,
             role: MessageRole::Assistant,
             select_index: 0,
             created_at: now,
@@ -439,6 +448,17 @@ mod tests {
             2,
             "user + assistant nodes should persist"
         );
+        assert_eq!(stored.nodes[0].node.parent_node_id, None);
+        assert_eq!(
+            stored.nodes[1].node.parent_node_id,
+            Some(stored.nodes[0].node.id),
+            "assistant node should branch from the new user node"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(stored.nodes[1].node.id),
+            "conversation cursor should track the assistant leaf"
+        );
         fs::remove_file(engine.store().path()).ok();
     }
 
@@ -468,6 +488,24 @@ mod tests {
 
         assert_eq!(stored.conversation.id, conversation_id);
         assert_eq!(stored.nodes.len(), 4, "two turns should yield four nodes");
+        let first_assistant_id = stored.nodes[1].node.id;
+        let second_user = &stored.nodes[2].node;
+        let second_assistant = &stored.nodes[3].node;
+        assert_eq!(
+            second_user.parent_node_id,
+            Some(first_assistant_id),
+            "follow-up user turn should branch from the previous cursor"
+        );
+        assert_eq!(
+            second_assistant.parent_node_id,
+            Some(second_user.id),
+            "assistant reply should branch from the new user node"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(second_assistant.id),
+            "cursor should advance to the latest assistant leaf"
+        );
         fs::remove_file(engine.store().path()).ok();
     }
 
@@ -490,7 +528,7 @@ mod tests {
     #[test]
     fn selected_variant_snapshot_projection_keeps_selected_variant_full_parts() {
         let now = Utc::now();
-        let bundle = build_assistant_node(ConversationId::new_v4(), "projection", now);
+        let bundle = build_assistant_node(ConversationId::new_v4(), None, "projection", now);
 
         let projected = selected_variant_snapshot_projection(&bundle);
         let parts = &projected.variants[0].parts;
@@ -576,7 +614,7 @@ mod tests {
     #[test]
     fn streaming_delta_parts_emit_markdown_block_from_selected_variant() {
         let now = Utc::now();
-        let bundle = build_assistant_node(ConversationId::new_v4(), "projection", now);
+        let bundle = build_assistant_node(ConversationId::new_v4(), None, "projection", now);
 
         let parts = streaming_delta_parts(&bundle);
 
@@ -590,7 +628,8 @@ mod tests {
     #[test]
     fn assistant_node_uses_markdown_block_for_final_content() {
         let now = Utc::now();
-        let bundle = build_assistant_node(ConversationId::new_v4(), "markdown projection", now);
+        let bundle =
+            build_assistant_node(ConversationId::new_v4(), None, "markdown projection", now);
         let parts = &bundle.variants[0].parts;
 
         assert_eq!(parts.len(), 2);
