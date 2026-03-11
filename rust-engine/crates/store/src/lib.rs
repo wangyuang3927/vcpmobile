@@ -385,6 +385,80 @@ mod tests {
     }
 
     #[test]
+    fn load_preserves_existing_local_id_keys_when_embedded_field_is_missing() {
+        let existing_local_id = "provider_local_existing123";
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                existing_local_id: {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Existing Stable Provider",
+                    "base_url": "https://stable.example.com/v1",
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-existing-local-id");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let provider = store
+            .get_provider(existing_local_id)
+            .expect("load provider")
+            .expect("provider exists");
+
+        assert_eq!(provider.local_id, existing_local_id);
+        assert_eq!(
+            store
+                .resolve_provider_reference(existing_local_id)
+                .expect("resolve by existing local id")
+                .expect("provider by local id")
+                .local_id,
+            existing_local_id
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_assigns_distinct_preset_ids_for_duplicate_legacy_names() {
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                "https://duplicate.example.com/v1": {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Duplicate Presets",
+                    "base_url": "https://duplicate.example.com/v1",
+                    "presets": [
+                        { "name": "balanced" },
+                        { "name": "balanced" }
+                    ],
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-duplicate-presets");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let providers = store.list_providers().expect("list providers");
+        let provider = providers.first().expect("provider exists");
+
+        assert_eq!(provider.presets.len(), 2);
+        assert_ne!(provider.presets[0].local_id, provider.presets[1].local_id);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn provider_crud_round_trip_works_by_local_id() {
         let path = temp_store_path("provider-crud");
         let store = FileStore::new(&path);

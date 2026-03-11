@@ -270,13 +270,13 @@ impl ProviderPreset {
         }
     }
 
-    pub fn ensure_local_id(&mut self, provider_local_id: &str) {
+    pub fn ensure_local_id(&mut self, provider_local_id: &str, ordinal: usize) {
         if self.local_id.trim().is_empty() {
             let name_seed = self.name.trim();
             let seed = if name_seed.is_empty() {
-                provider_local_id.to_string()
+                format!("{provider_local_id}:{ordinal}")
             } else {
-                format!("{provider_local_id}:{name_seed}")
+                format!("{provider_local_id}:{name_seed}:{ordinal}")
             };
             self.local_id = migrated_provider_preset_local_id(&seed);
         }
@@ -321,14 +321,18 @@ impl ProviderConfig {
         let base_url_alias = self.base_url.trim().to_string();
 
         if self.local_id.trim().is_empty() {
-            self.local_id = migrated_provider_local_id(&seed);
+            self.local_id = if is_stable_local_id(&seed, PROVIDER_LOCAL_ID_PREFIX) {
+                seed.clone()
+            } else {
+                migrated_provider_local_id(&seed)
+            };
         }
 
         self.register_reference_alias(seed);
         self.register_reference_alias(base_url_alias);
 
-        for preset in &mut self.presets {
-            preset.ensure_local_id(&self.local_id);
+        for (index, preset) in self.presets.iter_mut().enumerate() {
+            preset.ensure_local_id(&self.local_id, index);
         }
 
         if self
@@ -404,6 +408,10 @@ fn current_timestamp() -> DateTime<Utc> {
 
 fn default_enabled() -> bool {
     true
+}
+
+fn is_stable_local_id(value: &str, prefix: &str) -> bool {
+    value.starts_with(prefix) && value.len() > prefix.len()
 }
 
 fn stable_seed_hex(seed: &str) -> String {
