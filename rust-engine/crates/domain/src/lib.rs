@@ -271,8 +271,13 @@ impl ProviderPreset {
     }
 
     pub fn ensure_local_id(&mut self, provider_local_id: &str, ordinal: usize) {
-        if self.local_id.trim().is_empty() {
-            let name_seed = self.name.trim();
+        let local_id = self.local_id.trim().to_string();
+        if local_id.is_empty() || !is_stable_local_id(&local_id, PROVIDER_PRESET_LOCAL_ID_PREFIX) {
+            let name_seed = if !local_id.is_empty() {
+                local_id
+            } else {
+                self.name.trim().to_string()
+            };
             let seed = if name_seed.is_empty() {
                 format!("{provider_local_id}:{ordinal}")
             } else {
@@ -319,8 +324,11 @@ impl ProviderConfig {
             reference_seed.trim().to_string()
         };
         let base_url_alias = self.base_url.trim().to_string();
+        let existing_local_id = self.local_id.trim().to_string();
 
-        if self.local_id.trim().is_empty() {
+        if existing_local_id.is_empty()
+            || !is_stable_local_id(&existing_local_id, PROVIDER_LOCAL_ID_PREFIX)
+        {
             self.local_id = if is_stable_local_id(&seed, PROVIDER_LOCAL_ID_PREFIX) {
                 seed.clone()
             } else {
@@ -328,6 +336,7 @@ impl ProviderConfig {
             };
         }
 
+        self.register_reference_alias(existing_local_id);
         self.register_reference_alias(seed);
         self.register_reference_alias(base_url_alias);
 

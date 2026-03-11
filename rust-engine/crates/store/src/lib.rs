@@ -425,6 +425,44 @@ mod tests {
     }
 
     #[test]
+    fn load_prefers_stable_map_key_when_embedded_provider_id_is_legacy() {
+        let existing_local_id = "provider_local_existing123";
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                existing_local_id: {
+                    "local_id": "https://old-embedded.example.com/v1",
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Mixed Legacy Provider",
+                    "base_url": "https://stable.example.com/v1",
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-mixed-legacy-id");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let provider = store
+            .get_provider(existing_local_id)
+            .expect("load provider")
+            .expect("provider exists");
+
+        assert_eq!(provider.local_id, existing_local_id);
+        assert!(
+            provider
+                .reference_aliases
+                .contains(&"https://old-embedded.example.com/v1".to_string())
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
     fn load_assigns_distinct_preset_ids_for_duplicate_legacy_names() {
         let fixture = serde_json::json!({
             "provider_configs": {
@@ -453,6 +491,54 @@ mod tests {
         let provider = providers.first().expect("provider exists");
 
         assert_eq!(provider.presets.len(), 2);
+        assert_ne!(provider.presets[0].local_id, provider.presets[1].local_id);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn load_normalizes_nonstable_preset_ids() {
+        let fixture = serde_json::json!({
+            "provider_configs": {
+                "https://preset-id.example.com/v1": {
+                    "adapter_kind": "openai_compatible",
+                    "display_name": "Preset IDs",
+                    "base_url": "https://preset-id.example.com/v1",
+                    "presets": [
+                        { "local_id": "balanced", "name": "balanced" },
+                        { "local_id": "balanced", "name": "balanced" }
+                    ],
+                    "created_at": "2026-03-11T00:00:00Z",
+                    "updated_at": "2026-03-11T00:00:00Z"
+                }
+            }
+        });
+        let path = temp_store_path("provider-nonstable-preset-ids");
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&fixture).expect("serialize fixture"),
+        )
+        .expect("write fixture");
+
+        let store = FileStore::new(&path);
+        let provider = store
+            .list_providers()
+            .expect("list providers")
+            .into_iter()
+            .next()
+            .expect("provider exists");
+
+        assert_eq!(provider.presets.len(), 2);
+        assert!(
+            provider.presets[0]
+                .local_id
+                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
+        );
+        assert!(
+            provider.presets[1]
+                .local_id
+                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
+        );
         assert_ne!(provider.presets[0].local_id, provider.presets[1].local_id);
 
         fs::remove_file(path).ok();
