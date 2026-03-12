@@ -6,23 +6,106 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, de::Deserializer};
 use thiserror::Error;
 use vcpmobile_domain::{
-    Conversation, ConversationId, GenerationState, NodeId, ProviderAuthConfig, ProviderConfig,
-    ProviderModelCatalog,
+    AgentConfig, Conversation, ConversationId, GenerationState, MessageNode, NodeId,
+    ProviderAuthConfig, ProviderConfig, ProviderModelCatalog, VariantId,
 };
-use vcpmobile_protocol::NodeBundle;
+use vcpmobile_protocol::{NodeBundle, VariantBundle};
 
 pub use sqlite::{
     CURRENT_SCHEMA_VERSION, MigrationRecord, SqliteStore, SqliteStoreError, SqliteStoreResult,
     migrate_sqlite_schema,
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct StoredConversation {
     pub conversation: Conversation,
     pub nodes: Vec<NodeBundle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredConversationRecord {
+    conversation: Conversation,
+    nodes: Vec<StoredNodeBundleRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredNodeBundleRecord {
+    node: MessageNode,
+    variants: Vec<VariantBundle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selected_variant_id: Option<VariantId>,
+}
+
+impl Serialize for StoredConversation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        StoredConversationRecord::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StoredConversation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StoredConversationRecord::deserialize(deserializer).map(StoredConversation::from)
+    }
+}
+
+impl From<&StoredConversation> for StoredConversationRecord {
+    fn from(value: &StoredConversation) -> Self {
+        Self {
+            conversation: value.conversation.clone(),
+            nodes: value
+                .nodes
+                .iter()
+                .map(StoredNodeBundleRecord::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<StoredConversationRecord> for StoredConversation {
+    fn from(value: StoredConversationRecord) -> Self {
+        Self {
+            conversation: value.conversation,
+            nodes: value.nodes.into_iter().map(NodeBundle::from).collect(),
+        }
+    }
+}
+
+impl From<&NodeBundle> for StoredNodeBundleRecord {
+    fn from(value: &NodeBundle) -> Self {
+        Self {
+            node: value.node.clone(),
+            variants: value.variants.clone(),
+            selected_variant_id: value
+                .variants
+                .get(value.node.select_index)
+                .map(|variant| variant.variant.id),
+        }
+    }
+}
+
+impl From<StoredNodeBundleRecord> for NodeBundle {
+    fn from(value: StoredNodeBundleRecord) -> Self {
+        let mut node = value.node;
+        if let Some(selected_variant_id) = value.selected_variant_id {
+            node.select_index = value
+                .variants
+                .iter()
+                .position(|variant| variant.variant.id == selected_variant_id)
+                .unwrap_or(value.variants.len());
+        }
+        NodeBundle {
+            node,
+            variants: value.variants,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -42,6 +125,8 @@ pub struct StoredConversationCatalogItem {
 pub struct StoreData {
     #[serde(default)]
     pub conversations: BTreeMap<String, StoredConversation>,
+    #[serde(default, alias = "agents")]
+    pub agent_configs: BTreeMap<String, AgentConfig>,
     #[serde(default, alias = "providers")]
     pub provider_configs: BTreeMap<String, ProviderConfig>,
 }
@@ -245,6 +330,8 @@ pub enum StoreError {
     Json(#[from] serde_json::Error),
     #[error("sqlite error: {0}")]
     Sqlite(#[from] SqliteStoreError),
+    #[error("validation error: {0}")]
+    Validation(String),
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -319,6 +406,29 @@ impl FileStore {
         Ok(())
     }
 
+    pub fn read_selected_variant(
+        &self,
+        conversation_id: ConversationId,
+        node_id: NodeId,
+    ) -> StoreResult<Option<VariantId>> {
+        self.ensure_sqlite_conversations()?;
+        Ok(self
+            .sqlite_store()
+            .read_selected_variant(conversation_id, node_id)?)
+    }
+
+    pub fn write_selected_variant(
+        &self,
+        conversation_id: ConversationId,
+        node_id: NodeId,
+        variant_id: VariantId,
+    ) -> StoreResult<bool> {
+        self.ensure_sqlite_conversations()?;
+        Ok(self
+            .sqlite_store()
+            .write_selected_variant(conversation_id, node_id, variant_id)?)
+    }
+
     pub fn list_conversations(&self) -> StoreResult<Vec<StoredConversation>> {
         self.ensure_sqlite_conversations()?;
         Ok(self.sqlite_store().list_conversations()?)
@@ -354,6 +464,42 @@ impl FileStore {
     pub fn get_provider(&self, local_id: &str) -> StoreResult<Option<ProviderConfig>> {
         let data = self.load()?;
         Ok(data.provider_configs.get(local_id).cloned())
+    }
+
+    pub fn get_agent(&self, agent_id: &str) -> StoreResult<Option<AgentConfig>> {
+        let data = self.load()?;
+        Ok(data.agent_configs.get(agent_id).cloned())
+    }
+
+    pub fn upsert_agent(&self, mut agent: AgentConfig) -> StoreResult<AgentConfig> {
+        agent
+            .validate()
+            .map_err(|error| StoreError::Validation(error.to_string()))?;
+
+        let mut data = self.load()?;
+        let now = chrono::Utc::now();
+        if let Some(existing) = data.agent_configs.get(&agent.id.to_string()) {
+            agent.created_at = existing.created_at;
+        }
+        agent.updated_at = now;
+
+        data.agent_configs
+            .insert(agent.id.to_string(), agent.clone());
+        self.save(&data)?;
+        Ok(agent)
+    }
+
+    pub fn list_agents(&self) -> StoreResult<Vec<AgentConfig>> {
+        let mut agents = self.load()?.agent_configs.into_values().collect::<Vec<_>>();
+        agents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        Ok(agents)
+    }
+
+    pub fn delete_agent(&self, agent_id: &str) -> StoreResult<Option<AgentConfig>> {
+        let mut data = self.load()?;
+        let removed = data.agent_configs.remove(agent_id);
+        self.save(&data)?;
+        Ok(removed)
     }
 
     pub fn resolve_provider_reference(
@@ -494,9 +640,10 @@ mod tests {
     use std::{collections::BTreeMap, env, fs};
     use uuid::Uuid;
     use vcpmobile_domain::{
-        AgentId, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
-        PROVIDER_LOCAL_ID_PREFIX, PROVIDER_PRESET_LOCAL_ID_PREFIX, ProviderAdapterKind,
-        ProviderBodyFragment, ProviderModelCatalogEntry, ProviderPreset, TopicId, VariantStatus,
+        AgentConfig, AgentId, MessageNode, MessagePart, MessagePartPayload, MessageRole,
+        MessageVariant, PROVIDER_LOCAL_ID_PREFIX, PROVIDER_PRESET_LOCAL_ID_PREFIX,
+        ProviderAdapterKind, ProviderBodyFragment, ProviderModelCatalogEntry, ProviderPreset,
+        TopicId, VariantStatus,
     };
     use vcpmobile_protocol::VariantBundle;
 
@@ -536,6 +683,107 @@ mod tests {
         provider
     }
 
+    fn sample_agent(name: &str) -> AgentConfig {
+        let mut agent = AgentConfig::new(name, "You are a focused helper.");
+        agent.group.aliases = vec!["planner".to_string()];
+        agent
+    }
+
+    fn sample_variant_switch_conversation(
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> (StoredConversation, ConversationId, NodeId, Uuid, Uuid) {
+        let conversation_id = ConversationId::new_v4();
+        let user_node_id = NodeId::new_v4();
+        let assistant_node_id = NodeId::new_v4();
+        let first_variant_id = Uuid::new_v4();
+        let second_variant_id = Uuid::new_v4();
+
+        let stored = StoredConversation {
+            conversation: Conversation {
+                id: conversation_id,
+                topic_id: TopicId::new_v4(),
+                agent_id: AgentId::new_v4(),
+                title: "variant persistence".to_string(),
+                summary: Some("selected variant survives restart".to_string()),
+                pinned: false,
+                generation_state: GenerationState::Completed,
+                current_cursor: Some(assistant_node_id),
+                created_at: now,
+                updated_at: now,
+            },
+            nodes: vec![
+                NodeBundle {
+                    node: MessageNode {
+                        id: user_node_id,
+                        conversation_id,
+                        parent_node_id: None,
+                        role: MessageRole::User,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: Uuid::new_v4(),
+                            node_id: user_node_id,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![],
+                    }],
+                },
+                NodeBundle {
+                    node: MessageNode {
+                        id: assistant_node_id,
+                        conversation_id,
+                        parent_node_id: Some(user_node_id),
+                        role: MessageRole::Assistant,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![
+                        VariantBundle {
+                            variant: MessageVariant {
+                                id: first_variant_id,
+                                node_id: assistant_node_id,
+                                status: VariantStatus::Completed,
+                                model_id: Some("rust-session-engine".to_string()),
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        },
+                        VariantBundle {
+                            variant: MessageVariant {
+                                id: second_variant_id,
+                                node_id: assistant_node_id,
+                                status: VariantStatus::Completed,
+                                model_id: Some("rust-session-engine".to_string()),
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        (
+            stored,
+            conversation_id,
+            assistant_node_id,
+            first_variant_id,
+            second_variant_id,
+        )
+    }
+
     #[test]
     fn list_conversation_catalog_sorts_by_updated_at_desc() {
         let source = fs::read_to_string(
@@ -563,6 +811,44 @@ mod tests {
                 .all(|item| !item.conversation_id.to_string().is_empty() && !item.title.is_empty())
         );
         assert!(items.iter().all(|item| item.node_count > 0));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn upsert_agent_persists_and_lists_local_agent_configs() {
+        let path = temp_store_path("agents");
+        let store = FileStore::new(&path);
+
+        let agent = store
+            .upsert_agent(sample_agent("Planner"))
+            .expect("upsert agent");
+        let listed = store.list_agents().expect("list agents");
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, agent.id);
+        assert_eq!(
+            store
+                .get_agent(&agent.id.to_string())
+                .expect("get agent")
+                .expect("stored agent")
+                .identity
+                .name,
+            "Planner"
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn upsert_agent_rejects_invalid_required_fields() {
+        let path = temp_store_path("agents-invalid");
+        let store = FileStore::new(&path);
+        let mut agent = sample_agent("Planner");
+        agent.prompt.system_prompt = " ".to_string();
+
+        let error = store.upsert_agent(agent).expect_err("validation failure");
+        assert!(matches!(error, StoreError::Validation(_)));
 
         fs::remove_file(path).ok();
     }
@@ -616,6 +902,7 @@ mod tests {
                     }],
                 },
             )]),
+            agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
         };
         fs::write(
@@ -682,6 +969,7 @@ mod tests {
                     }],
                 },
             )]),
+            agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
         };
         fs::write(
@@ -749,6 +1037,7 @@ mod tests {
                     }],
                 },
             )]),
+            agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
         };
         fs::write(
@@ -822,6 +1111,7 @@ mod tests {
                     }],
                 },
             )]),
+            agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
         };
         fs::write(
@@ -858,6 +1148,72 @@ mod tests {
         assert_eq!(
             reloaded.nodes[0].variants[0].parts[0].order_index, 0,
             "sqlite-backed recovery should preserve part ordering"
+        );
+
+        cleanup_store_paths(&path);
+    }
+
+    #[test]
+    fn save_persists_selected_variant_id_as_store_truth() {
+        let path = temp_store_path("selected-variant-id");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let (mut stored, conversation_id, assistant_node_id, _first_variant_id, second_variant_id) =
+            sample_variant_switch_conversation(now);
+        stored.nodes[1].node.select_index = 1;
+
+        store
+            .upsert_conversation(stored)
+            .expect("persist selected variant");
+
+        assert_eq!(
+            store
+                .read_selected_variant(conversation_id, assistant_node_id)
+                .expect("read selected variant"),
+            Some(second_variant_id)
+        );
+
+        cleanup_store_paths(&path);
+    }
+
+    #[test]
+    fn write_selected_variant_survives_reload() {
+        let path = temp_store_path("selected-variant-reload");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let (stored, conversation_id, assistant_node_id, first_variant_id, second_variant_id) =
+            sample_variant_switch_conversation(now);
+
+        store
+            .upsert_conversation(stored)
+            .expect("persist conversation");
+        assert_eq!(
+            store
+                .read_selected_variant(conversation_id, assistant_node_id)
+                .expect("read initial selected variant"),
+            Some(first_variant_id)
+        );
+        assert!(
+            store
+                .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
+                .expect("switch selected variant")
+        );
+
+        let reloaded = FileStore::new(&path);
+        let stored = reloaded
+            .get_conversation(conversation_id)
+            .expect("load reloaded conversation")
+            .expect("stored conversation");
+
+        assert_eq!(
+            stored.nodes[1].node.select_index, 1,
+            "selected variant should be restored from persisted variant id"
+        );
+        assert_eq!(
+            reloaded
+                .read_selected_variant(conversation_id, assistant_node_id)
+                .expect("read selected variant after reload"),
+            Some(second_variant_id)
         );
 
         cleanup_store_paths(&path);

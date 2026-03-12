@@ -11,7 +11,7 @@ use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
     AgentId, Conversation, ConversationId, GenerationState, MessageNode, MessagePart,
-    MessagePartPayload, MessageRole, MessageVariant, ToolPartState, TopicId, VariantStatus,
+    MessagePartPayload, MessageRole, MessageVariant, NodeId, ToolPartState, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{NodeBundle, VariantBundle};
 
@@ -385,6 +385,80 @@ impl SqliteStore {
     ) -> SqliteStoreResult<Option<StoredConversation>> {
         let connection = self.open()?;
         load_conversation(&connection, &conversation_id.to_string())
+    }
+
+    pub fn read_selected_variant(
+        &self,
+        conversation_id: ConversationId,
+        node_id: NodeId,
+    ) -> SqliteStoreResult<Option<Uuid>> {
+        let connection = self.open()?;
+        connection
+            .query_row(
+                "SELECT message_variants.id
+                 FROM message_nodes
+                 JOIN message_variants
+                   ON message_variants.node_id = message_nodes.id
+                  AND message_variants.ordinal = message_nodes.selected_variant_ordinal
+                 WHERE message_nodes.conversation_id = ?1
+                   AND message_nodes.id = ?2",
+                params![conversation_id.to_string(), node_id.to_string()],
+                |row| row.get::<_, String>(0),
+            )
+            .optional()?
+            .map(|value| parse_uuid(&value, "message_variants.id"))
+            .transpose()
+    }
+
+    pub fn write_selected_variant(
+        &self,
+        conversation_id: ConversationId,
+        node_id: NodeId,
+        variant_id: Uuid,
+    ) -> SqliteStoreResult<bool> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        let Some(ordinal) = transaction
+            .query_row(
+                "SELECT message_variants.ordinal
+                 FROM message_variants
+                 JOIN message_nodes ON message_nodes.id = message_variants.node_id
+                 WHERE message_nodes.conversation_id = ?1
+                   AND message_nodes.id = ?2
+                   AND message_variants.id = ?3",
+                params![
+                    conversation_id.to_string(),
+                    node_id.to_string(),
+                    variant_id.to_string()
+                ],
+                |row| row.get::<_, i64>(0),
+            )
+            .optional()?
+        else {
+            return Ok(false);
+        };
+
+        let now = Utc::now().to_rfc3339();
+        let updated = transaction.execute(
+            "UPDATE message_nodes
+             SET selected_variant_ordinal = ?1, updated_at = ?2
+             WHERE conversation_id = ?3 AND id = ?4",
+            params![
+                ordinal,
+                now,
+                conversation_id.to_string(),
+                node_id.to_string()
+            ],
+        )?;
+        if updated == 0 {
+            return Ok(false);
+        }
+        transaction.execute(
+            "UPDATE conversations SET updated_at = ?1 WHERE id = ?2",
+            params![now, conversation_id.to_string()],
+        )?;
+        transaction.commit()?;
+        Ok(true)
     }
 
     pub fn list_conversations(&self) -> SqliteStoreResult<Vec<StoredConversation>> {

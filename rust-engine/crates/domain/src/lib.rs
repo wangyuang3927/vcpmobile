@@ -148,7 +148,315 @@ pub enum ProviderAdapterKind {
 pub struct AgentProfile {
     pub id: AgentId,
     pub name: String,
+    #[serde(default)]
+    pub avatar_uri: Option<String>,
     pub description: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentIdentityConfig {
+    pub name: String,
+    #[serde(default)]
+    pub avatar_uri: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentPromptMode {
+    #[default]
+    SystemOnly,
+    SystemAndMessageTemplate,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentPromptVariable {
+    pub key: String,
+    #[serde(default)]
+    pub label: Option<String>,
+    pub value: String,
+    #[serde(default)]
+    pub description: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentPromptConfig {
+    pub system_prompt: String,
+    #[serde(default)]
+    pub prompt_mode: AgentPromptMode,
+    #[serde(default)]
+    pub message_template: Option<String>,
+    #[serde(default)]
+    pub placeholders: Vec<AgentPromptVariable>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentModelConfig {
+    #[serde(default)]
+    pub provider_local_id: Option<ProviderLocalId>,
+    #[serde(default)]
+    pub preset_local_id: Option<ProviderPresetLocalId>,
+    #[serde(default)]
+    pub model_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentReasoningEffort {
+    Low,
+    Medium,
+    High,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct AgentRequestConfig {
+    #[serde(default)]
+    pub temperature: Option<f32>,
+    #[serde(default)]
+    pub top_p: Option<f32>,
+    #[serde(default)]
+    pub max_output_tokens: Option<u32>,
+    #[serde(default)]
+    pub reasoning_effort: Option<AgentReasoningEffort>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentMemoryConfig {
+    #[serde(default = "default_true")]
+    pub use_conversation_memory: bool,
+    #[serde(default)]
+    pub pin_top_level_facts: bool,
+}
+
+impl Default for AgentMemoryConfig {
+    fn default() -> Self {
+        Self {
+            use_conversation_memory: default_true(),
+            pin_top_level_facts: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentToolPermission {
+    pub tool_id: String,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentToolConfig {
+    #[serde(default = "default_true")]
+    pub enable_local_tools: bool,
+    #[serde(default)]
+    pub overrides: Vec<AgentToolPermission>,
+}
+
+impl Default for AgentToolConfig {
+    fn default() -> Self {
+        Self {
+            enable_local_tools: default_true(),
+            overrides: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentGroupConfig {
+    #[serde(default)]
+    pub role_label: Option<String>,
+    #[serde(default)]
+    pub aliases: Vec<String>,
+    #[serde(default)]
+    pub mention_tags: Vec<String>,
+    #[serde(default = "default_true")]
+    pub respond_to_mentions: bool,
+    #[serde(default)]
+    pub allow_auto_relay: bool,
+}
+
+impl Default for AgentGroupConfig {
+    fn default() -> Self {
+        Self {
+            role_label: None,
+            aliases: Vec::new(),
+            mention_tags: Vec::new(),
+            respond_to_mentions: default_true(),
+            allow_auto_relay: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct AgentConfig {
+    pub id: AgentId,
+    pub identity: AgentIdentityConfig,
+    #[serde(default)]
+    pub prompt: AgentPromptConfig,
+    #[serde(default)]
+    pub model: AgentModelConfig,
+    #[serde(default)]
+    pub request: AgentRequestConfig,
+    #[serde(default)]
+    pub memory: AgentMemoryConfig,
+    #[serde(default)]
+    pub tools: AgentToolConfig,
+    #[serde(default)]
+    pub group: AgentGroupConfig,
+    #[serde(default = "current_timestamp")]
+    pub created_at: DateTime<Utc>,
+    #[serde(default = "current_timestamp")]
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum AgentConfigValidationError {
+    EmptyField {
+        section: &'static str,
+        field: &'static str,
+    },
+    EmptyListValue {
+        section: &'static str,
+        field: &'static str,
+        index: usize,
+    },
+    InvalidRange {
+        section: &'static str,
+        field: &'static str,
+        min: f32,
+        max: f32,
+        actual: f32,
+    },
+}
+
+impl fmt::Display for AgentConfigValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyField { section, field } => {
+                write!(f, "{section}.{field} must be non-empty")
+            }
+            Self::EmptyListValue {
+                section,
+                field,
+                index,
+            } => write!(f, "{section}.{field}[{index}] must be non-empty"),
+            Self::InvalidRange {
+                section,
+                field,
+                min,
+                max,
+                actual,
+            } => write!(
+                f,
+                "{section}.{field} must be between {min} and {max}, got {actual}"
+            ),
+        }
+    }
+}
+
+impl Error for AgentConfigValidationError {}
+
+impl AgentConfig {
+    pub fn new(name: impl Into<String>, system_prompt: impl Into<String>) -> Self {
+        let now = Utc::now();
+        Self {
+            id: AgentId::new_v4(),
+            identity: AgentIdentityConfig {
+                name: name.into(),
+                avatar_uri: None,
+                description: None,
+            },
+            prompt: AgentPromptConfig {
+                system_prompt: system_prompt.into(),
+                ..AgentPromptConfig::default()
+            },
+            model: AgentModelConfig::default(),
+            request: AgentRequestConfig::default(),
+            memory: AgentMemoryConfig::default(),
+            tools: AgentToolConfig::default(),
+            group: AgentGroupConfig::default(),
+            created_at: now,
+            updated_at: now,
+        }
+    }
+
+    pub fn profile(&self) -> AgentProfile {
+        AgentProfile {
+            id: self.id,
+            name: self.identity.name.clone(),
+            avatar_uri: self.identity.avatar_uri.clone(),
+            description: self.identity.description.clone().unwrap_or_default(),
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), AgentConfigValidationError> {
+        require_non_empty_agent("identity", "name", &self.identity.name)?;
+        require_non_empty_agent("prompt", "system_prompt", &self.prompt.system_prompt)?;
+
+        if let Some(message_template) = &self.prompt.message_template {
+            require_non_empty_agent("prompt", "message_template", message_template)?;
+        }
+
+        if let Some(provider_local_id) = &self.model.provider_local_id {
+            require_non_empty_agent("model", "provider_local_id", provider_local_id)?;
+        }
+        if let Some(preset_local_id) = &self.model.preset_local_id {
+            require_non_empty_agent("model", "preset_local_id", preset_local_id)?;
+        }
+        if let Some(model_id) = &self.model.model_id {
+            require_non_empty_agent("model", "model_id", model_id)?;
+        }
+
+        for (index, placeholder) in self.prompt.placeholders.iter().enumerate() {
+            if placeholder.key.trim().is_empty() {
+                return Err(AgentConfigValidationError::EmptyListValue {
+                    section: "prompt",
+                    field: "placeholders.key",
+                    index,
+                });
+            }
+        }
+
+        for (index, tool_override) in self.tools.overrides.iter().enumerate() {
+            if tool_override.tool_id.trim().is_empty() {
+                return Err(AgentConfigValidationError::EmptyListValue {
+                    section: "tools",
+                    field: "overrides.tool_id",
+                    index,
+                });
+            }
+        }
+
+        for (index, alias) in self.group.aliases.iter().enumerate() {
+            if alias.trim().is_empty() {
+                return Err(AgentConfigValidationError::EmptyListValue {
+                    section: "group",
+                    field: "aliases",
+                    index,
+                });
+            }
+        }
+
+        for (index, tag) in self.group.mention_tags.iter().enumerate() {
+            if tag.trim().is_empty() {
+                return Err(AgentConfigValidationError::EmptyListValue {
+                    section: "group",
+                    field: "mention_tags",
+                    index,
+                });
+            }
+        }
+
+        if let Some(temperature) = self.request.temperature {
+            require_range("request", "temperature", temperature, 0.0, 2.0)?;
+        }
+        if let Some(top_p) = self.request.top_p {
+            require_range("request", "top_p", top_p, 0.0, 1.0)?;
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
@@ -831,6 +1139,38 @@ fn require_non_empty(
     }
 }
 
+fn require_non_empty_agent(
+    section: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), AgentConfigValidationError> {
+    if value.trim().is_empty() {
+        Err(AgentConfigValidationError::EmptyField { section, field })
+    } else {
+        Ok(())
+    }
+}
+
+fn require_range(
+    section: &'static str,
+    field: &'static str,
+    value: f32,
+    min: f32,
+    max: f32,
+) -> Result<(), AgentConfigValidationError> {
+    if !(min..=max).contains(&value) {
+        Err(AgentConfigValidationError::InvalidRange {
+            section,
+            field,
+            min,
+            max,
+            actual: value,
+        })
+    } else {
+        Ok(())
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DraftState {
     pub conversation_id: ConversationId,
@@ -1152,6 +1492,10 @@ fn default_enabled() -> bool {
     true
 }
 
+fn default_true() -> bool {
+    true
+}
+
 fn is_stable_local_id(value: &str, prefix: &str) -> bool {
     value.starts_with(prefix) && value.len() > prefix.len()
 }
@@ -1186,6 +1530,63 @@ mod tests {
             "Sample Provider",
             base_url,
         )
+    }
+
+    #[test]
+    fn agent_config_new_sets_required_identity_and_prompt_fields() {
+        let agent = AgentConfig::new("VCP Planner", "You are a planner.");
+
+        assert_eq!(agent.identity.name, "VCP Planner");
+        assert_eq!(agent.prompt.system_prompt, "You are a planner.");
+        assert!(agent.memory.use_conversation_memory);
+        assert!(agent.tools.enable_local_tools);
+        assert!(agent.group.respond_to_mentions);
+    }
+
+    #[test]
+    fn agent_config_validation_rejects_blank_required_or_structural_fields() {
+        let mut agent = AgentConfig::new("VCP Planner", "You are a planner.");
+        agent.identity.name = "  ".to_string();
+        assert_eq!(
+            agent.validate(),
+            Err(AgentConfigValidationError::EmptyField {
+                section: "identity",
+                field: "name",
+            })
+        );
+
+        let mut agent = AgentConfig::new("VCP Planner", "You are a planner.");
+        agent.prompt.placeholders.push(AgentPromptVariable {
+            key: " ".to_string(),
+            label: None,
+            value: "Alice".to_string(),
+            description: None,
+        });
+        assert_eq!(
+            agent.validate(),
+            Err(AgentConfigValidationError::EmptyListValue {
+                section: "prompt",
+                field: "placeholders.key",
+                index: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn agent_config_validation_rejects_out_of_range_request_overrides() {
+        let mut agent = AgentConfig::new("VCP Planner", "You are a planner.");
+        agent.request.temperature = Some(2.5);
+
+        assert_eq!(
+            agent.validate(),
+            Err(AgentConfigValidationError::InvalidRange {
+                section: "request",
+                field: "temperature",
+                min: 0.0,
+                max: 2.0,
+                actual: 2.5,
+            })
+        );
     }
 
     #[test]
