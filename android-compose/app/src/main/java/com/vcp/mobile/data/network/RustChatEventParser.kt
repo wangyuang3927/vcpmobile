@@ -6,7 +6,12 @@ import org.json.JSONObject
 data class RustChatEventEnvelope(
     val conversationId: String?,
     val event: String,
-    val data: JSONObject
+    val data: JSONObject,
+    val eventId: String? = null,
+    val schemaFamily: String? = null,
+    val schemaMajor: Int? = null,
+    val schemaMinor: Int? = null,
+    val emittedAt: String? = null,
 )
 
 data class RustStreamIdentity(
@@ -42,15 +47,24 @@ object RustChatEventParser {
         return runCatching {
             val root = JSONObject(raw)
             val payload = root.optJSONObject("payload") ?: return null
-            val event = payload.optString("event").trim()
-            val data = payload.optJSONObject("data") ?: JSONObject()
+            val event = root.optString("event_name").trim()
+                .ifBlank { payload.optString("event").trim() }
+            val data = payload.optJSONObject("data")
+                ?: root.optJSONObject("data")
+                ?: JSONObject()
+            val schema = root.optJSONObject("schema")
             if (event.isEmpty()) {
                 null
             } else {
                 RustChatEventEnvelope(
                     conversationId = root.optString("conversation_id").takeIf { it.isNotBlank() },
                     event = event,
-                    data = data
+                    data = data,
+                    eventId = root.optString("event_id").takeIf { it.isNotBlank() },
+                    schemaFamily = schema?.optString("family")?.takeIf { it.isNotBlank() },
+                    schemaMajor = schema?.takeIf { it.has("major") }?.optInt("major"),
+                    schemaMinor = schema?.takeIf { it.has("minor") }?.optInt("minor"),
+                    emittedAt = root.optString("emitted_at").takeIf { it.isNotBlank() },
                 )
             }
         }.getOrNull()

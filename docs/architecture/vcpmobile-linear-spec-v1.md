@@ -108,6 +108,9 @@ External Upstream
 ### FR-2 Typed Event Stream
 
 - Rust 对外输出稳定的 typed events
+- 所有 app-facing events 共享一个稳定 envelope：`schema + event_id + event_name + conversation_id + emitted_at + payload`
+- `event_name` 使用 canonical `snake_case`
+- 版本演进显式遵循 `schema.family/major/minor`，而不是散落在 ad-hoc 字符串或隐式兼容假设里
 - 至少包含：
   - `conversation_snapshot`
   - `conversation_node_upsert`

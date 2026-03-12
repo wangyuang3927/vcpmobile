@@ -98,6 +98,13 @@ android {
     testOptions {
         unitTests {
             isIncludeAndroidResources = true
+            all { testTask ->
+                val robolectricHome = layout.buildDirectory.dir("robolectric-home").get().asFile
+                testTask.systemProperty("user.home", robolectricHome.absolutePath)
+                testTask.doFirst {
+                    robolectricHome.mkdirs()
+                }
+            }
         }
     }
 }
