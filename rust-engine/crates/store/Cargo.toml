@@ -11,5 +11,6 @@ serde.workspace = true
 serde_json.workspace = true
 chrono.workspace = true
 uuid.workspace = true
+rusqlite.workspace = true
 vcpmobile-domain = { path = "../domain" }
 vcpmobile-protocol = { path = "../protocol" }

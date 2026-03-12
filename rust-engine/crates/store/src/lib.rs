@@ -1,3 +1,5 @@
+mod sqlite;
+
 use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fs,
@@ -11,6 +13,11 @@ use vcpmobile_domain::{
     ProviderModelCatalog,
 };
 use vcpmobile_protocol::NodeBundle;
+
+pub use sqlite::{
+    CURRENT_SCHEMA_VERSION, MigrationRecord, SqliteStore, SqliteStoreError, SqliteStoreResult,
+    migrate_sqlite_schema,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoredConversation {

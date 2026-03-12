@@ -31,3 +31,4 @@ sha2 = "0.10"
 zip = { version = "2", default-features = false, features = ["deflate"] }
 roxmltree = "0.20"
 pdf-extract = "0.7"
+rusqlite = { version = "0.32", features = ["bundled"] }
