@@ -432,6 +432,84 @@ P0 parity floor from `rib` means:
 
 Android may render subsets differently, but Rust must own the full typed truth.
 
+### 7.2.1 Markdown Rendering Boundary
+
+Markdown parity is a bounded readability floor for chat content. It applies to typed text content and to text extracted from supported document attachments. It must not become a lossy container for `reasoning`, `tool`, `image`, or `document` truth.
+
+P0 markdown includes:
+
+- paragraphs and hard line breaks
+- headings (`#` through `######`)
+- emphasis / strong / strikethrough
+- ordered and unordered lists
+- read-only task lists / checkboxes
+- block quotes
+- inline links
+- inline code
+- fenced code blocks with optional language labels
+- tables
+- inline and block math
+
+P0 markdown explicitly excludes:
+
+- raw HTML execution or arbitrary embedded web content
+- Mermaid / diagram / notebook / canvas-style renderer plugins
+- editable checkbox state
+- generated table-of-contents / footnotes / citation systems
+- copy / run / execute affordances that require a richer code widget
+
+Validation implication:
+
+- included constructs should round-trip into AST/render payloads or degrade into safe readable text without data loss
+- excluded constructs should render as inert readable content, never as executable or plugin-defined behavior
+
+### 7.2.2 Code Rendering Floor
+
+P0 code rendering is a readability contract, not an IDE contract.
+
+Required floor:
+
+- preserve whitespace, indentation, and line breaks
+- distinguish inline code from fenced code blocks
+- show the declared language when it is available
+- render fenced blocks in monospace with overflow handling that avoids truncation
+
+Not required for launch:
+
+- syntax highlighting
+- line numbers
+- copy buttons
+- code folding
+- execution or preview integrations
+
+### 7.2.3 Document-As-Prompt Ingestion Boundary
+
+Document-as-prompt is an input transform for supported attachments. It is not a general document-management or document-viewer parity effort.
+
+P0 supported document ingestion types:
+
+- `text/plain`
+- `text/markdown`
+- `application/pdf`
+- `application/vnd.openxmlformats-officedocument.wordprocessingml.document`
+- `application/vnd.openxmlformats-officedocument.presentationml.presentation`
+
+Required behavior:
+
+- keep the original message part typed as `document`
+- extract readable text from the attachment into prompt input in a deterministic, retry-safe way
+- include file identity framing so provider-bound prompt text is attributable to the source document
+- surface explicit parse failure output instead of silently dropping document content
+
+P0 explicitly excludes:
+
+- spreadsheet ingestion
+- archive traversal
+- OCR guarantees for scanned PDFs or image-only documents
+- embedded media extraction
+- preserving original layout fidelity in prompt text
+- interactive document preview parity
+
 ### 7.3 Core Invariants
 
 - `Conversation`

@@ -93,10 +93,11 @@ Stories:
 
 3. B3 Markdown/code/document ingestion
    - Objective: 对齐 `rib` 的富内容底线
-   - In scope: headings, lists, tables, checkboxes, math, fenced code, document-as-prompt
+   - In scope: paragraphs, headings, emphasis, lists, tables, checkboxes, block quotes, links, math, inline/fenced code, document-as-prompt for `txt/md/pdf/docx/pptx`
    - Acceptance:
      - markdown/code 可读性不劣化
      - 附件 document 可进入 prompt transform
+     - parity floor 是有边界的能力面，不以复制 `rib` 的全部 renderer/plugin 能力为目标
 
 4. B4 Branch/edit/regenerate UX
    - Objective: 对齐 `rib` 的 branch chat 基线

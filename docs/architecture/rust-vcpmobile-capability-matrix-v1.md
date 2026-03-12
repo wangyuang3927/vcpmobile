@@ -72,10 +72,19 @@
 
 ## 4. Immediate Implications For Tech Spec
 
+### 4.1 Markdown, Code, And Document-Ingestion Boundary
+
+- Markdown parity is a bounded readability floor for chat content, not a promise to reproduce every renderer or plugin from `rib` or `vcpchat`.
+- P0 markdown includes: paragraphs, headings, emphasis, ordered/unordered lists, read-only task lists, block quotes, links, tables, math, inline code, and fenced code.
+- P0 code rendering means: preserve whitespace and line breaks, render in monospace, keep optional language labels, and avoid truncation. Syntax highlighting, copy buttons, line numbers, and executable code affordances are optional.
+- P0 document-as-prompt scope is limited to `txt`, `md`, `pdf`, `docx`, and `pptx` attachments converted into prompt text while the original part remains typed as `document`.
+- Out of scope for this parity floor: raw HTML execution, Mermaid/diagram renderers, embedded web views, spreadsheet ingestion, OCR guarantees for scanned files, and general document-viewer parity.
+- "Match rib" here means matching the bounded user-visible floor above on a Rust-owned truth model, not inheriting its internal APIs or every adjacent capability.
+
 1. `rust-vcpmobile` should not invent a new truth model; it should deepen the current Rust model toward `rib` richness.
 2. Group chat is a real P0 system, not a later embellishment.
 3. QR onboarding is its own bounded subsystem, separate from general provider QR import/export.
 4. `vcptoolbox` compatibility belongs in adapter layers and migration contracts, not in UI truth.
-5. P0 rich-content parity means at least: typed `text/image/document/reasoning/tool` parts, branch conversation, document-as-prompt ingestion, strong markdown/code rendering, and inline tool/reasoning surfaces.
+5. P0 rich-content parity means at least: typed `text/image/document/reasoning/tool` parts, branch conversation, bounded markdown/code/document-as-prompt parity, and inline tool/reasoning surfaces.
 6. Group chat policy must preserve direct mention first, then tags, then `@所有人`, with `invite_only` disabling automatic replies.
 7. `vcptoolbox` quirks to avoid inheriting directly include special-model routing before bearer auth, raw model mismatch before redirect normalization, odd image route shape, unauthenticated plugin callback, and admin cookie assumptions.
