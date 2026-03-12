@@ -996,9 +996,11 @@ pub fn demo_stream(
 mod tests {
     use super::*;
     use std::{
+        collections::BTreeMap,
         env, fs,
         io::{Cursor, Write},
     };
+    use vcpmobile_domain::AgentId;
 
     fn test_engine() -> SessionEngine {
         let path = env::temp_dir().join(format!("vcpmobile-session-test-{}.json", Uuid::new_v4()));
@@ -1028,6 +1030,13 @@ mod tests {
         }
 
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    fn cleanup_engine_store(engine: &SessionEngine, legacy_path: Option<&std::path::Path>) {
+        fs::remove_file(engine.store().path()).ok();
+        if let Some(legacy_path) = legacy_path {
+            fs::remove_file(legacy_path).ok();
+        }
     }
 
     #[test]
@@ -1446,6 +1455,134 @@ mod tests {
     }
 
     #[test]
+    fn send_message_resumes_conversation_migrated_from_legacy_json_store() {
+        let path =
+            env::temp_dir().join(format!("vcpmobile-session-legacy-{}.json", Uuid::new_v4()));
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let user_node_id = NodeId::new_v4();
+        let assistant_node_id = NodeId::new_v4();
+        let user_variant_id = Uuid::new_v4();
+        let assistant_variant_id = Uuid::new_v4();
+        let legacy = vcpmobile_store::StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: TopicId::new_v4(),
+                        agent_id: AgentId::new_v4(),
+                        title: "legacy conversation".to_string(),
+                        summary: Some("resume me".to_string()),
+                        pinned: false,
+                        generation_state: GenerationState::Completed,
+                        current_cursor: Some(assistant_node_id),
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    nodes: vec![
+                        NodeBundle {
+                            node: MessageNode {
+                                id: user_node_id,
+                                conversation_id,
+                                parent_node_id: None,
+                                role: MessageRole::User,
+                                select_index: 0,
+                                created_at: now,
+                                updated_at: now,
+                            },
+                            variants: vec![VariantBundle {
+                                variant: MessageVariant {
+                                    id: user_variant_id,
+                                    node_id: user_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: None,
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: user_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "before resume".to_string(),
+                                    },
+                                }],
+                            }],
+                        },
+                        NodeBundle {
+                            node: MessageNode {
+                                id: assistant_node_id,
+                                conversation_id,
+                                parent_node_id: Some(user_node_id),
+                                role: MessageRole::Assistant,
+                                select_index: 0,
+                                created_at: now,
+                                updated_at: now,
+                            },
+                            variants: vec![VariantBundle {
+                                variant: MessageVariant {
+                                    id: assistant_variant_id,
+                                    node_id: assistant_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: Some("gpt-4.1-mini".to_string()),
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: assistant_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "ready".to_string(),
+                                    },
+                                }],
+                            }],
+                        },
+                    ],
+                },
+            )]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy store"),
+        )
+        .expect("write legacy store");
+
+        let engine = SessionEngine::new(FileStore::new(&path), Uuid::new_v4(), Uuid::new_v4());
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "resume".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("resume migrated conversation");
+
+        fs::remove_file(&path).ok();
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load sqlite-backed snapshot")
+            .expect("conversation exists");
+        assert_eq!(stored.nodes.len(), 4, "legacy turn should resume in sqlite");
+        assert_eq!(
+            stored.nodes[2].node.parent_node_id,
+            Some(assistant_node_id),
+            "new user turn should continue from migrated cursor"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(stored.nodes[3].node.id),
+            "current cursor should advance on resumed conversation"
+        );
+
+        cleanup_engine_store(&engine, Some(&path));
+    }
+
+    #[test]
     fn selected_node_projection_keeps_selected_variant_full_parts() {
         let now = Utc::now();
         let bundle = build_assistant_node(
@@ -1806,59 +1943,70 @@ mod tests {
 
     #[test]
     fn send_message_rejects_broken_current_cursor_state() {
-        let engine = test_engine();
+        let path =
+            env::temp_dir().join(format!("vcpmobile-session-broken-{}.json", Uuid::new_v4()));
+        let store = FileStore::new(&path);
+        let engine = SessionEngine::new(store, Uuid::new_v4(), Uuid::new_v4());
         let now = Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
         let variant_id = Uuid::new_v4();
 
-        engine
-            .store()
-            .upsert_conversation(StoredConversation {
-                conversation: Conversation {
-                    id: conversation_id,
-                    topic_id: Uuid::new_v4(),
-                    agent_id: Uuid::new_v4(),
-                    title: "broken".to_string(),
-                    summary: None,
-                    pinned: false,
-                    generation_state: GenerationState::Idle,
-                    current_cursor: Some(NodeId::new_v4()),
-                    created_at: now,
-                    updated_at: now,
-                },
-                nodes: vec![NodeBundle {
-                    node: MessageNode {
-                        id: node_id,
-                        conversation_id,
-                        parent_node_id: None,
-                        role: MessageRole::Assistant,
-                        select_index: 0,
+        let legacy = vcpmobile_store::StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: Uuid::new_v4(),
+                        agent_id: Uuid::new_v4(),
+                        title: "broken".to_string(),
+                        summary: None,
+                        pinned: false,
+                        generation_state: GenerationState::Idle,
+                        current_cursor: Some(NodeId::new_v4()),
                         created_at: now,
                         updated_at: now,
                     },
-                    variants: vec![VariantBundle {
-                        variant: MessageVariant {
-                            id: variant_id,
-                            node_id,
-                            status: VariantStatus::Completed,
-                            model_id: None,
-                            usage_json: None,
+                    nodes: vec![NodeBundle {
+                        node: MessageNode {
+                            id: node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::Assistant,
+                            select_index: 0,
                             created_at: now,
-                            finished_at: Some(now),
+                            updated_at: now,
                         },
-                        parts: vec![MessagePart {
-                            id: Uuid::new_v4(),
-                            variant_id,
-                            order_index: 0,
-                            payload: MessagePartPayload::Text {
-                                text: "old".to_string(),
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: variant_id,
+                                node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
                             },
+                            parts: vec![MessagePart {
+                                id: Uuid::new_v4(),
+                                variant_id,
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "old".to_string(),
+                                },
+                            }],
                         }],
                     }],
-                }],
-            })
-            .expect("write broken conversation");
+                },
+            )]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize broken legacy store"),
+        )
+        .expect("write broken legacy store");
 
         let error = engine
             .send_message(SessionSendRequest {
@@ -1868,11 +2016,8 @@ mod tests {
             })
             .expect_err("broken cursor must fail");
 
-        assert!(matches!(
-            error,
-            SessionError::InvalidConversationState { conversation_id: id, .. } if id == conversation_id
-        ));
-        fs::remove_file(engine.store().path()).ok();
+        assert!(matches!(error, SessionError::Store(StoreError::Sqlite(_))));
+        cleanup_engine_store(&engine, Some(&path));
     }
 
     #[test]

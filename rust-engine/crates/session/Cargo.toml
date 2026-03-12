@@ -14,6 +14,7 @@ sha2.workspace = true
 zip.workspace = true
 roxmltree.workspace = true
 pdf-extract.workspace = true
+serde_json.workspace = true
 vcpmobile-domain = { path = "../domain" }
 vcpmobile-protocol = { path = "../protocol" }
 vcpmobile-store = { path = "../store" }

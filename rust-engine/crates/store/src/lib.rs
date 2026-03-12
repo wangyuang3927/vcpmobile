@@ -233,7 +233,8 @@ impl StoreData {
 
 #[derive(Debug, Clone)]
 pub struct FileStore {
-    path: PathBuf,
+    sqlite_path: PathBuf,
+    legacy_path: PathBuf,
 }
 
 #[derive(Debug, Error)]
@@ -242,24 +243,47 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("sqlite error: {0}")]
+    Sqlite(#[from] SqliteStoreError),
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
 
 impl FileStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
-        Self { path: path.into() }
+        let requested_path = path.into();
+        let extension = requested_path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(|value| value.to_ascii_lowercase());
+
+        let (sqlite_path, legacy_path) = match extension.as_deref() {
+            Some("json") => (requested_path.with_extension("sqlite3"), requested_path),
+            Some("sqlite") | Some("sqlite3") | Some("db") => (
+                requested_path.clone(),
+                requested_path.with_extension("json"),
+            ),
+            _ => (
+                requested_path.with_extension("sqlite3"),
+                requested_path.with_extension("json"),
+            ),
+        };
+
+        Self {
+            sqlite_path,
+            legacy_path,
+        }
     }
 
     pub fn path(&self) -> &Path {
-        &self.path
+        &self.sqlite_path
     }
 
     pub fn load(&self) -> StoreResult<StoreData> {
-        if !self.path.exists() {
+        if !self.legacy_path.exists() {
             return Ok(StoreData::default());
         }
-        let raw = fs::read_to_string(&self.path)?;
+        let raw = fs::read_to_string(&self.legacy_path)?;
         if raw.trim().is_empty() {
             return Ok(StoreData::default());
         }
@@ -270,7 +294,7 @@ impl FileStore {
     }
 
     pub fn save(&self, data: &StoreData) -> StoreResult<()> {
-        if let Some(parent) = self.path.parent() {
+        if let Some(parent) = self.legacy_path.parent() {
             fs::create_dir_all(parent)?;
         }
 
@@ -278,7 +302,7 @@ impl FileStore {
         canonical.normalize_provider_configs();
 
         let raw = serde_json::to_string_pretty(&canonical)?;
-        fs::write(&self.path, raw)?;
+        fs::write(&self.legacy_path, raw)?;
         Ok(())
     }
 
@@ -286,23 +310,18 @@ impl FileStore {
         &self,
         conversation_id: ConversationId,
     ) -> StoreResult<Option<StoredConversation>> {
-        let data = self.load()?;
-        Ok(data
-            .conversations
-            .get(&conversation_id.to_string())
-            .cloned())
+        self.ensure_sqlite_conversations()?;
+        Ok(self.sqlite_store().get_conversation(conversation_id)?)
     }
 
     pub fn upsert_conversation(&self, record: StoredConversation) -> StoreResult<()> {
-        let mut data = self.load()?;
-        data.conversations
-            .insert(record.conversation.id.to_string(), record);
-        self.save(&data)
+        self.sqlite_store().replace_conversation(&record)?;
+        Ok(())
     }
 
     pub fn list_conversations(&self) -> StoreResult<Vec<StoredConversation>> {
-        let data = self.load()?;
-        Ok(data.conversations.into_values().collect())
+        self.ensure_sqlite_conversations()?;
+        Ok(self.sqlite_store().list_conversations()?)
     }
 
     pub fn list_conversation_catalog(&self) -> StoreResult<Vec<StoredConversationCatalogItem>> {
@@ -403,6 +422,25 @@ impl FileStore {
         self.save(&data)?;
         Ok(removed)
     }
+
+    fn sqlite_store(&self) -> SqliteStore {
+        SqliteStore::new(&self.sqlite_path)
+    }
+
+    fn ensure_sqlite_conversations(&self) -> StoreResult<()> {
+        let sqlite_store = self.sqlite_store();
+        if sqlite_store.has_conversations()? || !self.legacy_path.exists() {
+            return Ok(());
+        }
+
+        let data = self.load()?;
+        if data.conversations.is_empty() {
+            return Ok(());
+        }
+
+        sqlite_store.import_conversations(data.conversations.into_values())?;
+        Ok(())
+    }
 }
 
 fn cursor_resolves_to_leaf(stored: &StoredConversation) -> bool {
@@ -453,17 +491,22 @@ fn cursor_resolves_to_leaf(stored: &StoredConversation) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{env, fs};
+    use std::{collections::BTreeMap, env, fs};
     use uuid::Uuid;
     use vcpmobile_domain::{
-        AgentId, MessageNode, MessageRole, MessageVariant, PROVIDER_LOCAL_ID_PREFIX,
-        PROVIDER_PRESET_LOCAL_ID_PREFIX, ProviderAdapterKind, ProviderBodyFragment,
-        ProviderModelCatalogEntry, ProviderPreset, TopicId, VariantStatus,
+        AgentId, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
+        PROVIDER_LOCAL_ID_PREFIX, PROVIDER_PRESET_LOCAL_ID_PREFIX, ProviderAdapterKind,
+        ProviderBodyFragment, ProviderModelCatalogEntry, ProviderPreset, TopicId, VariantStatus,
     };
     use vcpmobile_protocol::VariantBundle;
 
     fn temp_store_path(name: &str) -> PathBuf {
         env::temp_dir().join(format!("vcpmobile-store-{name}-{}.json", Uuid::new_v4()))
+    }
+
+    fn cleanup_store_paths(path: &Path) {
+        fs::remove_file(path).ok();
+        fs::remove_file(path.with_extension("sqlite3")).ok();
     }
 
     fn sample_provider(display_name: &str, base_url: &str) -> ProviderConfig {
@@ -525,180 +568,299 @@ mod tests {
     }
 
     #[test]
-    fn catalog_marks_missing_cursor_conversation_not_recoverable() {
+    fn catalog_rejects_legacy_conversation_with_missing_cursor_during_sqlite_import() {
         let path = temp_store_path("missing-cursor");
-        let store = FileStore::new(&path);
         let now = chrono::Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
         let variant_id = Uuid::new_v4();
 
-        store
-            .upsert_conversation(StoredConversation {
-                conversation: Conversation {
-                    id: conversation_id,
-                    topic_id: TopicId::new_v4(),
-                    agent_id: AgentId::new_v4(),
-                    title: "broken".to_string(),
-                    summary: None,
-                    pinned: false,
-                    generation_state: GenerationState::Idle,
-                    current_cursor: Some(NodeId::new_v4()),
-                    created_at: now,
-                    updated_at: now,
-                },
-                nodes: vec![NodeBundle {
-                    node: MessageNode {
-                        id: node_id,
-                        conversation_id,
-                        parent_node_id: None,
-                        role: MessageRole::Assistant,
-                        select_index: 0,
+        let legacy = StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: TopicId::new_v4(),
+                        agent_id: AgentId::new_v4(),
+                        title: "broken".to_string(),
+                        summary: None,
+                        pinned: false,
+                        generation_state: GenerationState::Idle,
+                        current_cursor: Some(NodeId::new_v4()),
                         created_at: now,
                         updated_at: now,
                     },
-                    variants: vec![VariantBundle {
-                        variant: MessageVariant {
-                            id: variant_id,
-                            node_id,
-                            status: VariantStatus::Completed,
-                            model_id: None,
-                            usage_json: None,
+                    nodes: vec![NodeBundle {
+                        node: MessageNode {
+                            id: node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::Assistant,
+                            select_index: 0,
                             created_at: now,
-                            finished_at: Some(now),
+                            updated_at: now,
                         },
-                        parts: vec![],
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: variant_id,
+                                node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        }],
                     }],
-                }],
-            })
-            .expect("write stored conversation");
+                },
+            )]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy fixture"),
+        )
+        .expect("write legacy fixture");
 
-        let items = store
+        let store = FileStore::new(&path);
+        let error = store
             .list_conversation_catalog()
-            .expect("load catalog projection");
+            .expect_err("broken legacy cursor should fail sqlite import");
+        assert!(matches!(error, StoreError::Sqlite(_)));
 
-        assert_eq!(items.len(), 1);
-        assert!(!items[0].is_recoverable);
-
-        fs::remove_file(path).ok();
+        cleanup_store_paths(&path);
     }
 
     #[test]
-    fn catalog_marks_missing_branch_ancestor_not_recoverable() {
+    fn catalog_rejects_legacy_conversation_with_missing_branch_ancestor_during_sqlite_import() {
         let path = temp_store_path("missing-ancestor");
-        let store = FileStore::new(&path);
         let now = chrono::Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
         let variant_id = Uuid::new_v4();
 
-        store
-            .upsert_conversation(StoredConversation {
-                conversation: Conversation {
-                    id: conversation_id,
-                    topic_id: TopicId::new_v4(),
-                    agent_id: AgentId::new_v4(),
-                    title: "broken ancestry".to_string(),
-                    summary: None,
-                    pinned: false,
-                    generation_state: GenerationState::Idle,
-                    current_cursor: Some(node_id),
-                    created_at: now,
-                    updated_at: now,
-                },
-                nodes: vec![NodeBundle {
-                    node: MessageNode {
-                        id: node_id,
-                        conversation_id,
-                        parent_node_id: Some(NodeId::new_v4()),
-                        role: MessageRole::Assistant,
-                        select_index: 0,
+        let legacy = StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: TopicId::new_v4(),
+                        agent_id: AgentId::new_v4(),
+                        title: "broken ancestry".to_string(),
+                        summary: None,
+                        pinned: false,
+                        generation_state: GenerationState::Idle,
+                        current_cursor: Some(node_id),
                         created_at: now,
                         updated_at: now,
                     },
-                    variants: vec![VariantBundle {
-                        variant: MessageVariant {
-                            id: variant_id,
-                            node_id,
-                            status: VariantStatus::Completed,
-                            model_id: None,
-                            usage_json: None,
+                    nodes: vec![NodeBundle {
+                        node: MessageNode {
+                            id: node_id,
+                            conversation_id,
+                            parent_node_id: Some(NodeId::new_v4()),
+                            role: MessageRole::Assistant,
+                            select_index: 0,
                             created_at: now,
-                            finished_at: Some(now),
+                            updated_at: now,
                         },
-                        parts: vec![],
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: variant_id,
+                                node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        }],
                     }],
-                }],
-            })
-            .expect("write stored conversation");
+                },
+            )]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy fixture"),
+        )
+        .expect("write legacy fixture");
 
-        let items = store
+        let store = FileStore::new(&path);
+        let error = store
             .list_conversation_catalog()
-            .expect("load catalog projection");
+            .expect_err("broken branch ancestry should fail sqlite import");
+        assert!(matches!(error, StoreError::Sqlite(_)));
 
-        assert_eq!(items.len(), 1);
-        assert!(!items[0].is_recoverable);
-
-        fs::remove_file(path).ok();
+        cleanup_store_paths(&path);
     }
 
     #[test]
-    fn catalog_marks_invalid_selected_variant_index_not_recoverable() {
+    fn catalog_rejects_legacy_conversation_with_invalid_selected_variant_index_during_sqlite_import()
+     {
         let path = temp_store_path("invalid-select-index");
-        let store = FileStore::new(&path);
         let now = chrono::Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
         let variant_id = Uuid::new_v4();
 
-        store
-            .upsert_conversation(StoredConversation {
-                conversation: Conversation {
-                    id: conversation_id,
-                    topic_id: TopicId::new_v4(),
-                    agent_id: AgentId::new_v4(),
-                    title: "broken select index".to_string(),
-                    summary: None,
-                    pinned: false,
-                    generation_state: GenerationState::Idle,
-                    current_cursor: Some(node_id),
-                    created_at: now,
-                    updated_at: now,
-                },
-                nodes: vec![NodeBundle {
-                    node: MessageNode {
-                        id: node_id,
-                        conversation_id,
-                        parent_node_id: None,
-                        role: MessageRole::Assistant,
-                        select_index: 1,
+        let legacy = StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: TopicId::new_v4(),
+                        agent_id: AgentId::new_v4(),
+                        title: "broken select index".to_string(),
+                        summary: None,
+                        pinned: false,
+                        generation_state: GenerationState::Idle,
+                        current_cursor: Some(node_id),
                         created_at: now,
                         updated_at: now,
                     },
-                    variants: vec![VariantBundle {
-                        variant: MessageVariant {
-                            id: variant_id,
-                            node_id,
-                            status: VariantStatus::Completed,
-                            model_id: None,
-                            usage_json: None,
+                    nodes: vec![NodeBundle {
+                        node: MessageNode {
+                            id: node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::Assistant,
+                            select_index: 1,
                             created_at: now,
-                            finished_at: Some(now),
+                            updated_at: now,
                         },
-                        parts: vec![],
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: variant_id,
+                                node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        }],
                     }],
-                }],
-            })
-            .expect("write stored conversation");
+                },
+            )]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy fixture"),
+        )
+        .expect("write legacy fixture");
 
-        let items = store
+        let store = FileStore::new(&path);
+        let error = store
             .list_conversation_catalog()
-            .expect("load catalog projection");
+            .expect_err("invalid selected variant should fail sqlite import");
+        assert!(matches!(error, StoreError::Sqlite(_)));
 
-        assert_eq!(items.len(), 1);
-        assert!(!items[0].is_recoverable);
+        cleanup_store_paths(&path);
+    }
 
-        fs::remove_file(path).ok();
+    #[test]
+    fn legacy_conversation_reads_migrate_to_sqlite_and_survive_json_removal() {
+        let path = temp_store_path("legacy-conversation-import");
+        let now = chrono::Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+        let part_id = Uuid::new_v4();
+        let legacy = StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: TopicId::new_v4(),
+                        agent_id: AgentId::new_v4(),
+                        title: "legacy resume".to_string(),
+                        summary: Some("migrate me".to_string()),
+                        pinned: false,
+                        generation_state: GenerationState::Started,
+                        current_cursor: Some(node_id),
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    nodes: vec![NodeBundle {
+                        node: MessageNode {
+                            id: node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::Assistant,
+                            select_index: 0,
+                            created_at: now,
+                            updated_at: now,
+                        },
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: variant_id,
+                                node_id,
+                                status: VariantStatus::Streaming,
+                                model_id: Some("gpt-4.1-mini".to_string()),
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: None,
+                            },
+                            parts: vec![MessagePart {
+                                id: part_id,
+                                variant_id,
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "legacy payload".to_string(),
+                                },
+                            }],
+                        }],
+                    }],
+                },
+            )]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy store"),
+        )
+        .expect("write legacy store");
+
+        let store = FileStore::new(&path);
+        let loaded = store
+            .get_conversation(conversation_id)
+            .expect("load migrated conversation")
+            .expect("conversation exists");
+        assert_eq!(loaded.conversation.id, conversation_id);
+        assert_eq!(loaded.conversation.current_cursor, Some(node_id));
+        assert_eq!(loaded.nodes.len(), 1);
+        assert_eq!(loaded.nodes[0].variants[0].parts.len(), 1);
+        assert!(store.path().exists(), "sqlite truth should be materialized");
+
+        fs::remove_file(&path).ok();
+
+        let catalog = store
+            .list_conversation_catalog()
+            .expect("load catalog from sqlite after json removal");
+        assert_eq!(catalog.len(), 1);
+        assert!(catalog[0].is_recoverable);
+        assert_eq!(catalog[0].conversation_id, conversation_id);
+
+        let reloaded = store
+            .get_conversation(conversation_id)
+            .expect("reload migrated conversation")
+            .expect("conversation still exists");
+        assert_eq!(reloaded.nodes[0].variants[0].variant.id, variant_id);
+        assert_eq!(
+            reloaded.nodes[0].variants[0].parts[0].order_index, 0,
+            "sqlite-backed recovery should preserve part ordering"
+        );
+
+        cleanup_store_paths(&path);
     }
 
     #[test]

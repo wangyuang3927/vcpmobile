@@ -5,8 +5,17 @@ use std::{
     time::Duration,
 };
 
+use chrono::{DateTime, Utc};
 use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
+use uuid::Uuid;
+use vcpmobile_domain::{
+    AgentId, Conversation, ConversationId, GenerationState, MessageNode, MessagePart,
+    MessagePartPayload, MessageRole, MessageVariant, ToolPartState, TopicId, VariantStatus,
+};
+use vcpmobile_protocol::{NodeBundle, VariantBundle};
+
+use crate::StoredConversation;
 
 pub const CURRENT_SCHEMA_VERSION: i64 = 1;
 
@@ -315,6 +324,8 @@ pub enum SqliteStoreError {
     Sqlite(#[from] rusqlite::Error),
     #[error("unsupported sqlite schema version: {0}")]
     UnsupportedSchemaVersion(i64),
+    #[error("sqlite decode error: {0}")]
+    Decode(String),
 }
 
 pub type SqliteStoreResult<T> = Result<T, SqliteStoreError>;
@@ -338,6 +349,897 @@ impl SqliteStore {
         migrate_sqlite_schema(&mut connection)?;
         Ok(connection)
     }
+
+    pub fn has_conversations(&self) -> SqliteStoreResult<bool> {
+        let connection = self.open()?;
+        let count = connection.query_row("SELECT COUNT(*) FROM conversations", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(count > 0)
+    }
+
+    pub fn import_conversations<I>(&self, conversations: I) -> SqliteStoreResult<()>
+    where
+        I: IntoIterator<Item = StoredConversation>,
+    {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        for conversation in conversations {
+            replace_conversation_tx(&transaction, &conversation)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn replace_conversation(&self, record: &StoredConversation) -> SqliteStoreResult<()> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        replace_conversation_tx(&transaction, record)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn get_conversation(
+        &self,
+        conversation_id: ConversationId,
+    ) -> SqliteStoreResult<Option<StoredConversation>> {
+        let connection = self.open()?;
+        load_conversation(&connection, &conversation_id.to_string())
+    }
+
+    pub fn list_conversations(&self) -> SqliteStoreResult<Vec<StoredConversation>> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare("SELECT id FROM conversations ORDER BY updated_at DESC, rowid DESC")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut conversations = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(conversation) = load_conversation(&connection, &id)? {
+                conversations.push(conversation);
+            }
+        }
+        Ok(conversations)
+    }
+}
+
+fn replace_conversation_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    record: &StoredConversation,
+) -> SqliteStoreResult<()> {
+    let conversation = &record.conversation;
+    ensure_agent_placeholder(
+        transaction,
+        conversation.agent_id,
+        conversation.created_at,
+        conversation.updated_at,
+    )?;
+    ensure_topic_placeholder(
+        transaction,
+        conversation.topic_id,
+        conversation.agent_id,
+        conversation.created_at,
+        conversation.updated_at,
+    )?;
+
+    transaction.execute(
+        "DELETE FROM conversations WHERE id = ?1",
+        params![conversation.id.to_string()],
+    )?;
+
+    transaction.execute(
+        "INSERT INTO conversations (
+            id,
+            topic_id,
+            agent_id,
+            title,
+            summary,
+            pinned,
+            generation_state,
+            current_cursor_node_id,
+            created_at,
+            updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            conversation.id.to_string(),
+            conversation.topic_id.to_string(),
+            conversation.agent_id.to_string(),
+            conversation.title.as_str(),
+            conversation.summary.as_deref(),
+            bool_to_sqlite(conversation.pinned),
+            generation_state_to_str(conversation.generation_state),
+            conversation.current_cursor.map(|cursor| cursor.to_string()),
+            conversation.created_at.to_rfc3339(),
+            conversation.updated_at.to_rfc3339(),
+        ],
+    )?;
+
+    for bundle in &record.nodes {
+        transaction.execute(
+            "INSERT INTO message_nodes (
+                id,
+                conversation_id,
+                parent_node_id,
+                role,
+                selected_variant_ordinal,
+                created_at,
+                updated_at
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                bundle.node.id.to_string(),
+                bundle.node.conversation_id.to_string(),
+                bundle.node.parent_node_id.map(|parent| parent.to_string()),
+                message_role_to_str(bundle.node.role),
+                bundle.node.select_index as i64,
+                bundle.node.created_at.to_rfc3339(),
+                bundle.node.updated_at.to_rfc3339(),
+            ],
+        )?;
+
+        for (ordinal, variant_bundle) in bundle.variants.iter().enumerate() {
+            transaction.execute(
+                "INSERT INTO message_variants (
+                    id,
+                    node_id,
+                    ordinal,
+                    status,
+                    model_id,
+                    usage_json,
+                    created_at,
+                    finished_at
+                ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    variant_bundle.variant.id.to_string(),
+                    variant_bundle.variant.node_id.to_string(),
+                    ordinal as i64,
+                    variant_status_to_str(variant_bundle.variant.status),
+                    variant_bundle.variant.model_id.as_deref(),
+                    variant_bundle.variant.usage_json.as_deref(),
+                    variant_bundle.variant.created_at.to_rfc3339(),
+                    variant_bundle
+                        .variant
+                        .finished_at
+                        .map(|value| value.to_rfc3339()),
+                ],
+            )?;
+
+            for part in &variant_bundle.parts {
+                insert_message_part(transaction, part)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn ensure_agent_placeholder(
+    transaction: &rusqlite::Transaction<'_>,
+    agent_id: AgentId,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> SqliteStoreResult<()> {
+    let agent_id = agent_id.to_string();
+    let created_at = created_at.to_rfc3339();
+    let updated_at = updated_at.to_rfc3339();
+    let title = format!("Agent {}", short_id(&agent_id));
+    transaction.execute(
+        "INSERT OR IGNORE INTO agents (id, name, description, created_at, updated_at)
+         VALUES (?1, ?2, '', ?3, ?4)",
+        params![agent_id, title, created_at, updated_at],
+    )?;
+    Ok(())
+}
+
+fn ensure_topic_placeholder(
+    transaction: &rusqlite::Transaction<'_>,
+    topic_id: TopicId,
+    agent_id: AgentId,
+    created_at: DateTime<Utc>,
+    updated_at: DateTime<Utc>,
+) -> SqliteStoreResult<()> {
+    let topic_id = topic_id.to_string();
+    let title = format!("Topic {}", short_id(&topic_id));
+    transaction.execute(
+        "INSERT OR IGNORE INTO topics (id, agent_id, title, created_at, updated_at)
+         VALUES (?1, ?2, ?3, ?4, ?5)",
+        params![
+            topic_id,
+            agent_id.to_string(),
+            title,
+            created_at.to_rfc3339(),
+            updated_at.to_rfc3339(),
+        ],
+    )?;
+    Ok(())
+}
+
+fn insert_message_part(
+    transaction: &rusqlite::Transaction<'_>,
+    part: &MessagePart,
+) -> SqliteStoreResult<()> {
+    let (
+        kind,
+        text_value,
+        file_name,
+        url,
+        mime,
+        alt_text,
+        tool_name,
+        tool_call_id,
+        tool_state,
+        input_json,
+        output_json,
+        error_message,
+        source_text,
+        language,
+    ) = match &part.payload {
+        MessagePartPayload::Text { text } => (
+            "text",
+            Some(text.as_str()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::Reasoning { text } => (
+            "reasoning",
+            Some(text.as_str()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::ToolCall {
+            tool_name,
+            arguments_json,
+        } => (
+            "tool_call",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(tool_name.as_str()),
+            None,
+            None,
+            Some(arguments_json.as_str()),
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::ToolResult {
+            tool_name,
+            result_json,
+        } => (
+            "tool_result",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(tool_name.as_str()),
+            None,
+            None,
+            None,
+            Some(result_json.as_str()),
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::Image { url, mime, alt } => (
+            "image",
+            None,
+            None,
+            Some(url.as_str()),
+            mime.as_deref(),
+            alt.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::Document {
+            file_name,
+            url,
+            mime,
+        } => (
+            "document",
+            None,
+            Some(file_name.as_str()),
+            Some(url.as_str()),
+            mime.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::Tool {
+            tool_call_id,
+            tool_name,
+            state,
+            input_json,
+            output_json,
+            error_message,
+        } => (
+            "tool",
+            None,
+            None,
+            None,
+            None,
+            None,
+            Some(tool_name.as_str()),
+            tool_call_id.as_deref(),
+            Some(tool_state_to_str(*state)),
+            Some(input_json.as_str()),
+            output_json.as_deref(),
+            error_message.as_deref(),
+            None,
+            None,
+        ),
+        MessagePartPayload::File { name, url, mime } => (
+            "file",
+            None,
+            Some(name.as_str()),
+            Some(url.as_str()),
+            mime.as_deref(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::Quote { text, source } => (
+            "quote",
+            Some(text.as_str()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            source.as_deref(),
+            None,
+        ),
+        MessagePartPayload::CodeBlock { language, code } => (
+            "code_block",
+            Some(code.as_str()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            language.as_deref(),
+        ),
+        MessagePartPayload::MarkdownBlock { markdown } => (
+            "markdown_block",
+            Some(markdown.as_str()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+        MessagePartPayload::Error { message } => (
+            "error",
+            Some(message.as_str()),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        ),
+    };
+
+    transaction.execute(
+        "INSERT INTO message_parts (
+            id,
+            variant_id,
+            order_index,
+            kind,
+            text_value,
+            file_name,
+            url,
+            mime,
+            alt_text,
+            tool_name,
+            tool_call_id,
+            tool_state,
+            input_json,
+            output_json,
+            error_message,
+            source_text,
+            language
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17)",
+        params![
+            part.id.to_string(),
+            part.variant_id.to_string(),
+            part.order_index,
+            kind,
+            text_value,
+            file_name,
+            url,
+            mime,
+            alt_text,
+            tool_name,
+            tool_call_id,
+            tool_state,
+            input_json,
+            output_json,
+            error_message,
+            source_text,
+            language,
+        ],
+    )?;
+    Ok(())
+}
+
+fn load_conversation(
+    connection: &Connection,
+    conversation_id: &str,
+) -> SqliteStoreResult<Option<StoredConversation>> {
+    let raw_conversation = connection
+        .query_row(
+            "SELECT
+                id,
+                topic_id,
+                agent_id,
+                title,
+                summary,
+                pinned,
+                generation_state,
+                current_cursor_node_id,
+                created_at,
+                updated_at
+             FROM conversations
+             WHERE id = ?1",
+            params![conversation_id],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, Option<String>>(4)?,
+                    row.get::<_, i64>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, Option<String>>(7)?,
+                    row.get::<_, String>(8)?,
+                    row.get::<_, String>(9)?,
+                ))
+            },
+        )
+        .optional()?;
+
+    let Some(raw_conversation) = raw_conversation else {
+        return Ok(None);
+    };
+    let conversation = Conversation {
+        id: parse_uuid(&raw_conversation.0, "conversations.id")?,
+        topic_id: parse_uuid(&raw_conversation.1, "conversations.topic_id")?,
+        agent_id: parse_uuid(&raw_conversation.2, "conversations.agent_id")?,
+        title: raw_conversation.3,
+        summary: raw_conversation.4,
+        pinned: sqlite_bool(raw_conversation.5),
+        generation_state: parse_generation_state(&raw_conversation.6)?,
+        current_cursor: raw_conversation
+            .7
+            .map(|value| parse_uuid(&value, "conversations.current_cursor_node_id"))
+            .transpose()?,
+        created_at: parse_timestamp(&raw_conversation.8, "conversations.created_at")?,
+        updated_at: parse_timestamp(&raw_conversation.9, "conversations.updated_at")?,
+    };
+
+    let mut node_statement = connection.prepare(
+        "SELECT
+            id,
+            parent_node_id,
+            role,
+            selected_variant_ordinal,
+            created_at,
+            updated_at
+         FROM message_nodes
+         WHERE conversation_id = ?1
+         ORDER BY rowid ASC",
+    )?;
+    let node_rows = node_statement.query_map(params![conversation_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, i64>(3)?,
+            row.get::<_, String>(4)?,
+            row.get::<_, String>(5)?,
+        ))
+    })?;
+
+    let mut nodes = Vec::new();
+    for row in node_rows {
+        let (node_id, parent_node_id, role, selected_variant_ordinal, created_at, updated_at) =
+            row?;
+        let variants = load_variants(connection, &node_id)?;
+        nodes.push(NodeBundle {
+            node: MessageNode {
+                id: parse_uuid(&node_id, "message_nodes.id")?,
+                conversation_id: conversation.id,
+                parent_node_id: parent_node_id
+                    .map(|value| parse_uuid(&value, "message_nodes.parent_node_id"))
+                    .transpose()?,
+                role: parse_message_role(&role)?,
+                select_index: selected_variant_ordinal as usize,
+                created_at: parse_timestamp(&created_at, "message_nodes.created_at")?,
+                updated_at: parse_timestamp(&updated_at, "message_nodes.updated_at")?,
+            },
+            variants,
+        });
+    }
+
+    Ok(Some(StoredConversation {
+        conversation,
+        nodes,
+    }))
+}
+
+fn load_variants(connection: &Connection, node_id: &str) -> SqliteStoreResult<Vec<VariantBundle>> {
+    let mut variant_statement = connection.prepare(
+        "SELECT
+            id,
+            ordinal,
+            status,
+            model_id,
+            usage_json,
+            created_at,
+            finished_at
+         FROM message_variants
+         WHERE node_id = ?1
+         ORDER BY ordinal ASC",
+    )?;
+    let variant_rows = variant_statement.query_map(params![node_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i64>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, String>(5)?,
+            row.get::<_, Option<String>>(6)?,
+        ))
+    })?;
+
+    let mut variants = Vec::new();
+    for row in variant_rows {
+        let (variant_id, _ordinal, status, model_id, usage_json, created_at, finished_at) = row?;
+        variants.push(VariantBundle {
+            variant: MessageVariant {
+                id: parse_uuid(&variant_id, "message_variants.id")?,
+                node_id: parse_uuid(node_id, "message_variants.node_id")?,
+                status: parse_variant_status(&status)?,
+                model_id,
+                usage_json,
+                created_at: parse_timestamp(&created_at, "message_variants.created_at")?,
+                finished_at: finished_at
+                    .as_deref()
+                    .map(|value| parse_timestamp(value, "message_variants.finished_at"))
+                    .transpose()?,
+            },
+            parts: load_parts(connection, &variant_id)?,
+        });
+    }
+
+    Ok(variants)
+}
+
+fn load_parts(connection: &Connection, variant_id: &str) -> SqliteStoreResult<Vec<MessagePart>> {
+    let mut part_statement = connection.prepare(
+        "SELECT
+            id,
+            order_index,
+            kind,
+            text_value,
+            file_name,
+            url,
+            mime,
+            alt_text,
+            tool_name,
+            tool_call_id,
+            tool_state,
+            input_json,
+            output_json,
+            error_message,
+            source_text,
+            language
+         FROM message_parts
+         WHERE variant_id = ?1
+         ORDER BY order_index ASC",
+    )?;
+    let part_rows = part_statement.query_map(params![variant_id], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, i32>(1)?,
+            row.get::<_, String>(2)?,
+            row.get::<_, Option<String>>(3)?,
+            row.get::<_, Option<String>>(4)?,
+            row.get::<_, Option<String>>(5)?,
+            row.get::<_, Option<String>>(6)?,
+            row.get::<_, Option<String>>(7)?,
+            row.get::<_, Option<String>>(8)?,
+            row.get::<_, Option<String>>(9)?,
+            row.get::<_, Option<String>>(10)?,
+            row.get::<_, Option<String>>(11)?,
+            row.get::<_, Option<String>>(12)?,
+            row.get::<_, Option<String>>(13)?,
+            row.get::<_, Option<String>>(14)?,
+            row.get::<_, Option<String>>(15)?,
+        ))
+    })?;
+
+    let mut parts = Vec::new();
+    for row in part_rows {
+        let (
+            part_id,
+            order_index,
+            kind,
+            text_value,
+            file_name,
+            url,
+            mime,
+            alt_text,
+            tool_name,
+            tool_call_id,
+            tool_state,
+            input_json,
+            output_json,
+            error_message,
+            source_text,
+            language,
+        ) = row?;
+
+        let payload = match kind.as_str() {
+            "text" => MessagePartPayload::Text {
+                text: required_value(text_value, "message_parts.text_value")?,
+            },
+            "reasoning" => MessagePartPayload::Reasoning {
+                text: required_value(text_value, "message_parts.text_value")?,
+            },
+            "tool_call" => MessagePartPayload::ToolCall {
+                tool_name: required_value(tool_name, "message_parts.tool_name")?,
+                arguments_json: required_value(input_json, "message_parts.input_json")?,
+            },
+            "tool_result" => MessagePartPayload::ToolResult {
+                tool_name: required_value(tool_name, "message_parts.tool_name")?,
+                result_json: required_value(output_json, "message_parts.output_json")?,
+            },
+            "image" => MessagePartPayload::Image {
+                url: required_value(url, "message_parts.url")?,
+                mime,
+                alt: alt_text,
+            },
+            "document" => MessagePartPayload::Document {
+                file_name: required_value(file_name, "message_parts.file_name")?,
+                url: required_value(url, "message_parts.url")?,
+                mime,
+            },
+            "tool" => MessagePartPayload::Tool {
+                tool_call_id,
+                tool_name: required_value(tool_name, "message_parts.tool_name")?,
+                state: parse_tool_state(&required_value(tool_state, "message_parts.tool_state")?)?,
+                input_json: required_value(input_json, "message_parts.input_json")?,
+                output_json,
+                error_message,
+            },
+            "file" => MessagePartPayload::File {
+                name: required_value(file_name, "message_parts.file_name")?,
+                url: required_value(url, "message_parts.url")?,
+                mime,
+            },
+            "quote" => MessagePartPayload::Quote {
+                text: required_value(text_value, "message_parts.text_value")?,
+                source: source_text,
+            },
+            "code_block" => MessagePartPayload::CodeBlock {
+                language,
+                code: required_value(text_value, "message_parts.text_value")?,
+            },
+            "markdown_block" => MessagePartPayload::MarkdownBlock {
+                markdown: required_value(text_value, "message_parts.text_value")?,
+            },
+            "error" => MessagePartPayload::Error {
+                message: required_value(text_value, "message_parts.text_value")?,
+            },
+            other => {
+                return Err(SqliteStoreError::Decode(format!(
+                    "unsupported message_parts.kind `{other}`"
+                )));
+            }
+        };
+
+        parts.push(MessagePart {
+            id: parse_uuid(&part_id, "message_parts.id")?,
+            variant_id: parse_uuid(variant_id, "message_parts.variant_id")?,
+            order_index,
+            payload,
+        });
+    }
+
+    Ok(parts)
+}
+
+fn bool_to_sqlite(value: bool) -> i64 {
+    if value { 1 } else { 0 }
+}
+
+fn sqlite_bool(value: i64) -> bool {
+    value != 0
+}
+
+fn generation_state_to_str(value: GenerationState) -> &'static str {
+    match value {
+        GenerationState::Idle => "idle",
+        GenerationState::Requesting => "requesting",
+        GenerationState::Started => "started",
+        GenerationState::Streaming => "streaming",
+        GenerationState::Completed => "completed",
+        GenerationState::Failed => "failed",
+        GenerationState::Cancelled => "cancelled",
+    }
+}
+
+fn parse_generation_state(value: &str) -> SqliteStoreResult<GenerationState> {
+    match value {
+        "idle" => Ok(GenerationState::Idle),
+        "requesting" => Ok(GenerationState::Requesting),
+        "started" => Ok(GenerationState::Started),
+        "streaming" => Ok(GenerationState::Streaming),
+        "completed" => Ok(GenerationState::Completed),
+        "failed" => Ok(GenerationState::Failed),
+        "cancelled" => Ok(GenerationState::Cancelled),
+        other => Err(SqliteStoreError::Decode(format!(
+            "unsupported generation_state `{other}`"
+        ))),
+    }
+}
+
+fn message_role_to_str(value: MessageRole) -> &'static str {
+    match value {
+        MessageRole::User => "user",
+        MessageRole::Assistant => "assistant",
+        MessageRole::System => "system",
+        MessageRole::Tool => "tool",
+    }
+}
+
+fn parse_message_role(value: &str) -> SqliteStoreResult<MessageRole> {
+    match value {
+        "user" => Ok(MessageRole::User),
+        "assistant" => Ok(MessageRole::Assistant),
+        "system" => Ok(MessageRole::System),
+        "tool" => Ok(MessageRole::Tool),
+        other => Err(SqliteStoreError::Decode(format!(
+            "unsupported message role `{other}`"
+        ))),
+    }
+}
+
+fn variant_status_to_str(value: VariantStatus) -> &'static str {
+    match value {
+        VariantStatus::Streaming => "streaming",
+        VariantStatus::Completed => "completed",
+        VariantStatus::Failed => "failed",
+        VariantStatus::Cancelled => "cancelled",
+    }
+}
+
+fn parse_variant_status(value: &str) -> SqliteStoreResult<VariantStatus> {
+    match value {
+        "streaming" => Ok(VariantStatus::Streaming),
+        "completed" => Ok(VariantStatus::Completed),
+        "failed" => Ok(VariantStatus::Failed),
+        "cancelled" => Ok(VariantStatus::Cancelled),
+        other => Err(SqliteStoreError::Decode(format!(
+            "unsupported variant status `{other}`"
+        ))),
+    }
+}
+
+fn tool_state_to_str(value: ToolPartState) -> &'static str {
+    match value {
+        ToolPartState::Pending => "pending",
+        ToolPartState::Running => "running",
+        ToolPartState::Completed => "completed",
+        ToolPartState::Failed => "failed",
+    }
+}
+
+fn parse_tool_state(value: &str) -> SqliteStoreResult<ToolPartState> {
+    match value {
+        "pending" => Ok(ToolPartState::Pending),
+        "running" => Ok(ToolPartState::Running),
+        "completed" => Ok(ToolPartState::Completed),
+        "failed" => Ok(ToolPartState::Failed),
+        other => Err(SqliteStoreError::Decode(format!(
+            "unsupported tool state `{other}`"
+        ))),
+    }
+}
+
+fn parse_uuid<T>(value: &str, field: &str) -> SqliteStoreResult<T>
+where
+    T: From<Uuid>,
+{
+    Uuid::parse_str(value).map(T::from).map_err(|error| {
+        SqliteStoreError::Decode(format!("{field} invalid uuid `{value}`: {error}"))
+    })
+}
+
+fn parse_timestamp(value: &str, field: &str) -> SqliteStoreResult<DateTime<Utc>> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|timestamp| timestamp.with_timezone(&Utc))
+        .map_err(|error| {
+            SqliteStoreError::Decode(format!("{field} invalid timestamp `{value}`: {error}"))
+        })
+}
+
+fn required_value(value: Option<String>, field: &str) -> SqliteStoreResult<String> {
+    value.ok_or_else(|| SqliteStoreError::Decode(format!("missing required field `{field}`")))
+}
+
+fn short_id(value: &str) -> &str {
+    value.get(..8).unwrap_or(value)
 }
 
 pub fn migrate_sqlite_schema(connection: &mut Connection) -> SqliteStoreResult<()> {
