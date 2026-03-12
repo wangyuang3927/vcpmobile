@@ -16,7 +16,7 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 use vcpmobile_domain::{ConversationId, GenerationState};
-use vcpmobile_protocol::{ChatEvent, EventEnvelope};
+use vcpmobile_protocol::{ChatEvent, EventEnvelope, SnapshotBranch, SnapshotConversation};
 use vcpmobile_session::{
     SessionEngine, SessionSendRequest, demo_conversation, selected_branch_snapshot_nodes,
 };
@@ -216,13 +216,16 @@ async fn chat_stream(
     let events = vec![EventEnvelope::new(
         Some(stored.conversation.id),
         ChatEvent::ConversationSnapshot {
-            conversation: stored.conversation.clone(),
-            nodes: selected_branch_snapshot_nodes(&stored).map_err(|error| {
-                (
-                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                    error.to_string(),
-                )
-            })?,
+            conversation: SnapshotConversation::from(&stored.conversation),
+            branch: SnapshotBranch {
+                cursor_node_id: stored.conversation.current_cursor,
+                nodes: selected_branch_snapshot_nodes(&stored).map_err(|error| {
+                    (
+                        axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                        error.to_string(),
+                    )
+                })?,
+            },
         },
     )];
 

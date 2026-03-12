@@ -2,7 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use vcpmobile_domain::{
-    Conversation, ConversationId, DraftState, MessageNode, MessagePart, MessageVariant, NodeId,
+    AgentId, Conversation, ConversationId, DraftState, GenerationState, MessageNode, MessagePart,
+    MessagePartPayload, MessageRole, MessageVariant, NodeId, PartId, TopicId, VariantId,
+    VariantStatus,
 };
 
 pub const CHAT_EVENT_SCHEMA_FAMILY: &str = "chat_event";
@@ -64,11 +66,11 @@ pub enum ChatEvent {
     /// Recovery/hydration surfaces and live send flows both use this event to materialize the
     /// complete currently selected branch from root to `Conversation.current_cursor`.
     ConversationSnapshot {
-        conversation: Conversation,
-        nodes: Vec<NodeBundle>,
+        conversation: SnapshotConversation,
+        branch: SnapshotBranch,
     },
     ConversationNodeUpsert {
-        node: NodeBundle,
+        node: SnapshotNode,
     },
     /// Selection-only mutation for an existing node.
     ///
@@ -133,6 +135,7 @@ impl NamedEvent for ChatEvent {
             Self::GenerationPartDelta { .. } => "generation_part_delta",
             Self::GenerationCompleted { .. } => "generation_completed",
             Self::GenerationFailed { .. } => "generation_failed",
+            Self::GenerationCancelled { .. } => "generation_cancelled",
             Self::DraftUpdated { .. } => "draft_updated",
             Self::DraftCleared { .. } => "draft_cleared",
             Self::AuthQrPlaceholder { .. } => "auth_qr_placeholder",
@@ -141,12 +144,11 @@ impl NamedEvent for ChatEvent {
     }
 }
 
-/// Transport shape for one node plus its variants.
+/// Rust/store transport shape for one node plus its variants.
 ///
 /// Canonical Rust/store truth may include every variant and use `node.select_index` against the
-/// full `variants` array. Client-facing selected-only projections must include exactly one variant
-/// and normalize `node.select_index` to `0` so the bundle stays self-consistent without Android
-/// fallback guesses.
+/// full `variants` array. App-facing payloads should project this into `SnapshotNode` so clients
+/// do not need to infer branch semantics from hidden variants.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeBundle {
     pub node: MessageNode,
@@ -158,6 +160,90 @@ pub struct NodeBundle {
 pub struct VariantBundle {
     pub variant: MessageVariant,
     pub parts: Vec<MessagePart>,
+}
+
+/// Stable conversation header carried by app-facing snapshot events.
+///
+/// This freezes the public JSON contract independently from the Rust-owned domain structs while
+/// still mirroring the same truth.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SnapshotConversation {
+    pub id: ConversationId,
+    pub topic_id: TopicId,
+    pub agent_id: AgentId,
+    pub title: String,
+    pub summary: Option<String>,
+    pub pinned: bool,
+    pub generation_state: GenerationState,
+    pub current_cursor: Option<NodeId>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+impl From<&Conversation> for SnapshotConversation {
+    fn from(value: &Conversation) -> Self {
+        Self {
+            id: value.id,
+            topic_id: value.topic_id,
+            agent_id: value.agent_id,
+            title: value.title.clone(),
+            summary: value.summary.clone(),
+            pinned: value.pinned,
+            generation_state: value.generation_state,
+            current_cursor: value.current_cursor,
+            created_at: value.created_at,
+            updated_at: value.updated_at,
+        }
+    }
+}
+
+/// Selected-branch projection for app-facing snapshot payloads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotBranch {
+    pub cursor_node_id: Option<NodeId>,
+    pub nodes: Vec<SnapshotNode>,
+}
+
+/// Selected node shape used by snapshot/upsert payloads.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotNode {
+    pub node_id: NodeId,
+    pub parent_node_id: Option<NodeId>,
+    pub role: MessageRole,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub selected_variant: SnapshotVariant,
+}
+
+/// Selected variant truth surfaced to Android.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotVariant {
+    pub variant_id: VariantId,
+    pub status: VariantStatus,
+    pub model_id: Option<String>,
+    pub usage_json: Option<String>,
+    pub created_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub parts: Vec<SnapshotPart>,
+}
+
+/// Stable selected-part shape. The containing selected variant already establishes ancestry, so
+/// app-facing payloads do not need to infer it from repeated container IDs.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct SnapshotPart {
+    pub part_id: PartId,
+    pub order_index: i32,
+    pub payload: MessagePartPayload,
+}
+
+impl From<&MessagePart> for SnapshotPart {
+    fn from(value: &MessagePart) -> Self {
+        Self {
+            part_id: value.id,
+            order_index: value.order_index,
+            payload: value.payload.clone(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -175,10 +261,15 @@ pub struct SendMessageRequest {
 
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use serde_json::Value;
     use uuid::Uuid;
+    use vcpmobile_domain::{GenerationState, MessagePartPayload, MessageRole, VariantStatus};
 
-    use super::{ChatEvent, EventEnvelope, EventSchema, NamedEvent};
+    use super::{
+        ChatEvent, EventEnvelope, EventSchema, NamedEvent, SnapshotBranch, SnapshotConversation,
+        SnapshotNode, SnapshotPart, SnapshotVariant,
+    };
 
     #[test]
     fn chat_event_names_are_canonical_snake_case() {
@@ -209,6 +300,14 @@ mod tests {
                     conversation_id: Uuid::nil(),
                 },
                 "draft_cleared",
+            ),
+            (
+                ChatEvent::GenerationCancelled {
+                    node_id: Uuid::nil(),
+                    variant_id: Uuid::nil(),
+                    message: None,
+                },
+                "generation_cancelled",
             ),
             (
                 ChatEvent::EngineError {
@@ -247,6 +346,73 @@ mod tests {
         assert!(
             serialized["event_id"].as_str().is_some(),
             "outer envelope must carry a stable event identity"
+        );
+    }
+
+    #[test]
+    fn conversation_snapshot_payload_uses_stable_selected_branch_shape() {
+        let now = Utc::now();
+        let envelope = EventEnvelope::new(
+            Some(Uuid::nil()),
+            ChatEvent::ConversationSnapshot {
+                conversation: SnapshotConversation {
+                    id: Uuid::nil(),
+                    topic_id: Uuid::nil(),
+                    agent_id: Uuid::nil(),
+                    title: "demo".to_string(),
+                    summary: None,
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: Some(Uuid::nil()),
+                    created_at: now,
+                    updated_at: now,
+                },
+                branch: SnapshotBranch {
+                    cursor_node_id: Some(Uuid::nil()),
+                    nodes: vec![SnapshotNode {
+                        node_id: Uuid::nil(),
+                        parent_node_id: None,
+                        role: MessageRole::Assistant,
+                        created_at: now,
+                        updated_at: now,
+                        selected_variant: SnapshotVariant {
+                            variant_id: Uuid::nil(),
+                            status: VariantStatus::Completed,
+                            model_id: Some("demo-model".to_string()),
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                            parts: vec![SnapshotPart {
+                                part_id: Uuid::nil(),
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "hello".to_string(),
+                                },
+                            }],
+                        },
+                    }],
+                },
+            },
+        );
+
+        let serialized: Value = serde_json::to_value(&envelope).expect("serialize envelope");
+
+        assert!(serialized["payload"]["data"]["nodes"].is_null());
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["cursor_node_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["nodes"][0]["node_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["nodes"][0]["selected_variant"]["variant_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["nodes"][0]["selected_variant"]["parts"][0]["part_id"],
+            Value::String(Uuid::nil().to_string())
         );
     }
 }

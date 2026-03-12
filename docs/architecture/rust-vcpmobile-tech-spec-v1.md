@@ -225,6 +225,103 @@ Rules:
 - `schema.minor` increments for backward-compatible additions: new optional fields, new event
   types, or additive payload data that old clients may ignore safely.
 
+#### `conversation_snapshot` payload shape
+
+`conversation_snapshot` freezes the selected-branch projection rather than exposing raw
+store/domain node bundles:
+
+```json
+{
+  "event": "conversation_snapshot",
+  "data": {
+    "conversation": {
+      "id": "uuid",
+      "topic_id": "uuid",
+      "agent_id": "uuid",
+      "title": "string",
+      "summary": "string|null",
+      "pinned": false,
+      "generation_state": "idle|streaming|waiting_tool|failed",
+      "current_cursor": "node-uuid|null",
+      "created_at": "RFC3339 timestamp",
+      "updated_at": "RFC3339 timestamp"
+    },
+    "branch": {
+      "cursor_node_id": "node-uuid|null",
+      "nodes": [
+        {
+          "node_id": "node-uuid",
+          "parent_node_id": "node-uuid|null",
+          "role": "user|assistant|system|tool",
+          "created_at": "RFC3339 timestamp",
+          "updated_at": "RFC3339 timestamp",
+          "selected_variant": {
+            "variant_id": "variant-uuid",
+            "status": "streaming|completed|failed|cancelled",
+            "model_id": "string|null",
+            "usage_json": "string|null",
+            "created_at": "RFC3339 timestamp",
+            "finished_at": "RFC3339 timestamp|null",
+            "parts": [
+              {
+                "part_id": "part-uuid",
+                "order_index": 0,
+                "payload": {}
+              }
+            ]
+          }
+        }
+      ]
+    }
+  }
+}
+```
+
+#### `conversation_node_upsert` payload shape
+
+`conversation_node_upsert` reuses the same selected-node projection so Android can replace the
+node truth directly instead of interpreting `variants[]` + `select_index`:
+
+```json
+{
+  "event": "conversation_node_upsert",
+  "data": {
+    "node": {
+      "node_id": "node-uuid",
+      "parent_node_id": "node-uuid|null",
+      "role": "user|assistant|system|tool",
+      "created_at": "RFC3339 timestamp",
+      "updated_at": "RFC3339 timestamp",
+      "selected_variant": {
+        "variant_id": "variant-uuid",
+        "status": "streaming|completed|failed|cancelled",
+        "model_id": "string|null",
+        "usage_json": "string|null",
+        "created_at": "RFC3339 timestamp",
+        "finished_at": "RFC3339 timestamp|null",
+        "parts": [
+          {
+            "part_id": "part-uuid",
+            "order_index": 0,
+            "payload": {}
+          }
+        ]
+      }
+    }
+  }
+}
+```
+
+Rules:
+
+- Snapshot and upsert payloads are selected-only projections. They do not expose a `variants` array
+  or `select_index`.
+- `branch.cursor_node_id` duplicates `conversation.current_cursor` on purpose so branch selection
+  stays explicit at the protocol boundary.
+- `parent_node_id` is always a node identity; variants never encode branch ancestry.
+- `parts` are ordered by `order_index` and carried inside the selected variant, so Android never
+  needs to infer which branch/variant owns them.
+
 ### 6.3 `store`
 
 Moves from JSON file store to SQLite-backed durable truth.

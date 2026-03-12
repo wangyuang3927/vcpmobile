@@ -309,20 +309,22 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
-                              "nodes":[
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "nodes":[
                                 {
-                                  "node":{"id":"node-stream","role":"assistant","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-stream"},
-                                      "parts":[
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-stream",
+                                    "parts":[
                                         {"payload":{"type":"reasoning","text":"thinking"}},
                                         {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 }
-                              ]
+                                ]
+                              }
                             }
                           }
                         }
@@ -404,31 +406,32 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
-                              "nodes":[
+                              "branch":{
+                                "cursor_node_id":"node-assistant",
+                                "nodes":[
                                 {
-                                  "node":{"id":"node-user","role":"user","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-user"},
-                                      "parts":[
+                                  "node_id":"node-user",
+                                  "role":"user",
+                                  "selected_variant":{
+                                    "variant_id":"variant-user",
+                                    "parts":[
                                         {"payload":{"type":"text","text":"stream me"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 },
                                 {
-                                  "node":{"id":"node-assistant","role":"assistant","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-assistant"},
-                                      "parts":[
+                                  "node_id":"node-assistant",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-assistant",
+                                    "parts":[
                                         {"payload":{"type":"reasoning","text":"thinking"}},
                                         {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 }
-                              ]
+                                ]
+                              }
                             }
                           }
                         }
@@ -476,19 +479,21 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
-                              "nodes":[
+                              "branch":{
+                                "cursor_node_id":"node-user",
+                                "nodes":[
                                 {
-                                  "node":{"id":"node-user","role":"user","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-user"},
-                                      "parts":[
+                                  "node_id":"node-user",
+                                  "role":"user",
+                                  "selected_variant":{
+                                    "variant_id":"variant-user",
+                                    "parts":[
                                         {"payload":{"type":"text","text":"stream me"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 }
-                              ]
+                                ]
+                              }
                             }
                           }
                         }
@@ -529,41 +534,41 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
-                              "nodes":[
+                              "branch":{
+                                "cursor_node_id":"node-user-new",
+                                "nodes":[
                                 {
-                                  "node":{"id":"node-user-old","role":"user","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-user-old"},
-                                      "parts":[
+                                  "node_id":"node-user-old",
+                                  "role":"user",
+                                  "selected_variant":{
+                                    "variant_id":"variant-user-old",
+                                    "parts":[
                                         {"payload":{"type":"text","text":"older prompt"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 },
                                 {
-                                  "node":{"id":"node-assistant-old","role":"assistant","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-assistant-old"},
-                                      "parts":[
+                                  "node_id":"node-assistant-old",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-assistant-old",
+                                    "parts":[
                                         {"payload":{"type":"markdown_block","markdown":"older reply"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 },
                                 {
-                                  "node":{"id":"node-user-new","role":"user","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-user-new"},
-                                      "parts":[
+                                  "node_id":"node-user-new",
+                                  "role":"user",
+                                  "selected_variant":{
+                                    "variant_id":"variant-user-new",
+                                    "parts":[
                                         {"payload":{"type":"text","text":"latest prompt"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 }
-                              ]
+                                ]
+                              }
                             }
                           }
                         }
@@ -633,30 +638,31 @@ class ChatViewModelRecoveryTest {
                               "payload":{
                                 "event":"conversation_snapshot",
                                 "data":{
-                                  "nodes":[
+                                  "branch":{
+                                    "cursor_node_id":"node-assistant",
+                                    "nodes":[
                                     {
-                                      "node":{"id":"node-user","role":"user","select_index":0},
-                                      "variants":[
-                                        {
-                                          "variant":{"id":"variant-user"},
-                                          "parts":[
+                                      "node_id":"node-user",
+                                      "role":"user",
+                                      "selected_variant":{
+                                        "variant_id":"variant-user",
+                                        "parts":[
                                             {"payload":{"type":"text","text":"same text"}}
-                                          ]
-                                        }
-                                      ]
+                                        ]
+                                      }
                                     },
                                     {
-                                      "node":{"id":"node-assistant","role":"assistant","select_index":0},
-                                      "variants":[
-                                        {
-                                          "variant":{"id":"variant-assistant"},
-                                          "parts":[
+                                      "node_id":"node-assistant",
+                                      "role":"assistant",
+                                      "selected_variant":{
+                                        "variant_id":"variant-assistant",
+                                        "parts":[
                                             {"payload":{"type":"text","text":"ok"}}
-                                          ]
-                                        }
-                                      ]
+                                        ]
+                                      }
                                     }
-                                  ]
+                                    ]
+                                  }
                                 }
                               }
                             }
@@ -759,20 +765,22 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
-                              "nodes":[
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "nodes":[
                                 {
-                                  "node":{"id":"node-stream","role":"assistant","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-stream"},
-                                      "parts":[
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-stream",
+                                    "parts":[
                                         {"payload":{"type":"reasoning","text":"thinking"}},
                                         {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 }
-                              ]
+                                ]
+                              }
                             }
                           }
                         }
@@ -823,16 +831,15 @@ class ChatViewModelRecoveryTest {
                             "event":"conversation_node_upsert",
                             "data":{
                               "node":{
-                                "node":{"id":"node-stream","role":"assistant","select_index":0},
-                                "variants":[
-                                  {
-                                    "variant":{"id":"variant-stream"},
-                                    "parts":[
+                                "node_id":"node-stream",
+                                "role":"assistant",
+                                "selected_variant":{
+                                  "variant_id":"variant-stream",
+                                  "parts":[
                                       {"payload":{"type":"reasoning","text":"thinking"}},
                                       {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
-                                    ]
-                                  }
-                                ]
+                                  ]
+                                }
                               }
                             }
                           }
@@ -883,19 +890,21 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
-                              "nodes":[
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "nodes":[
                                 {
-                                  "node":{"id":"node-stream","role":"assistant","select_index":0},
-                                  "variants":[
-                                    {
-                                      "variant":{"id":"variant-old"},
-                                      "parts":[
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-old",
+                                    "parts":[
                                         {"payload":{"type":"text","text":"old"}}
-                                      ]
-                                    }
-                                  ]
+                                    ]
+                                  }
                                 }
-                              ]
+                                ]
+                              }
                             }
                           }
                         }
@@ -912,15 +921,14 @@ class ChatViewModelRecoveryTest {
                             "event":"conversation_node_upsert",
                             "data":{
                               "node":{
-                                "node":{"id":"node-stream","role":"assistant","select_index":0},
-                                "variants":[
-                                  {
-                                    "variant":{"id":"variant-new"},
-                                    "parts":[
+                                "node_id":"node-stream",
+                                "role":"assistant",
+                                "selected_variant":{
+                                  "variant_id":"variant-new",
+                                  "parts":[
                                       {"payload":{"type":"text","text":"new"}}
-                                    ]
-                                  }
-                                ]
+                                  ]
+                                }
                               }
                             }
                           }
@@ -954,23 +962,21 @@ class ChatViewModelRecoveryTest {
         val data = JSONObject(
             """
             {
-              "nodes": [
-                {
-                  "node": {
-                    "id": "$nodeId",
+              "branch": {
+                "cursor_node_id": "$nodeId",
+                "nodes": [
+                  {
+                    "node_id": "$nodeId",
                     "role": "$role",
-                    "select_index": 0
-                  },
-                  "variants": [
-                    {
-                      "variant": { "id": "variant-1" },
+                    "selected_variant": {
+                      "variant_id": "variant-1",
                       "parts": [
                         { "payload": { "type": "text", "text": "$text" } }
                       ]
                     }
-                  ]
-                }
-              ]
+                  }
+                ]
+              }
             }
             """.trimIndent()
         )
