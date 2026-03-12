@@ -2,9 +2,9 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 use vcpmobile_domain::{
-    AgentId, Conversation, ConversationId, DraftState, GenerationState, MessageNode, MessagePart,
-    MessagePartPayload, MessageRole, MessageVariant, NodeId, PartId, TopicId, VariantId,
-    VariantStatus,
+    AgentId, Conversation, ConversationId, DocumentAttachmentInput, DocumentPromptTransformOutput,
+    DraftState, GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole,
+    MessageVariant, NodeId, PartId, TopicId, VariantId, VariantStatus,
 };
 
 pub const CHAT_EVENT_SCHEMA_FAMILY: &str = "chat_event";
@@ -306,6 +306,19 @@ pub struct CreateConversationRequest {
 pub struct SendMessageRequest {
     pub conversation_id: ConversationId,
     pub text: String,
+    #[serde(default)]
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransformDocumentPromptRequest {
+    #[serde(default)]
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransformDocumentPromptResponse {
+    pub output: DocumentPromptTransformOutput,
 }
 
 #[cfg(test)]
@@ -498,7 +511,10 @@ mod tests {
 
         let serialized: Value = serde_json::to_value(&envelope).expect("serialize envelope");
 
-        assert_eq!(serialized["event_name"], Value::String("generation_failed".to_string()));
+        assert_eq!(
+            serialized["event_name"],
+            Value::String("generation_failed".to_string())
+        );
         assert_eq!(
             serialized["payload"]["data"]["error"]["kind"],
             Value::String("provider".to_string())
@@ -511,7 +527,10 @@ mod tests {
             serialized["payload"]["data"]["error"]["message"],
             Value::String("provider throttled the request".to_string())
         );
-        assert_eq!(serialized["payload"]["data"]["error"]["retriable"], Value::Bool(true));
+        assert_eq!(
+            serialized["payload"]["data"]["error"]["retriable"],
+            Value::Bool(true)
+        );
     }
 
     #[test]
@@ -534,7 +553,10 @@ mod tests {
 
         let serialized: Value = serde_json::to_value(&envelope).expect("serialize envelope");
 
-        assert_eq!(serialized["event_name"], Value::String("tool_call_failed".to_string()));
+        assert_eq!(
+            serialized["event_name"],
+            Value::String("tool_call_failed".to_string())
+        );
         assert_eq!(
             serialized["payload"]["data"]["tool_call_id"],
             Value::String("tool-call-42".to_string())

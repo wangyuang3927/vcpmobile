@@ -22,6 +22,14 @@ pub type ProviderPresetLocalId = String;
 pub const PROVIDER_LOCAL_ID_PREFIX: &str = "provider_local_";
 pub const PROVIDER_PRESET_LOCAL_ID_PREFIX: &str = "provider_preset_local_";
 
+pub const DOCUMENT_MIME_TEXT_PLAIN: &str = "text/plain";
+pub const DOCUMENT_MIME_TEXT_MARKDOWN: &str = "text/markdown";
+pub const DOCUMENT_MIME_APPLICATION_PDF: &str = "application/pdf";
+pub const DOCUMENT_MIME_DOCX: &str =
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document";
+pub const DOCUMENT_MIME_PPTX: &str =
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation";
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum MessageRole {
@@ -281,6 +289,45 @@ pub enum MessagePartPayload {
     Error {
         message: String,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentDescriptor {
+    pub name: String,
+    pub mime: String,
+    pub size_bytes: usize,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentAttachmentInput {
+    pub name: String,
+    #[serde(default)]
+    pub mime: Option<String>,
+    pub content_base64: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DocumentPromptTransformStatus {
+    Ready,
+    ParseFailed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentPromptTransformItem {
+    pub document: DocumentDescriptor,
+    pub status: DocumentPromptTransformStatus,
+    pub prompt_text: String,
+    pub extracted_char_count: usize,
+    #[serde(default)]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DocumentPromptTransformOutput {
+    pub items: Vec<DocumentPromptTransformItem>,
+    pub combined_prompt_text: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
