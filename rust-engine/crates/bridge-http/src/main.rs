@@ -20,12 +20,13 @@ use vcpmobile_domain::{
     ConversationId, DocumentAttachmentInput, GenerationState, ProviderAuthConfig, ProviderConfig,
 };
 use vcpmobile_protocol::{
-    ChatEvent, EditMessageRequest, EventEnvelope, SnapshotBranch, SnapshotConversation,
-    TransformDocumentPromptRequest, TransformDocumentPromptResponse,
+    ChatEvent, EditMessageRequest, EventEnvelope, RegenerateNodeRequest, SelectVariantRequest,
+    SnapshotBranch, SnapshotConversation, TransformDocumentPromptRequest,
+    TransformDocumentPromptResponse,
 };
 use vcpmobile_session::{
-    SessionEditRequest, SessionEngine, SessionSendRequest, demo_conversation,
-    selected_branch_snapshot_nodes,
+    SessionEditRequest, SessionEngine, SessionRegenerateRequest, SessionSelectVariantRequest,
+    SessionSendRequest, demo_conversation, selected_branch_snapshot_nodes,
 };
 use vcpmobile_store::FileStore;
 
@@ -241,6 +242,8 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/catalog", get(chat_catalog))
         .route("/api/chat", post(chat_send))
         .route("/api/chat/edit", post(chat_edit))
+        .route("/api/chat/regenerate", post(chat_regenerate))
+        .route("/api/chat/select-variant", post(chat_select_variant))
         .route("/api/chat/document-prompt", post(chat_document_prompt))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
         .route("/api/providers", get(provider_list).post(provider_create))
@@ -396,6 +399,56 @@ async fn chat_edit(
                 (StatusCode::BAD_REQUEST, error.to_string())
             }
             _ => (StatusCode::BAD_REQUEST, error.to_string()),
+        })?;
+
+    Ok(build_event_stream(events))
+}
+
+async fn chat_regenerate(
+    State(state): State<AppState>,
+    Json(body): Json<RegenerateNodeRequest>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (axum::http::StatusCode, String),
+> {
+    let engine = state.engine.lock().await;
+    let events = engine
+        .regenerate_message(SessionRegenerateRequest {
+            conversation_id: body.conversation_id,
+            node_id: body.node_id,
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_)
+            | vcpmobile_session::SessionError::NodeNotFound { .. } => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (axum::http::StatusCode::BAD_REQUEST, error.to_string()),
+        })?;
+
+    Ok(build_event_stream(events))
+}
+
+async fn chat_select_variant(
+    State(state): State<AppState>,
+    Json(body): Json<SelectVariantRequest>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (axum::http::StatusCode, String),
+> {
+    let engine = state.engine.lock().await;
+    let events = engine
+        .select_variant(SessionSelectVariantRequest {
+            conversation_id: body.conversation_id,
+            node_id: body.node_id,
+            variant_id: body.variant_id,
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_)
+            | vcpmobile_session::SessionError::NodeNotFound { .. }
+            | vcpmobile_session::SessionError::VariantNotFound { .. } => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (axum::http::StatusCode::BAD_REQUEST, error.to_string()),
         })?;
 
     Ok(build_event_stream(events))

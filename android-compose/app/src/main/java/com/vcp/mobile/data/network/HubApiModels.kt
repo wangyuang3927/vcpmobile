@@ -44,6 +44,17 @@ data class HubSendMessageRequest(
     val metadata: Map<String, String> = emptyMap()
 )
 
+data class HubRegenerateRequest(
+    val conversationId: String,
+    val nodeId: String,
+)
+
+data class HubSelectVariantRequest(
+    val conversationId: String,
+    val nodeId: String,
+    val variantId: String,
+)
+
 /**
  * Hub 非流式响应（占位结构）。
  */

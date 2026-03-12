@@ -2,8 +2,10 @@ package com.vcp.mobile.data.repository
 
 import com.vcp.mobile.data.network.HubApiClient
 import com.vcp.mobile.data.network.HubConversationSummary
+import com.vcp.mobile.data.network.HubRegenerateRequest
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubSendMessageResponse
+import com.vcp.mobile.data.network.HubSelectVariantRequest
 import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.OkHttpSseHubApiClient
 import com.vcp.mobile.data.network.RustChatEventEnvelope
@@ -20,6 +22,10 @@ interface HubChatRepository {
     suspend fun sendMessage(request: HubSendMessageRequest): HubSendMessageResponse
 
     fun observeStream(request: HubSendMessageRequest): Flow<HubStreamEvent>
+
+    fun regenerateAssistant(request: HubRegenerateRequest): Flow<HubStreamEvent>
+
+    fun selectVariant(request: HubSelectVariantRequest): Flow<HubStreamEvent>
 
     suspend fun listConversations(): List<HubConversationSummary>
 
@@ -63,6 +69,14 @@ class HubChatRepositoryImpl(
                 else -> event
             }
         }
+    }
+
+    override fun regenerateAssistant(request: HubRegenerateRequest): Flow<HubStreamEvent> {
+        return hubApiClient.regenerateAssistant(request)
+    }
+
+    override fun selectVariant(request: HubSelectVariantRequest): Flow<HubStreamEvent> {
+        return hubApiClient.selectVariant(request)
     }
 
     override suspend fun listConversations(): List<HubConversationSummary> {

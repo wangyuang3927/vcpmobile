@@ -12,6 +12,10 @@ interface HubApiClient {
 
     fun streamEvents(request: HubSendMessageRequest): Flow<HubStreamEvent>
 
+    fun regenerateAssistant(request: HubRegenerateRequest): Flow<HubStreamEvent>
+
+    fun selectVariant(request: HubSelectVariantRequest): Flow<HubStreamEvent>
+
     suspend fun listConversations(): List<HubConversationSummary>
 
     suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope?

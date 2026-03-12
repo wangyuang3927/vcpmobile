@@ -1,10 +1,12 @@
 package com.vcp.mobile.ui.chat
 
 import com.vcp.mobile.data.network.HubConversationSummary
+import com.vcp.mobile.data.network.HubRegenerateRequest
 import com.vcp.mobile.data.network.HubRelayErrorException
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubStreamFailureException
 import com.vcp.mobile.data.network.HubSendMessageResponse
+import com.vcp.mobile.data.network.HubSelectVariantRequest
 import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
 import com.vcp.mobile.data.network.RustChatEventKind
@@ -1112,6 +1114,311 @@ class ChatViewModelRecoveryTest {
         assertEquals("variant-new", streamedMessages.single().variantId)
     }
 
+    @Test
+    fun `regenerate lifecycle switches to the new assistant variant and completes cleanly`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
+                          "payload":{
+                            "event":"conversation_snapshot",
+                            "data":{
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "nodes":[
+                                {
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-old",
+                                    "parts":[
+                                        {"payload":{"type":"text","text":"old"}}
+                                    ]
+                                  }
+                                }
+                                ]
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"conversation_node_upsert",
+                          "payload":{
+                            "event":"conversation_node_upsert",
+                            "data":{
+                              "node":{
+                                "node_id":"node-stream",
+                                "role":"assistant",
+                                "selected_variant":{
+                                  "variant_id":"variant-new",
+                                  "parts":[
+                                      {"payload":{"type":"reasoning","text":"thinking again"}},
+                                      {"payload":{"type":"text","text":"new"}}
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_started",
+                          "payload":{
+                            "event":"generation_started",
+                            "data":{"node_id":"node-stream","variant_id":"variant-new"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_part_delta",
+                          "payload":{
+                            "event":"generation_part_delta",
+                            "data":{
+                              "node_id":"node-stream",
+                              "variant_id":"variant-new",
+                              "appended_parts":[
+                                {"payload":{"type":"reasoning","text":"thinking again"}},
+                                {"payload":{"type":"text","text":"new"}}
+                              ]
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_completed",
+                          "payload":{
+                            "event":"generation_completed",
+                            "data":{"node_id":"node-stream","variant_id":"variant-new"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("stream me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.detailState.value
+        val streamedMessages = state.messages.filter { it.nodeId == "node-stream" }
+        assertEquals(1, streamedMessages.size)
+        assertEquals("node-stream:variant-new", streamedMessages.single().id)
+        assertEquals("variant-new", streamedMessages.single().variantId)
+        assertEquals("new", streamedMessages.single().content)
+        assertEquals("thinking again", streamedMessages.single().reasoning)
+        assertEquals(ChatGenerationPhase.COMPLETED, state.generation.phase)
+        assertNull(state.generation.activeMessageKey)
+    }
+
+    @Test
+    fun `regenerate assistant command posts current conversation node and replaces selected variant`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            snapshotEnvelope = snapshotEnvelope(
+                conversationId = "conversation-stream",
+                nodeId = "node-stream",
+                role = "assistant",
+                text = "old",
+            ),
+            regenerateStreamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"conversation_node_upsert",
+                          "payload":{
+                            "event":"conversation_node_upsert",
+                            "data":{
+                              "node":{
+                                "node_id":"node-stream",
+                                "role":"assistant",
+                                "selected_variant":{
+                                  "variant_id":"variant-2",
+                                  "parts":[
+                                      {"payload":{"type":"text","text":"new branch"}}
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_started",
+                          "payload":{
+                            "event":"generation_started",
+                            "data":{"node_id":"node-stream","variant_id":"variant-2"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_completed",
+                          "payload":{
+                            "event":"generation_completed",
+                            "data":{"node_id":"node-stream","variant_id":"variant-2"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.recoverConversation("conversation-stream")
+        dispatcher.scheduler.advanceUntilIdle()
+        viewModel.regenerateAssistant("node-stream")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            listOf(HubRegenerateRequest("conversation-stream", "node-stream")),
+            repository.regenerateRequests,
+        )
+        val message = viewModel.detailState.value.messages.single()
+        assertEquals("node-stream:variant-2", message.id)
+        assertEquals("variant-2", message.variantId)
+        assertEquals("new branch", message.content)
+        assertEquals(ChatGenerationPhase.COMPLETED, viewModel.detailState.value.generation.phase)
+    }
+
+    @Test
+    fun `select assistant variant command persists selection and updates the visible branch`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            snapshotEnvelope = RustChatEventEnvelope(
+                conversationId = "conversation-stream",
+                kind = RustChatEventKind.CONVERSATION_SNAPSHOT,
+                event = "conversation_snapshot",
+                data = JSONObject(
+                    """
+                    {
+                      "branch":{
+                        "cursor_node_id":"node-stream",
+                        "nodes":[
+                          {
+                            "node_id":"node-stream",
+                            "role":"assistant",
+                            "selected_variant":{
+                              "variant_id":"variant-2",
+                              "parts":[
+                                {"payload":{"type":"text","text":"new branch"}}
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                    """.trimIndent()
+                ),
+            ),
+            selectVariantStreamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"conversation_node_upsert",
+                          "payload":{
+                            "event":"conversation_node_upsert",
+                            "data":{
+                              "node":{
+                                "node_id":"node-stream",
+                                "role":"assistant",
+                                "selected_variant":{
+                                  "variant_id":"variant-1",
+                                  "parts":[
+                                      {"payload":{"type":"text","text":"old branch"}}
+                                  ]
+                                }
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.recoverConversation("conversation-stream")
+        dispatcher.scheduler.advanceUntilIdle()
+        viewModel.selectAssistantVariant("node-stream", "variant-1")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals(
+            listOf(HubSelectVariantRequest("conversation-stream", "node-stream", "variant-1")),
+            repository.selectVariantRequests,
+        )
+        val message = viewModel.detailState.value.messages.single()
+        assertEquals("node-stream:variant-1", message.id)
+        assertEquals("variant-1", message.variantId)
+        assertEquals("old branch", message.content)
+    }
+
     private fun snapshotEnvelope(
         conversationId: String,
         nodeId: String,
@@ -1153,9 +1460,13 @@ private class FakeHubChatRepository(
     private val snapshotEnvelope: RustChatEventEnvelope? = null,
     private val failSnapshot: Boolean = false,
     private val streamEvents: Flow<HubStreamEvent> = emptyFlow(),
+    private val regenerateStreamEvents: Flow<HubStreamEvent> = emptyFlow(),
+    private val selectVariantStreamEvents: Flow<HubStreamEvent> = emptyFlow(),
     streamEventQueue: List<Flow<HubStreamEvent>> = emptyList(),
 ) : HubChatRepository {
     val observeStreamRequests = mutableListOf<HubSendMessageRequest>()
+    val regenerateRequests = mutableListOf<HubRegenerateRequest>()
+    val selectVariantRequests = mutableListOf<HubSelectVariantRequest>()
     private val streamEventQueue = ArrayDeque(streamEventQueue)
 
     override suspend fun sendMessage(request: HubSendMessageRequest): HubSendMessageResponse {
@@ -1165,6 +1476,16 @@ private class FakeHubChatRepository(
     override fun observeStream(request: HubSendMessageRequest): Flow<HubStreamEvent> {
         observeStreamRequests += request
         return streamEventQueue.removeFirstOrNull() ?: streamEvents
+    }
+
+    override fun regenerateAssistant(request: HubRegenerateRequest): Flow<HubStreamEvent> {
+        regenerateRequests += request
+        return regenerateStreamEvents
+    }
+
+    override fun selectVariant(request: HubSelectVariantRequest): Flow<HubStreamEvent> {
+        selectVariantRequests += request
+        return selectVariantStreamEvents
     }
 
     override suspend fun listConversations(): List<HubConversationSummary> = conversations
