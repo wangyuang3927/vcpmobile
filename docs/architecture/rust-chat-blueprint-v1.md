@@ -196,6 +196,8 @@ markdown 只是 text/content 的一种来源，不是领域真相。
 - `conversation.node.select` 只切换同一 `MessageNode` 的选中 variant，不改写 node identity、parent links 或 parts。
 - assistant regenerate/retry 发生在同一 `MessageNode` 上：追加一个新的 `MessageVariant` 并切换选中项。
 - 编辑已持久化 user turn 时，必须从原 parent 新建 `MessageNode` 分支，而不是原地改写旧节点内容。
+- 用户看到的 branch selector 需要区分两类：assistant regenerate 对应同节点 variant 切换；user edit 对应 sibling `MessageNode` 分支切换。
+- Android 只能消费 Rust 提供的 selector 元数据与目标句柄，不能从当前 transcript 自己推断隐藏分支。
 
 ---
 

@@ -590,6 +590,124 @@ P0 explicitly excludes:
 - Editing a persisted user turn creates a new `MessageNode` branch from the edited node's parent rather than mutating the old node's selected parts in place.
 - Any downstream assistant response after a user edit belongs to the new branch and must be regenerated from that new node lineage.
 
+#### 7.5.1 Stable User-Facing Flow
+
+Branch navigation is not one generic control. The UI must expose two different branch surfaces because
+Rust truth distinguishes two different mutation families:
+
+- assistant regenerate branch
+  - one `MessageNode`
+  - many `MessageVariant`
+  - selector stays on the assistant row itself
+- user edit branch
+  - one shared parent node
+  - many sibling `MessageNode`
+  - selector stays on the first divergent user row
+
+The timeline always shows one active branch projection at a time.
+
+- Android renders only the currently selected branch that Rust projects.
+- Android must not synthesize hidden branches, sibling counts, or inferred variant positions from a
+  flat local transcript.
+- A branch selector is shown only when Rust explicitly reports alternatives for the visible row.
+- Selector label uses human-facing `current/total` formatting such as `2/3`.
+- Selector buttons are disabled at the first/last alternative instead of wrapping.
+- During an active generation attempt for the conversation, branch selector, edit, and regenerate
+  entry points stay disabled so branch truth and streaming truth do not race.
+
+#### 7.5.2 Branch Selector Modes
+
+Two selector modes are required:
+
+1. `variant` mode for assistant regenerate/retry
+   - Applies only to assistant nodes with more than one stored variant.
+   - Selecting another position keeps the same `node_id`.
+   - Only the selected assistant realization changes; descendants stay attached to the same node
+     lineage.
+
+2. `branch` mode for edited user turns
+   - Applies only to user nodes that have sibling edited nodes from the same parent.
+   - Selecting another position changes the active branch root at that user turn.
+   - The selected user turn and every downstream row from that point onward are replaced by the
+     newly selected branch projection.
+
+For both modes, Android should keep scroll/focus anchored on the same logical row while the
+selection mutation is in flight. It may show a lightweight loading affordance on the selector, but
+it must wait for Rust events before rewriting visible message content.
+
+#### 7.5.3 Required Projection Metadata
+
+Selected-branch payloads must carry enough metadata for Android to render selectors without access
+to hidden variants or hidden sibling nodes.
+
+Each visible node projection should therefore expose a `branch_navigation` object with:
+
+- `kind`: `none | variant | branch`
+- `current_position`: 1-based position of the currently selected alternative
+- `total_count`: total number of alternatives addressable from this row
+- `can_go_prev`
+- `can_go_next`
+- `prev_variant_id` / `next_variant_id` when `kind = variant`
+- `prev_cursor_node_id` / `next_cursor_node_id` when `kind = branch`
+
+Rules:
+
+- `kind = none` means the selector is hidden.
+- Android must treat these navigation handles as authoritative and must not derive alternate target
+  identities from local message ordering.
+- `cursor_node_id` targets always identify the leaf cursor of the destination branch, not merely
+  the sibling user node, so one mutation can switch the whole visible suffix deterministically.
+
+#### 7.5.4 Interaction Entry Contract
+
+The three branch-related entry points map to Rust mutations as follows.
+
+| Entry point | Visible on | Preconditions | Rust mutation | Rust truth change | Expected app-facing events |
+| --- | --- | --- | --- | --- | --- |
+| Branch selector in `variant` mode | assistant rows with alternate variants | conversation generation is not active | `conversation.node.select { conversation_id, node_id, variant_id }` | switch selected variant on the same node | `conversation_node_upsert` for that node; `conversation_snapshot` only if the selected-branch projection outside that row also changed |
+| Branch selector in `branch` mode | first divergent user row of an edited branch family | conversation generation is not active | `conversation.branch.select { conversation_id, cursor_node_id }` | switch `Conversation.current_cursor` to the destination branch leaf | `conversation_snapshot` with the newly selected branch projection |
+| Edit entry | persisted user rows on the selected branch | conversation generation is not active | draft entry first, then `conversation.node.edit { conversation_id, node_id, parts[] }` on submit | create a new user node from the original parent and move branch selection to the new lineage | immediate `conversation_snapshot` rooted at the new edited user node lineage, followed by generation lifecycle events for the replacement assistant turn |
+| Regenerate entry | assistant rows on the selected branch | conversation generation is not active | `conversation.node.regenerate { conversation_id, node_id }` | append a new variant to the same assistant node and mark it selected | `conversation_node_upsert` for the new selected variant, then `generation_started` / `generation_part_delta` / terminal generation event for the new `node_id + variant_id` |
+
+#### 7.5.5 Edit Entry Behavior
+
+Edit is a draft-first flow.
+
+- Entering edit mode copies the currently selected user row content into the composer.
+- Entering edit mode does not change Rust conversation truth yet.
+- The composer must surface that the user is editing a historical turn rather than composing a new
+  leaf message.
+- Cancelling edit restores normal compose mode without mutating branch truth.
+- Submitting an edit with no effective content change should be treated as a no-op rather than
+  creating a useless sibling branch.
+- Once Rust accepts the edit mutation, the old user node remains immutable history and the new user
+  node becomes the visible branch root for that divergence point.
+- Any assistant rows that formerly followed the old user node must disappear from the visible branch
+  until replacement responses arrive from the new lineage.
+
+#### 7.5.6 Regenerate Entry Behavior
+
+Regenerate is a direct node mutation rather than a draft flow.
+
+- The entry point is shown on assistant rows, not user rows.
+- Triggering regenerate immediately requests a new assistant realization for the same `MessageNode`.
+- Rust must allocate a fresh `variant_id`, mark it selected, and preserve older variants as stable
+  history.
+- Android may show the regenerated row as pending/streaming once Rust emits the new selected
+  variant, but it must not fabricate the replacement content ahead of Rust events.
+- If regenerate fails, the newly selected variant should carry the terminal failed/cancelled state
+  explicitly so the selector and retry affordances remain grounded in Rust truth.
+
+#### 7.5.7 Failure And Consistency Rules
+
+- Android performs no optimistic transcript rewriting for branch/edit/regenerate beyond lightweight
+  pending affordances on the tapped control or composer state.
+- If Rust rejects a mutation, the currently visible branch remains unchanged and the failure must
+  surface through typed error/reporting channels.
+- `conversation_snapshot` is the only event that may replace a visible branch suffix wholesale.
+- `conversation_node_upsert` is the only event that may replace the selected realization for one
+  already-visible node in place.
+
 ### 7.6 Streaming Semantics
 
 Streaming must be part-aware:
