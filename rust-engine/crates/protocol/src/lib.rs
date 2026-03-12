@@ -10,6 +10,7 @@ use vcpmobile_domain::{
 pub const CHAT_EVENT_SCHEMA_FAMILY: &str = "chat_event";
 pub const CHAT_EVENT_SCHEMA_MAJOR: u16 = 1;
 pub const CHAT_EVENT_SCHEMA_MINOR: u16 = 0;
+pub const AGENT_EDITOR_SCHEMA_VERSION: u16 = 1;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct EventSchema {
@@ -330,6 +331,258 @@ pub struct TransformDocumentPromptResponse {
     pub output: DocumentPromptTransformOutput,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEditorGroupKey {
+    Identity,
+    Prompt,
+    Model,
+    Request,
+    Memory,
+    Tools,
+    Group,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEditorFieldKey {
+    Name,
+    AvatarUri,
+    Description,
+    SystemPrompt,
+    PromptMode,
+    MessageTemplate,
+    Placeholders,
+    ResolvedPromptPreview,
+    ProviderLocalId,
+    PresetLocalId,
+    ModelId,
+    Temperature,
+    TopP,
+    MaxOutputTokens,
+    ReasoningEffort,
+    UseConversationMemory,
+    PinTopLevelFacts,
+    EnableLocalTools,
+    ToolOverrides,
+    RoleLabel,
+    Aliases,
+    MentionTags,
+    RespondToMentions,
+    AllowAutoRelay,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEditorFieldPersistence {
+    LocalStore,
+    DerivedPreview,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentEditorFieldMutability {
+    Editable,
+    ReadOnly,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentEditorField {
+    pub key: AgentEditorFieldKey,
+    pub binding_path: String,
+    pub required: bool,
+    pub persistence: AgentEditorFieldPersistence,
+    pub mutability: AgentEditorFieldMutability,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentEditorFieldGroup {
+    pub key: AgentEditorGroupKey,
+    pub title: String,
+    pub fields: Vec<AgentEditorField>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct AgentEditorSchema {
+    pub version: u16,
+    pub groups: Vec<AgentEditorFieldGroup>,
+}
+
+impl AgentEditorSchema {
+    pub fn mobile_v1() -> Self {
+        Self {
+            version: AGENT_EDITOR_SCHEMA_VERSION,
+            groups: vec![
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Identity,
+                    title: "Identity".to_string(),
+                    fields: vec![
+                        editable_field(AgentEditorFieldKey::Name, "identity.name", true),
+                        editable_field(
+                            AgentEditorFieldKey::AvatarUri,
+                            "identity.avatar_uri",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::Description,
+                            "identity.description",
+                            false,
+                        ),
+                    ],
+                },
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Prompt,
+                    title: "Prompt".to_string(),
+                    fields: vec![
+                        editable_field(
+                            AgentEditorFieldKey::SystemPrompt,
+                            "prompt.system_prompt",
+                            true,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::PromptMode,
+                            "prompt.prompt_mode",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::MessageTemplate,
+                            "prompt.message_template",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::Placeholders,
+                            "prompt.placeholders",
+                            false,
+                        ),
+                        read_only_preview_field(
+                            AgentEditorFieldKey::ResolvedPromptPreview,
+                            "prompt_preview",
+                        ),
+                    ],
+                },
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Model,
+                    title: "Model".to_string(),
+                    fields: vec![
+                        editable_field(
+                            AgentEditorFieldKey::ProviderLocalId,
+                            "model.provider_local_id",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::PresetLocalId,
+                            "model.preset_local_id",
+                            false,
+                        ),
+                        editable_field(AgentEditorFieldKey::ModelId, "model.model_id", false),
+                    ],
+                },
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Request,
+                    title: "Request".to_string(),
+                    fields: vec![
+                        editable_field(
+                            AgentEditorFieldKey::Temperature,
+                            "request.temperature",
+                            false,
+                        ),
+                        editable_field(AgentEditorFieldKey::TopP, "request.top_p", false),
+                        editable_field(
+                            AgentEditorFieldKey::MaxOutputTokens,
+                            "request.max_output_tokens",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::ReasoningEffort,
+                            "request.reasoning_effort",
+                            false,
+                        ),
+                    ],
+                },
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Memory,
+                    title: "Memory".to_string(),
+                    fields: vec![
+                        editable_field(
+                            AgentEditorFieldKey::UseConversationMemory,
+                            "memory.use_conversation_memory",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::PinTopLevelFacts,
+                            "memory.pin_top_level_facts",
+                            false,
+                        ),
+                    ],
+                },
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Tools,
+                    title: "Tools".to_string(),
+                    fields: vec![
+                        editable_field(
+                            AgentEditorFieldKey::EnableLocalTools,
+                            "tools.enable_local_tools",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::ToolOverrides,
+                            "tools.overrides",
+                            false,
+                        ),
+                    ],
+                },
+                AgentEditorFieldGroup {
+                    key: AgentEditorGroupKey::Group,
+                    title: "Group".to_string(),
+                    fields: vec![
+                        editable_field(AgentEditorFieldKey::RoleLabel, "group.role_label", false),
+                        editable_field(AgentEditorFieldKey::Aliases, "group.aliases", false),
+                        editable_field(
+                            AgentEditorFieldKey::MentionTags,
+                            "group.mention_tags",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::RespondToMentions,
+                            "group.respond_to_mentions",
+                            false,
+                        ),
+                        editable_field(
+                            AgentEditorFieldKey::AllowAutoRelay,
+                            "group.allow_auto_relay",
+                            false,
+                        ),
+                    ],
+                },
+            ],
+        }
+    }
+}
+
+fn editable_field(
+    key: AgentEditorFieldKey,
+    binding_path: &str,
+    required: bool,
+) -> AgentEditorField {
+    AgentEditorField {
+        key,
+        binding_path: binding_path.to_string(),
+        required,
+        persistence: AgentEditorFieldPersistence::LocalStore,
+        mutability: AgentEditorFieldMutability::Editable,
+    }
+}
+
+fn read_only_preview_field(key: AgentEditorFieldKey, binding_path: &str) -> AgentEditorField {
+    AgentEditorField {
+        key,
+        binding_path: binding_path.to_string(),
+        required: false,
+        persistence: AgentEditorFieldPersistence::DerivedPreview,
+        mutability: AgentEditorFieldMutability::ReadOnly,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use chrono::Utc;
@@ -338,9 +591,47 @@ mod tests {
     use vcpmobile_domain::{GenerationState, MessagePartPayload, MessageRole, VariantStatus};
 
     use super::{
-        ChatEvent, EventEnvelope, EventError, EventErrorKind, EventSchema, NamedEvent,
-        SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
+        AgentEditorFieldKey, AgentEditorFieldMutability, AgentEditorFieldPersistence,
+        AgentEditorGroupKey, AgentEditorSchema, ChatEvent, EventEnvelope, EventError,
+        EventErrorKind, EventSchema, NamedEvent, SnapshotBranch, SnapshotConversation,
+        SnapshotNode, SnapshotPart, SnapshotVariant,
     };
+
+    #[test]
+    fn agent_editor_schema_mobile_v1_freezes_group_order_and_prompt_preview_boundary() {
+        let schema = AgentEditorSchema::mobile_v1();
+
+        assert_eq!(schema.version, 1);
+        assert_eq!(
+            schema
+                .groups
+                .iter()
+                .map(|group| group.key)
+                .collect::<Vec<_>>(),
+            vec![
+                AgentEditorGroupKey::Identity,
+                AgentEditorGroupKey::Prompt,
+                AgentEditorGroupKey::Model,
+                AgentEditorGroupKey::Request,
+                AgentEditorGroupKey::Memory,
+                AgentEditorGroupKey::Tools,
+                AgentEditorGroupKey::Group,
+            ]
+        );
+
+        let prompt_group = &schema.groups[1];
+        assert!(
+            prompt_group
+                .fields
+                .iter()
+                .any(|field| { field.key == AgentEditorFieldKey::SystemPrompt && field.required })
+        );
+        assert!(prompt_group.fields.iter().any(|field| {
+            field.key == AgentEditorFieldKey::ResolvedPromptPreview
+                && field.persistence == AgentEditorFieldPersistence::DerivedPreview
+                && field.mutability == AgentEditorFieldMutability::ReadOnly
+        }));
+    }
 
     #[test]
     fn chat_event_names_are_canonical_snake_case() {
