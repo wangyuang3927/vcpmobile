@@ -311,6 +311,15 @@ pub struct SendMessageRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EditMessageRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+    pub text: String,
+    #[serde(default)]
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformDocumentPromptRequest {
     #[serde(default)]
     pub attachments: Vec<DocumentAttachmentInput>,
