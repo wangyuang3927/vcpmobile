@@ -234,7 +234,7 @@ class ChatViewModel @Inject constructor(
         viewModelScope.launch {
             runCatching {
                 repository.listConversations()
-                    .filter { it.isRecoverable && it.generationState != "streaming" }
+                    .filter { it.isRecoverable && it.generationState.isRecoverableGenerationState() }
                     .sortedByDescending { it.updatedAt }
                     .map { summary ->
                         RecoverableConversation(
@@ -263,7 +263,7 @@ class ChatViewModel @Inject constructor(
             runCatching {
                 val persistedConversationId = recoveryStore.lastConversationId()
                 val recoverableConversationId = repository.listConversations()
-                    .filter { it.isRecoverable && it.generationState != "streaming" }
+                    .filter { it.isRecoverable && it.generationState.isRecoverableGenerationState() }
                     .sortedByDescending { it.updatedAt }
                     .firstOrNull()
                     ?.conversationId

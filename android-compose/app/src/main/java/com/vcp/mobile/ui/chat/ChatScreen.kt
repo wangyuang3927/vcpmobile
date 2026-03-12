@@ -78,7 +78,11 @@ fun ChatScreen(
             val lastIndex = detailState.messages.lastIndex
             val lastVisibleIndex = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index
             if (detailState.stickToBottom && shouldStickToBottom(lastVisibleIndex, lastIndex)) {
-                listState.animateScrollToItem(lastIndex)
+                if (detailState.isTyping) {
+                    listState.scrollToItem(lastIndex)
+                } else {
+                    listState.animateScrollToItem(lastIndex)
+                }
             }
         }
     }
@@ -236,6 +240,12 @@ fun ChatScreen(
         }
 
         Spacer(modifier = Modifier.height(10.dp))
+        AnimatedVisibility(visible = detailState.generation.showsTimelineStatusBanner) {
+            Column {
+                GenerationStatusBanner(generation = detailState.generation)
+                Spacer(modifier = Modifier.height(10.dp))
+            }
+        }
         MessageInput(
             input = draftState.currentInput,
             canSend = draftState.canSend && !detailState.isTyping,
@@ -824,6 +834,56 @@ private fun TypingIndicator() {
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
         )
+    }
+}
+
+@Composable
+private fun GenerationStatusBanner(
+    generation: ChatGenerationState,
+) {
+    val statusText = when (generation.phase) {
+        ChatGenerationPhase.REQUESTING -> "正在发送消息…"
+        ChatGenerationPhase.STARTED -> "已开始生成，等待返回首个片段…"
+        ChatGenerationPhase.FAILED -> "生成失败，可重新发送。"
+        ChatGenerationPhase.CANCELLED -> "生成已取消。"
+        else -> return
+    }
+    val containerColor = when (generation.phase) {
+        ChatGenerationPhase.FAILED -> MaterialTheme.colorScheme.errorContainer
+        ChatGenerationPhase.CANCELLED -> MaterialTheme.colorScheme.secondaryContainer
+        else -> MaterialTheme.colorScheme.surfaceVariant
+    }
+    val contentColor = when (generation.phase) {
+        ChatGenerationPhase.FAILED -> MaterialTheme.colorScheme.onErrorContainer
+        ChatGenerationPhase.CANCELLED -> MaterialTheme.colorScheme.onSecondaryContainer
+        else -> MaterialTheme.colorScheme.onSurfaceVariant
+    }
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(14.dp),
+        color = containerColor,
+    ) {
+        Row(
+            modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp),
+        ) {
+            if (generation.phase == ChatGenerationPhase.REQUESTING ||
+                generation.phase == ChatGenerationPhase.STARTED
+            ) {
+                CircularProgressIndicator(
+                    modifier = Modifier.size(16.dp),
+                    strokeWidth = 2.dp,
+                    color = contentColor,
+                )
+            }
+            Text(
+                text = statusText,
+                style = MaterialTheme.typography.bodySmall,
+                color = contentColor,
+            )
+        }
     }
 }
 

@@ -2,6 +2,9 @@ package com.vcp.mobile.ui.chat.catalog
 
 import com.vcp.mobile.ui.chat.ConversationCatalogFilter
 import com.vcp.mobile.ui.chat.RecoverableConversation
+import com.vcp.mobile.ui.chat.isActiveGenerationState
+import com.vcp.mobile.ui.chat.isFailureGenerationState
+import com.vcp.mobile.ui.chat.isIdleLikeGenerationState
 import java.time.Instant
 import java.time.ZoneId
 import java.time.ZonedDateTime
@@ -120,22 +123,6 @@ private fun RecoverableConversation.workflowPriority(): Int = when {
     generationState.isActiveGenerationState() -> 1
     else -> 0
 }
-
-private fun String.normalizedGenerationState(): String = trim().lowercase()
-
-private fun String.isActiveGenerationState(): Boolean = normalizedGenerationState() in setOf(
-    "requesting",
-    "started",
-    "streaming",
-)
-
-private fun String.isFailureGenerationState(): Boolean = normalizedGenerationState() == "failed"
-
-private fun String.isIdleLikeGenerationState(): Boolean = normalizedGenerationState() in setOf(
-    "idle",
-    "completed",
-    "cancelled",
-)
 
 private fun String.toEpochMillisOrZero(): Long {
     return runCatching {

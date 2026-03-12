@@ -147,9 +147,10 @@ object ChatDetailReducer {
             )
 
             is ChatDetailAction.GenerationLifecycleChanged -> state.copy(
-                generation = ChatGenerationState(
+                generation = reduceGenerationState(
+                    current = state.generation,
                     phase = action.phase,
-                    activeMessageKey = action.messageKey,
+                    messageKey = action.messageKey,
                 )
             )
 
@@ -229,9 +230,9 @@ object ChatDetailReducer {
         return AssistantDeltaResult(
             state = state.copy(
                 messages = updatedMessages,
-                generation = state.generation.copy(
-                    phase = streamingPhase(state.generation.phase),
-                    activeMessageKey = targetId,
+                generation = advanceStreamingState(
+                    current = state.generation,
+                    messageKey = targetId,
                 ),
                 contentVersion = state.contentVersion + 1,
             ),
@@ -289,9 +290,9 @@ object ChatDetailReducer {
         return AssistantDeltaResult(
             state = state.copy(
                 messages = updatedMessages,
-                generation = state.generation.copy(
-                    phase = streamingPhase(state.generation.phase),
-                    activeMessageKey = messageId,
+                generation = advanceStreamingState(
+                    current = state.generation,
+                    messageKey = messageId,
                 ),
                 contentVersion = state.contentVersion + 1,
             ),
@@ -299,10 +300,59 @@ object ChatDetailReducer {
         )
     }
 
-    private fun streamingPhase(currentPhase: ChatGenerationPhase): ChatGenerationPhase {
-        return when (currentPhase) {
-            ChatGenerationPhase.STREAMING -> ChatGenerationPhase.STREAMING
-            else -> ChatGenerationPhase.STREAMING
+    private fun reduceGenerationState(
+        current: ChatGenerationState,
+        phase: ChatGenerationPhase,
+        messageKey: String?,
+    ): ChatGenerationState {
+        val resolvedMessageKey = when {
+            phase == ChatGenerationPhase.COMPLETED -> null
+            messageKey != null -> messageKey
+            else -> current.activeMessageKey
+        }
+
+        return when (phase) {
+            ChatGenerationPhase.IDLE -> ChatGenerationState()
+            ChatGenerationPhase.REQUESTING -> ChatGenerationState(
+                phase = ChatGenerationPhase.REQUESTING,
+                activeMessageKey = resolvedMessageKey,
+            )
+            ChatGenerationPhase.STARTED -> ChatGenerationState(
+                phase = ChatGenerationPhase.STARTED,
+                activeMessageKey = resolvedMessageKey,
+            )
+            ChatGenerationPhase.STREAMING -> advanceStreamingState(
+                current = current,
+                messageKey = resolvedMessageKey,
+            )
+            ChatGenerationPhase.COMPLETED -> ChatGenerationState(
+                phase = ChatGenerationPhase.COMPLETED,
+                activeMessageKey = null,
+            )
+            ChatGenerationPhase.FAILED -> ChatGenerationState(
+                phase = ChatGenerationPhase.FAILED,
+                activeMessageKey = resolvedMessageKey,
+            )
+            ChatGenerationPhase.CANCELLED -> ChatGenerationState(
+                phase = ChatGenerationPhase.CANCELLED,
+                activeMessageKey = resolvedMessageKey,
+            )
+        }
+    }
+
+    private fun advanceStreamingState(
+        current: ChatGenerationState,
+        messageKey: String?,
+    ): ChatGenerationState {
+        val resolvedMessageKey = messageKey ?: current.activeMessageKey
+        return when {
+            current.phase.isTerminal() -> current.copy(
+                activeMessageKey = current.activeMessageKey ?: resolvedMessageKey,
+            )
+            else -> ChatGenerationState(
+                phase = ChatGenerationPhase.STREAMING,
+                activeMessageKey = resolvedMessageKey,
+            )
         }
     }
 }

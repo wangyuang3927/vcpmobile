@@ -50,6 +50,37 @@ class ChatDetailReducerTest {
     }
 
     @Test
+    fun `started keeps existing key and completed clears it`() {
+        val requesting = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.REQUESTING,
+                messageKey = "node-1:variant-1",
+            )
+        )
+
+        val started = ChatDetailReducer.reduce(
+            requesting,
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.STARTED,
+                messageKey = null,
+            )
+        )
+        val completed = ChatDetailReducer.reduce(
+            started,
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.COMPLETED,
+                messageKey = "node-1:variant-1",
+            )
+        )
+
+        assertEquals(ChatGenerationPhase.STARTED, started.generation.phase)
+        assertEquals("node-1:variant-1", started.generation.activeMessageKey)
+        assertEquals(ChatGenerationPhase.COMPLETED, completed.generation.phase)
+        assertEquals(null, completed.generation.activeMessageKey)
+    }
+
+    @Test
     fun `assistant delta preserves stable message id and active key`() {
         val started = ChatDetailReducer.reduce(
             ChatDetailReducer.initialState(),
@@ -229,6 +260,32 @@ class ChatDetailReducerTest {
         assertEquals("new", updated.content)
         assertEquals(listOf(UiMessagePart(type = "text", text = "new")), updated.parts)
         assertEquals(existingMessage.timestampMillis, updated.timestampMillis)
+    }
+
+    @Test
+    fun `assistant delta does not resurrect cancelled lifecycle`() {
+        val cancelled = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.CANCELLED,
+                messageKey = "node-2:variant-2",
+            )
+        )
+
+        val result = ChatDetailReducer.appendAssistantDelta(
+            state = cancelled,
+            currentMessageId = "node-2:variant-2",
+            sender = MessageSender.AGENT,
+            appendText = "late chunk",
+            nodeId = "node-2",
+            variantId = "variant-2",
+            parts = listOf(UiMessagePart(type = "text", text = "late chunk")),
+            partTypes = listOf("text"),
+        )
+
+        assertEquals(ChatGenerationPhase.CANCELLED, result.state.generation.phase)
+        assertEquals("node-2:variant-2", result.state.generation.activeMessageKey)
+        assertEquals("late chunk", result.state.messages.last().content)
     }
 
     @Test
@@ -479,5 +536,14 @@ class ChatDetailReducerTest {
 
         assertEquals(ConversationCatalogFilter.FAILED, updated.conversationCatalogFilter)
         assertEquals(initial.messages, updated.messages)
+    }
+
+    @Test
+    fun `generation state helpers classify active and recoverable states`() {
+        assertTrue(ChatGenerationPhase.REQUESTING.isActive())
+        assertTrue(ChatGenerationPhase.CANCELLED.isTerminal())
+        assertTrue("completed".isRecoverableGenerationState())
+        assertTrue("failed".isRecoverableGenerationState())
+        assertFalse("started".isRecoverableGenerationState())
     }
 }

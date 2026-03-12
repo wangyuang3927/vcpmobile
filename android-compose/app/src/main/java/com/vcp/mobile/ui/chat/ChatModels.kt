@@ -18,6 +18,20 @@ enum class ChatGenerationPhase {
     CANCELLED,
 }
 
+fun ChatGenerationPhase.isActive(): Boolean = when (this) {
+    ChatGenerationPhase.REQUESTING,
+    ChatGenerationPhase.STARTED,
+    ChatGenerationPhase.STREAMING -> true
+    else -> false
+}
+
+fun ChatGenerationPhase.isTerminal(): Boolean = when (this) {
+    ChatGenerationPhase.COMPLETED,
+    ChatGenerationPhase.FAILED,
+    ChatGenerationPhase.CANCELLED -> true
+    else -> false
+}
+
 enum class ChatBodyMode {
     MARKDOWN,
     PLAIN_TEXT,
@@ -29,9 +43,16 @@ data class ChatGenerationState(
     val activeMessageKey: String? = null,
 ) {
     val canResume: Boolean
-        get() = phase == ChatGenerationPhase.REQUESTING ||
-            phase == ChatGenerationPhase.STARTED ||
-            phase == ChatGenerationPhase.STREAMING
+        get() = phase.isActive()
+
+    val showsTimelineStatusBanner: Boolean
+        get() = when (phase) {
+            ChatGenerationPhase.REQUESTING,
+            ChatGenerationPhase.STARTED -> activeMessageKey == null
+            ChatGenerationPhase.FAILED,
+            ChatGenerationPhase.CANCELLED -> true
+            else -> false
+        }
 }
 
 data class UiMessagePart(
@@ -209,10 +230,26 @@ data class ChatDetailState(
     val conversationCatalogFilter: ConversationCatalogFilter = ConversationCatalogFilter.ALL,
 ) {
     val isTyping: Boolean
-        get() = generation.phase == ChatGenerationPhase.REQUESTING ||
-            generation.phase == ChatGenerationPhase.STARTED ||
-            generation.phase == ChatGenerationPhase.STREAMING
+        get() = generation.phase.isActive()
 }
+
+fun String.normalizedGenerationState(): String = trim().lowercase()
+
+fun String.isActiveGenerationState(): Boolean = normalizedGenerationState() in setOf(
+    "requesting",
+    "started",
+    "streaming",
+)
+
+fun String.isFailureGenerationState(): Boolean = normalizedGenerationState() == "failed"
+
+fun String.isIdleLikeGenerationState(): Boolean = normalizedGenerationState() in setOf(
+    "idle",
+    "completed",
+    "cancelled",
+)
+
+fun String.isRecoverableGenerationState(): Boolean = !isActiveGenerationState()
 
 data class ChatDraftState(
     val currentInput: String = "",
