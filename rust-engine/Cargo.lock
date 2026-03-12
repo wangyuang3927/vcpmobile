@@ -1198,6 +1198,7 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-stream",
+ "tower",
  "uuid",
  "vcpmobile-domain",
  "vcpmobile-protocol",

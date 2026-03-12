@@ -19,3 +19,6 @@ vcpmobile-domain = { path = "../domain" }
 vcpmobile-protocol = { path = "../protocol" }
 vcpmobile-session = { path = "../session" }
 vcpmobile-store = { path = "../store" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
