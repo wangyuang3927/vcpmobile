@@ -24,13 +24,14 @@ fun TypedPartsRenderer(
     modifier: Modifier = Modifier,
 ) {
     val parts = message.rendererParts()
+    val shouldUseAstBody = message.ast != null && parts.supportsAstBodyRendering()
 
     Column(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         parts.forEach { part ->
-            when (part.type.trim().lowercase()) {
+            when (part.normalizedType()) {
                 "reasoning" -> {
                     Surface(
                         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.22f),
@@ -45,10 +46,8 @@ fun TypedPartsRenderer(
                     }
                 }
 
-                "markdown_block" -> {
-                    val shouldUseAst = message.ast != null &&
-                        parts.count { it.type.equals("markdown_block", ignoreCase = true) } == 1
-                    if (shouldUseAst) {
+                "text", "markdown_block" -> {
+                    if (shouldUseAstBody) {
                         CompositionLocalProvider(LocalContentColor provides textColor) {
                             MarkdownAstContent(
                                 document = message.ast!!,
@@ -108,6 +107,24 @@ fun TypedPartsRenderer(
                         title = part.title?.let { "工具: $it" } ?: "工具",
                         body = part.text,
                         meta = part.state,
+                        textColor = textColor,
+                    )
+                }
+
+                "tool_call" -> {
+                    TypedPartCard(
+                        title = part.language?.let { "工具调用: $it" } ?: "工具调用",
+                        body = part.text,
+                        meta = "调用参数",
+                        textColor = textColor,
+                    )
+                }
+
+                "tool_result" -> {
+                    TypedPartCard(
+                        title = part.language?.let { "工具结果: $it" } ?: "工具结果",
+                        body = part.text,
+                        meta = "执行结果",
                         textColor = textColor,
                     )
                 }

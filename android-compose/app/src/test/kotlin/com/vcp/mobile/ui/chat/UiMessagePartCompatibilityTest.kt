@@ -1,7 +1,9 @@
 package com.vcp.mobile.ui.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class UiMessagePartCompatibilityTest {
@@ -88,6 +90,48 @@ class UiMessagePartCompatibilityTest {
         assertEquals(
             listOf("image", "document", "tool", "error"),
             projection.partTypes
+        )
+    }
+
+    @Test
+    fun `compatibility projection keeps tool call and result summaries typed`() {
+        val projection = listOf(
+            UiMessagePart(
+                type = "tool_call",
+                language = "search_web",
+                text = "{\"q\":\"weather\"}",
+            ),
+            UiMessagePart(
+                type = "tool_result",
+                language = "search_web",
+                text = "{\"items\":1}",
+            ),
+        ).toCompatibilityProjection()
+
+        assertEquals(
+            "search_web · call\n{\"q\":\"weather\"}" +
+                "search_web · result\n{\"items\":1}",
+            projection.content
+        )
+        assertNull(projection.reasoning)
+        assertEquals(listOf("tool_call", "tool_result"), projection.partTypes)
+    }
+
+    @Test
+    fun `ast body rendering only activates for a single text-like part`() {
+        assertTrue(
+            listOf(UiMessagePart(type = "text", text = "hello")).supportsAstBodyRendering()
+        )
+        assertTrue(
+            listOf(UiMessagePart(type = "reasoning", text = "thinking"))
+                .plus(UiMessagePart(type = "markdown_block", text = "hello"))
+                .supportsAstBodyRendering()
+        )
+        assertFalse(
+            listOf(
+                UiMessagePart(type = "text", text = "hello"),
+                UiMessagePart(type = "code_block", text = "println(1)"),
+            ).supportsAstBodyRendering()
         )
     }
 }

@@ -75,4 +75,25 @@ class ChatRenderProjectionTest {
         assertEquals(ChatBodyMode.MARKDOWN, projection.bodyMode)
         assertEquals(listOf("思考", "Markdown"), projection.labels)
     }
+
+    @Test
+    fun `core typed labels surface image document tool and error semantics`() {
+        val message = ChatMessage(
+            sender = MessageSender.AGENT,
+            content = "ignored fallback",
+            nodeId = "node-4",
+            variantId = "variant-4",
+            parts = listOf(
+                UiMessagePart(type = "image", title = "cat", url = "file:///cat.png"),
+                UiMessagePart(type = "document", title = "spec.pdf", url = "file:///spec.pdf"),
+                UiMessagePart(type = "tool_result", language = "search_web", text = "{\"items\":1}"),
+                UiMessagePart(type = "error", text = "network"),
+            ),
+        )
+
+        val projection = message.renderProjection()
+
+        assertEquals(ChatBodyMode.PLAIN_TEXT, projection.bodyMode)
+        assertEquals(listOf("图片", "文档", "工具", "错误"), projection.labels)
+    }
 }

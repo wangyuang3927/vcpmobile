@@ -84,6 +84,9 @@ data class ChatMessage(
     val timestampMillis: Long = System.currentTimeMillis(),
 )
 
+private val TOOL_RENDER_PART_TYPES = setOf("tool", "tool_call", "tool_result")
+private val AST_RENDER_PART_TYPES = setOf("text", "markdown_block")
+
 data class ChatMessageIdentity(
     val nodeId: String?,
     val variantId: String?,
@@ -106,6 +109,15 @@ fun ChatMessage.identity(): ChatMessageIdentity = ChatMessageIdentity(
     variantId = variantId,
 )
 
+fun UiMessagePart.normalizedType(): String = type.trim().lowercase()
+
+fun UiMessagePart.isAstRenderableBodyPart(): Boolean = normalizedType() in AST_RENDER_PART_TYPES
+
+fun List<UiMessagePart>.supportsAstBodyRendering(): Boolean {
+    val nonReasoningParts = filterNot { it.normalizedType() == "reasoning" }
+    return nonReasoningParts.singleOrNull()?.isAstRenderableBodyPart() == true
+}
+
 fun List<UiMessagePart>.toCompatibilityProjection(): UiMessageCompatibilityProjection {
     if (isEmpty()) {
         return UiMessageCompatibilityProjection(
@@ -117,19 +129,19 @@ fun List<UiMessagePart>.toCompatibilityProjection(): UiMessageCompatibilityProje
 
     val content = buildString {
         this@toCompatibilityProjection.forEach { part ->
-            if (part.type.trim().lowercase() != "reasoning") {
+            if (part.normalizedType() != "reasoning") {
                 append(part.compatibilityText())
             }
         }
     }
     val reasoning = buildString {
         this@toCompatibilityProjection.forEach { part ->
-            if (part.type.trim().lowercase() == "reasoning") {
+            if (part.normalizedType() == "reasoning") {
                 append(part.text)
             }
         }
     }.ifBlank { null }
-    val partTypes = this.map { it.type.trim().lowercase() }.distinct()
+    val partTypes = this.map { it.normalizedType() }.distinct()
 
     return UiMessageCompatibilityProjection(
         content = content,
@@ -138,7 +150,7 @@ fun List<UiMessagePart>.toCompatibilityProjection(): UiMessageCompatibilityProje
     )
 }
 
-private fun UiMessagePart.compatibilityText(): String = when (type.trim().lowercase()) {
+private fun UiMessagePart.compatibilityText(): String = when (normalizedType()) {
     "code_block" -> buildString {
         if (!language.isNullOrBlank()) {
             append("```").append(language).append('\n')
@@ -166,18 +178,32 @@ private fun UiMessagePart.compatibilityText(): String = when (type.trim().lowerc
             append(text)
         }
     }
+    "tool_call", "tool_result" -> buildString {
+        val toolName = title?.takeIf { it.isNotBlank() } ?: language?.takeIf { it.isNotBlank() }
+        toolName?.let { append(it) }
+        if (isNotEmpty()) append(" · ")
+        append(if (normalizedType() == "tool_call") "call" else "result")
+        if (text.isNotBlank()) {
+            append('\n')
+            append(text)
+        }
+    }
     else -> text
 }
 
 fun ChatMessage.renderProjection(): ChatRenderProjection {
     val normalizedPartTypes = if (parts.isNotEmpty()) {
-        parts.map { it.type.trim().lowercase() }
+        parts.map { it.normalizedType() }
     } else {
         partTypes.map { it.trim().lowercase() }
-    }
+    }.distinct()
     val hasReasoning = reasoning?.isNotBlank() == true || "reasoning" in normalizedPartTypes
     val hasMarkdown = ast != null || "markdown_block" in normalizedPartTypes
     val hasCodeBlock = "code_block" in normalizedPartTypes
+    val hasImage = "image" in normalizedPartTypes
+    val hasDocument = "document" in normalizedPartTypes
+    val hasTool = normalizedPartTypes.any { it in TOOL_RENDER_PART_TYPES }
+    val hasError = "error" in normalizedPartTypes
     val bodyMode = when {
         hasCodeBlock && !hasMarkdown -> ChatBodyMode.CODE_FALLBACK
         hasMarkdown -> ChatBodyMode.MARKDOWN
@@ -185,6 +211,10 @@ fun ChatMessage.renderProjection(): ChatRenderProjection {
     }
     val labels = buildList {
         if (hasReasoning) add("思考")
+        if (hasImage) add("图片")
+        if (hasDocument) add("文档")
+        if (hasTool) add("工具")
+        if (hasError) add("错误")
         if (hasMarkdown) add("Markdown")
         if (hasCodeBlock) add("代码")
     }
