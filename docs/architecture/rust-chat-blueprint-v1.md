@@ -174,14 +174,15 @@ MessagePart
 支持类型：
 - `text`
 - `reasoning`
-- `tool_call`
-- `tool_result`
+- `tool`
 - `image`
-- `file`
+- `document`
+- `error`
+
+后续扩展可继续支持：
 - `quote`
 - `code_block`
 - `markdown_block`
-- `error`
 
 ### 关键原则
 不要把一切都塞回 markdown 字符串。  

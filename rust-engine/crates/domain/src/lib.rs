@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::{collections::BTreeSet, error::Error, fmt};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -109,6 +109,15 @@ impl GenerationState {
     pub fn can_resume(self) -> bool {
         matches!(self, Self::Requesting | Self::Started | Self::Streaming)
     }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ToolPartState {
+    Pending,
+    Running,
+    Completed,
+    Failed,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -230,7 +239,28 @@ pub enum MessagePartPayload {
     },
     Image {
         url: String,
+        #[serde(default)]
+        mime: Option<String>,
         alt: Option<String>,
+    },
+    Document {
+        #[serde(alias = "name")]
+        file_name: String,
+        url: String,
+        #[serde(default)]
+        mime: Option<String>,
+    },
+    Tool {
+        #[serde(default)]
+        tool_call_id: Option<String>,
+        tool_name: String,
+        state: ToolPartState,
+        #[serde(default, alias = "arguments_json")]
+        input_json: String,
+        #[serde(default, alias = "result_json")]
+        output_json: Option<String>,
+        #[serde(default)]
+        error_message: Option<String>,
     },
     File {
         name: String,
@@ -253,6 +283,59 @@ pub enum MessagePartPayload {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MessagePartValidationError {
+    NegativeOrderIndex {
+        order_index: i32,
+    },
+    DuplicateOrderIndex {
+        order_index: i32,
+    },
+    NonIncreasingOrderIndex {
+        previous_order_index: i32,
+        current_order_index: i32,
+    },
+    EmptyField {
+        part_type: &'static str,
+        field: &'static str,
+    },
+    MissingField {
+        part_type: &'static str,
+        field: &'static str,
+    },
+}
+
+impl fmt::Display for MessagePartValidationError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::NegativeOrderIndex { order_index } => {
+                write!(
+                    f,
+                    "message part order_index must be >= 0, got {order_index}"
+                )
+            }
+            Self::DuplicateOrderIndex { order_index } => {
+                write!(f, "message part order_index {order_index} is duplicated")
+            }
+            Self::NonIncreasingOrderIndex {
+                previous_order_index,
+                current_order_index,
+            } => write!(
+                f,
+                "message part order_index must increase strictly, got {previous_order_index} then {current_order_index}"
+            ),
+            Self::EmptyField { part_type, field } => {
+                write!(f, "{part_type} part requires non-empty {field}")
+            }
+            Self::MissingField { part_type, field } => {
+                write!(f, "{part_type} part requires {field}")
+            }
+        }
+    }
+}
+
+impl Error for MessagePartValidationError {}
+
 /// Typed payload atom owned by one variant.
 ///
 /// Invariants:
@@ -265,6 +348,143 @@ pub struct MessagePart {
     pub variant_id: VariantId,
     pub order_index: i32,
     pub payload: MessagePartPayload,
+}
+
+impl MessagePartPayload {
+    pub fn kind(&self) -> &'static str {
+        match self {
+            Self::Text { .. } => "text",
+            Self::Reasoning { .. } => "reasoning",
+            Self::Image { .. } => "image",
+            Self::Document { .. } => "document",
+            Self::Tool { .. } => "tool",
+            Self::File { .. } => "file",
+            Self::Quote { .. } => "quote",
+            Self::CodeBlock { .. } => "code_block",
+            Self::MarkdownBlock { .. } => "markdown_block",
+            Self::Error { .. } => "error",
+            Self::ToolCall { .. } => "tool_call",
+            Self::ToolResult { .. } => "tool_result",
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), MessagePartValidationError> {
+        match self {
+            Self::Text { text } => require_non_empty("text", "text", text),
+            Self::Reasoning { text } => require_non_empty("reasoning", "text", text),
+            Self::Image { url, .. } => require_non_empty("image", "url", url),
+            Self::Document { file_name, url, .. } => {
+                require_non_empty("document", "file_name", file_name)?;
+                require_non_empty("document", "url", url)
+            }
+            Self::Tool {
+                tool_call_id,
+                tool_name,
+                input_json,
+                output_json,
+                error_message,
+                state,
+            } => {
+                if let Some(tool_call_id) = tool_call_id {
+                    require_non_empty("tool", "tool_call_id", tool_call_id)?;
+                }
+                require_non_empty("tool", "tool_name", tool_name)?;
+                require_non_empty("tool", "input_json", input_json)?;
+                if let Some(output_json) = output_json {
+                    require_non_empty("tool", "output_json", output_json)?;
+                }
+                if let Some(error_message) = error_message {
+                    require_non_empty("tool", "error_message", error_message)?;
+                }
+                if matches!(state, ToolPartState::Failed)
+                    && error_message
+                        .as_ref()
+                        .is_none_or(|value| value.trim().is_empty())
+                {
+                    return Err(MessagePartValidationError::MissingField {
+                        part_type: "tool",
+                        field: "error_message",
+                    });
+                }
+                Ok(())
+            }
+            Self::File { name, url, .. } => {
+                require_non_empty("file", "name", name)?;
+                require_non_empty("file", "url", url)
+            }
+            Self::Quote { text, .. } => require_non_empty("quote", "text", text),
+            Self::CodeBlock { code, .. } => require_non_empty("code_block", "code", code),
+            Self::MarkdownBlock { markdown } => {
+                require_non_empty("markdown_block", "markdown", markdown)
+            }
+            Self::Error { message } => require_non_empty("error", "message", message),
+            Self::ToolCall {
+                tool_name,
+                arguments_json,
+            } => {
+                require_non_empty("tool_call", "tool_name", tool_name)?;
+                require_non_empty("tool_call", "arguments_json", arguments_json)
+            }
+            Self::ToolResult {
+                tool_name,
+                result_json,
+            } => {
+                require_non_empty("tool_result", "tool_name", tool_name)?;
+                require_non_empty("tool_result", "result_json", result_json)
+            }
+        }
+    }
+}
+
+impl MessagePart {
+    pub fn validate(&self) -> Result<(), MessagePartValidationError> {
+        if self.order_index < 0 {
+            return Err(MessagePartValidationError::NegativeOrderIndex {
+                order_index: self.order_index,
+            });
+        }
+        self.payload.validate()
+    }
+
+    pub fn validate_sequence(parts: &[Self]) -> Result<(), MessagePartValidationError> {
+        let mut seen = BTreeSet::new();
+        let mut previous_order_index = None;
+
+        for part in parts {
+            part.validate()?;
+
+            if !seen.insert(part.order_index) {
+                return Err(MessagePartValidationError::DuplicateOrderIndex {
+                    order_index: part.order_index,
+                });
+            }
+
+            if let Some(previous_order_index) = previous_order_index {
+                if part.order_index <= previous_order_index {
+                    return Err(MessagePartValidationError::NonIncreasingOrderIndex {
+                        previous_order_index,
+                        current_order_index: part.order_index,
+                    });
+                }
+            }
+
+            previous_order_index = Some(part.order_index);
+        }
+
+        Ok(())
+    }
+}
+
+fn require_non_empty(
+    part_type: &'static str,
+    field: &'static str,
+    value: &str,
+) -> Result<(), MessagePartValidationError> {
+    if value.trim().is_empty() {
+        Err(MessagePartValidationError::EmptyField { part_type, field })
+    } else {
+        Ok(())
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -614,6 +834,7 @@ fn fnv1a_64(bytes: &[u8], offset_basis: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn sample_provider(base_url: &str) -> ProviderConfig {
         ProviderConfig::new(
@@ -688,6 +909,219 @@ mod tests {
             provider.presets[0]
                 .local_id
                 .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
+        );
+    }
+
+    #[test]
+    fn canonical_document_and_tool_parts_serialize_with_core_type_tags() {
+        let document = MessagePartPayload::Document {
+            file_name: "notes.pdf".to_string(),
+            url: "file:///notes.pdf".to_string(),
+            mime: Some("application/pdf".to_string()),
+        };
+        let tool = MessagePartPayload::Tool {
+            tool_call_id: Some("call-1".to_string()),
+            tool_name: "search_web".to_string(),
+            state: ToolPartState::Completed,
+            input_json: "{\"query\":\"rust\"}".to_string(),
+            output_json: Some("{\"items\":1}".to_string()),
+            error_message: None,
+        };
+
+        assert_eq!(
+            serde_json::to_value(document).expect("serialize document"),
+            json!({
+                "type": "document",
+                "file_name": "notes.pdf",
+                "url": "file:///notes.pdf",
+                "mime": "application/pdf"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(tool).expect("serialize tool"),
+            json!({
+                "type": "tool",
+                "tool_call_id": "call-1",
+                "tool_name": "search_web",
+                "state": "completed",
+                "input_json": "{\"query\":\"rust\"}",
+                "output_json": "{\"items\":1}",
+                "error_message": null
+            })
+        );
+    }
+
+    #[test]
+    fn core_image_and_error_parts_keep_explicit_type_tags() {
+        let image = MessagePartPayload::Image {
+            url: "https://cdn.example.com/cat.png".to_string(),
+            mime: Some("image/png".to_string()),
+            alt: Some("cat preview".to_string()),
+        };
+        let error = MessagePartPayload::Error {
+            message: "upstream exploded".to_string(),
+        };
+
+        assert_eq!(
+            serde_json::to_value(image).expect("serialize image"),
+            json!({
+                "type": "image",
+                "url": "https://cdn.example.com/cat.png",
+                "mime": "image/png",
+                "alt": "cat preview"
+            })
+        );
+        assert_eq!(
+            serde_json::to_value(error).expect("serialize error"),
+            json!({
+                "type": "error",
+                "message": "upstream exploded"
+            })
+        );
+    }
+
+    #[test]
+    fn validate_sequence_accepts_core_p0_part_progression() {
+        let variant_id = VariantId::new_v4();
+        let parts = vec![
+            MessagePart {
+                id: PartId::new_v4(),
+                variant_id,
+                order_index: 0,
+                payload: MessagePartPayload::Reasoning {
+                    text: "thinking".to_string(),
+                },
+            },
+            MessagePart {
+                id: PartId::new_v4(),
+                variant_id,
+                order_index: 1,
+                payload: MessagePartPayload::Tool {
+                    tool_call_id: Some("call-1".to_string()),
+                    tool_name: "search_web".to_string(),
+                    state: ToolPartState::Completed,
+                    input_json: "{\"query\":\"rust\"}".to_string(),
+                    output_json: Some("{\"items\":1}".to_string()),
+                    error_message: None,
+                },
+            },
+            MessagePart {
+                id: PartId::new_v4(),
+                variant_id,
+                order_index: 2,
+                payload: MessagePartPayload::Text {
+                    text: "final answer".to_string(),
+                },
+            },
+        ];
+
+        MessagePart::validate_sequence(&parts).expect("valid P0 part sequence");
+    }
+
+    #[test]
+    fn validate_sequence_rejects_duplicate_order_indexes() {
+        let variant_id = VariantId::new_v4();
+        let parts = vec![
+            MessagePart {
+                id: PartId::new_v4(),
+                variant_id,
+                order_index: 0,
+                payload: MessagePartPayload::Text {
+                    text: "first".to_string(),
+                },
+            },
+            MessagePart {
+                id: PartId::new_v4(),
+                variant_id,
+                order_index: 0,
+                payload: MessagePartPayload::Text {
+                    text: "second".to_string(),
+                },
+            },
+        ];
+
+        let error = MessagePart::validate_sequence(&parts).expect_err("duplicate order index");
+
+        assert_eq!(
+            error,
+            MessagePartValidationError::DuplicateOrderIndex { order_index: 0 }
+        );
+    }
+
+    #[test]
+    fn tool_validation_requires_error_message_for_failed_state() {
+        let error = MessagePartPayload::Tool {
+            tool_call_id: Some("call-1".to_string()),
+            tool_name: "search_web".to_string(),
+            state: ToolPartState::Failed,
+            input_json: "{\"query\":\"rust\"}".to_string(),
+            output_json: None,
+            error_message: None,
+        }
+        .validate()
+        .expect_err("failed tools must carry an error message");
+
+        assert_eq!(
+            error,
+            MessagePartValidationError::MissingField {
+                part_type: "tool",
+                field: "error_message",
+            }
+        );
+    }
+
+    #[test]
+    fn document_validation_requires_file_name_and_url() {
+        let error = MessagePartPayload::Document {
+            file_name: " ".to_string(),
+            url: "".to_string(),
+            mime: None,
+        }
+        .validate()
+        .expect_err("blank document metadata must fail");
+
+        assert_eq!(
+            error,
+            MessagePartValidationError::EmptyField {
+                part_type: "document",
+                field: "file_name",
+            }
+        );
+    }
+
+    #[test]
+    fn image_validation_requires_url() {
+        let error = MessagePartPayload::Image {
+            url: " ".to_string(),
+            mime: Some("image/png".to_string()),
+            alt: Some("cat preview".to_string()),
+        }
+        .validate()
+        .expect_err("blank image url must fail");
+
+        assert_eq!(
+            error,
+            MessagePartValidationError::EmptyField {
+                part_type: "image",
+                field: "url",
+            }
+        );
+    }
+
+    #[test]
+    fn error_validation_requires_message() {
+        let error = MessagePartPayload::Error {
+            message: "".to_string(),
+        }
+        .validate()
+        .expect_err("blank error message must fail");
+
+        assert_eq!(
+            error,
+            MessagePartValidationError::EmptyField {
+                part_type: "error",
+                field: "message",
+            }
         );
     }
 }

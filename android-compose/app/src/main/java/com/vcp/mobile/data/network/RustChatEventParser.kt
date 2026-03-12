@@ -76,6 +76,10 @@ data class RustMessagePart(
     val type: String,
     val text: String = "",
     val language: String? = null,
+    val title: String? = null,
+    val url: String? = null,
+    val mime: String? = null,
+    val state: String? = null,
 )
 
 data class RustEventError(
@@ -284,9 +288,63 @@ object RustChatEventParser {
                         language = toolName.takeIf { it.isNotBlank() },
                     )
                 }
+                "image" -> {
+                    val alt = payload.optNonBlankString("alt")
+                    val url = payload.optNonBlankString("url")
+                    val mime = payload.optNonBlankString("mime")
+                    val summaryText = buildSummaryText(listOfNotNull(alt, url, mime))
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = "",
+                        title = alt,
+                        url = url,
+                        mime = mime,
+                    )
+                    textBuilder.append(summaryText)
+                }
+                "document" -> {
+                    val fileName = payload.optNonBlankString("file_name")
+                        ?: payload.optNonBlankString("name")
+                    val url = payload.optNonBlankString("url")
+                    val mime = payload.optNonBlankString("mime")
+                    val summaryText = buildSummaryText(listOfNotNull(fileName, url, mime))
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = "",
+                        title = fileName,
+                        url = url,
+                        mime = mime,
+                    )
+                    textBuilder.append(summaryText)
+                }
+                "tool" -> {
+                    val toolName = payload.optNonBlankString("tool_name")
+                    val state = payload.optNonBlankString("state")
+                    val inputJson = payload.optNonBlankString("input_json")
+                        ?: payload.optNonBlankString("arguments_json")
+                    val outputJson = payload.optNonBlankString("output_json")
+                        ?: payload.optNonBlankString("result_json")
+                    val errorMessage = payload.optNonBlankString("error_message")
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = buildSummaryText(
+                            listOfNotNull(
+                                outputJson,
+                                errorMessage,
+                                if (outputJson == null && errorMessage == null) inputJson else null,
+                            )
+                        ),
+                        title = toolName,
+                        state = state,
+                    )
+                    textBuilder.append(orderedParts.last().text)
+                }
                 "error" -> {
                     val message = payload.optString("message")
                     orderedParts += RustMessagePart(type = type, text = message)
+                    if (textBuilder.isNotEmpty()) {
+                        textBuilder.append(message)
+                    }
                 }
             }
         }
@@ -326,3 +384,8 @@ object RustChatEventParser {
         }
     }
 }
+
+private fun JSONObject.optNonBlankString(name: String): String? =
+    optString(name).takeIf { it.isNotBlank() }
+
+private fun buildSummaryText(lines: List<String>): String = lines.joinToString("\n")

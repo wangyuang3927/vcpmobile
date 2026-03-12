@@ -85,6 +85,47 @@ fun TypedPartsRenderer(
                     }
                 }
 
+                "image" -> {
+                    TypedPartCard(
+                        title = part.title ?: "图片",
+                        body = part.url ?: part.text,
+                        meta = part.mime,
+                        textColor = textColor,
+                    )
+                }
+
+                "document" -> {
+                    TypedPartCard(
+                        title = part.title ?: "文档",
+                        body = part.url ?: part.text,
+                        meta = part.mime,
+                        textColor = textColor,
+                    )
+                }
+
+                "tool" -> {
+                    TypedPartCard(
+                        title = part.title?.let { "工具: $it" } ?: "工具",
+                        body = part.text,
+                        meta = part.state,
+                        textColor = textColor,
+                    )
+                }
+
+                "error" -> {
+                    Surface(
+                        color = MaterialTheme.colorScheme.errorContainer,
+                        shape = RoundedCornerShape(12.dp),
+                    ) {
+                        Text(
+                            text = part.text,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = MaterialTheme.colorScheme.onErrorContainer,
+                        )
+                    }
+                }
+
                 else -> {
                     Text(
                         text = part.text,
@@ -101,6 +142,44 @@ fun TypedPartsRenderer(
                 color = textColor,
                 style = MaterialTheme.typography.bodyMedium,
             )
+        }
+    }
+}
+
+@Composable
+private fun TypedPartCard(
+    title: String,
+    body: String?,
+    meta: String?,
+    textColor: Color,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.18f),
+        shape = RoundedCornerShape(12.dp),
+    ) {
+        Column(
+            modifier = Modifier.fillMaxWidth().padding(10.dp),
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            Text(
+                text = title,
+                color = textColor,
+                style = MaterialTheme.typography.labelMedium,
+            )
+            meta?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    color = textColor.copy(alpha = 0.7f),
+                    style = MaterialTheme.typography.bodySmall,
+                )
+            }
+            body?.takeIf { it.isNotBlank() }?.let {
+                Text(
+                    text = it,
+                    color = textColor,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+            }
         }
     }
 }
