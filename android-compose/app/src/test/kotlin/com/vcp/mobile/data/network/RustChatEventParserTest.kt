@@ -240,6 +240,89 @@ class RustChatEventParserTest {
     }
 
     @Test
+    fun `extractPartDelta preserves core typed parts beyond markdown`() {
+        val json = JSONObject(
+            """
+            {
+              "appended_parts": [
+                {
+                  "payload": {
+                    "type": "image",
+                    "url": "https://cdn.example.com/cat.png",
+                    "alt": "cat preview",
+                    "mime": "image/png"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "document",
+                    "file_name": "spec.pdf",
+                    "url": "file:///spec.pdf",
+                    "mime": "application/pdf"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "tool",
+                    "tool_name": "search_web",
+                    "state": "completed",
+                    "input_json": "{\"query\":\"rust\"}",
+                    "output_json": "{\"items\":1}"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "error",
+                    "message": "upstream exploded"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        val delta = RustChatEventParser.extractPartDelta(json)
+
+        assertEquals(
+            listOf("image", "document", "tool", "error"),
+            delta.partTypes
+        )
+        assertEquals(
+            listOf(
+                RustMessagePart(
+                    type = "image",
+                    text = "",
+                    title = "cat preview",
+                    url = "https://cdn.example.com/cat.png",
+                    mime = "image/png",
+                ),
+                RustMessagePart(
+                    type = "document",
+                    text = "",
+                    title = "spec.pdf",
+                    url = "file:///spec.pdf",
+                    mime = "application/pdf",
+                ),
+                RustMessagePart(
+                    type = "tool",
+                    text = "{\"items\":1}",
+                    title = "search_web",
+                    state = "completed",
+                ),
+                RustMessagePart(type = "error", text = "upstream exploded"),
+            ),
+            delta.parts
+        )
+        assertEquals(
+            "cat preview\nhttps://cdn.example.com/cat.png\nimage/png" +
+                "spec.pdf\nfile:///spec.pdf\napplication/pdf" +
+                "{\"items\":1}" +
+                "upstream exploded",
+            delta.appendedText
+        )
+    }
+
+    @Test
     fun `extractNodeUpsertMessage reads selected variant rich parts`() {
         val json = JSONObject(
             """

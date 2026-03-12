@@ -656,5 +656,9 @@ private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map 
         type = part.type,
         text = part.text,
         language = part.language,
+        title = part.title,
+        url = part.url,
+        mime = part.mime,
+        state = part.state,
     )
 }

@@ -59,6 +59,10 @@ data class UiMessagePart(
     val type: String,
     val text: String = "",
     val language: String? = null,
+    val title: String? = null,
+    val url: String? = null,
+    val mime: String? = null,
+    val state: String? = null,
 )
 
 data class UiMessageCompatibilityProjection(
@@ -113,18 +117,8 @@ fun List<UiMessagePart>.toCompatibilityProjection(): UiMessageCompatibilityProje
 
     val content = buildString {
         this@toCompatibilityProjection.forEach { part ->
-            when (part.type.trim().lowercase()) {
-                "text", "markdown_block" -> append(part.text)
-                "code_block" -> {
-                    if (!part.language.isNullOrBlank()) {
-                        append("```").append(part.language).append('\n')
-                    } else {
-                        append("```\n")
-                    }
-                    append(part.text)
-                    if (!part.text.endsWith("\n")) append('\n')
-                    append("```")
-                }
+            if (part.type.trim().lowercase() != "reasoning") {
+                append(part.compatibilityText())
             }
         }
     }
@@ -142,6 +136,37 @@ fun List<UiMessagePart>.toCompatibilityProjection(): UiMessageCompatibilityProje
         reasoning = reasoning,
         partTypes = partTypes,
     )
+}
+
+private fun UiMessagePart.compatibilityText(): String = when (type.trim().lowercase()) {
+    "code_block" -> buildString {
+        if (!language.isNullOrBlank()) {
+            append("```").append(language).append('\n')
+        } else {
+            append("```\n")
+        }
+        append(text)
+        if (!text.endsWith("\n")) append('\n')
+        append("```")
+    }
+    "image", "document" -> listOfNotNull(
+        title?.takeIf { it.isNotBlank() },
+        url?.takeIf { it.isNotBlank() },
+        mime?.takeIf { it.isNotBlank() },
+        text.takeIf { it.isNotBlank() && it != title && it != url },
+    ).joinToString("\n")
+    "tool" -> buildString {
+        title?.takeIf { it.isNotBlank() }?.let { append(it) }
+        state?.takeIf { it.isNotBlank() }?.let {
+            if (isNotEmpty()) append(" · ")
+            append(it)
+        }
+        if (text.isNotBlank()) {
+            if (isNotEmpty()) append('\n')
+            append(text)
+        }
+    }
+    else -> text
 }
 
 fun ChatMessage.renderProjection(): ChatRenderProjection {

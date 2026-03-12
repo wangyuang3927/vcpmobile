@@ -109,6 +109,7 @@ impl SessionEngine {
 
         let parent_cursor = validated_current_cursor(&stored)?;
         let user_node = build_user_node(stored.conversation.id, parent_cursor, text, now);
+        validate_node_bundle_parts(&user_node)?;
         let user_node_id = user_node.node.id;
         let assistant_node = build_assistant_node(
             stored.conversation.id,
@@ -118,6 +119,7 @@ impl SessionEngine {
             VariantStatus::Streaming,
             None,
         );
+        validate_node_bundle_parts(&assistant_node)?;
         let assistant_node_id = assistant_node.node.id;
         let assistant_variant_id = assistant_node.variants[0].variant.id;
         let completed_assistant_node = finalize_assistant_node(&assistant_node, now);
@@ -201,11 +203,8 @@ fn truncate_title(text: &str) -> String {
     }
 }
 
-fn assistant_markdown_reply(user_text: &str) -> String {
-    format!(
-        "Rust Engine 已接收你的消息：**{}**\n\n- 来源：Rust session engine\n- 形态：markdown_block",
-        user_text
-    )
+fn assistant_text_reply(user_text: &str) -> String {
+    format!("Rust Engine 已接收你的消息：{user_text}\n\n来源：Rust session engine\n形态：text")
 }
 
 fn build_user_node(
@@ -291,8 +290,8 @@ fn build_assistant_node(
                     id: Uuid::new_v4(),
                     variant_id,
                     order_index: 1,
-                    payload: MessagePartPayload::MarkdownBlock {
-                        markdown: assistant_markdown_reply(text),
+                    payload: MessagePartPayload::Text {
+                        text: assistant_text_reply(text),
                     },
                 },
             ],
@@ -416,7 +415,12 @@ fn selected_variant(bundle: &NodeBundle) -> Result<&VariantBundle, SessionError>
 }
 
 fn selected_node_projection(bundle: &NodeBundle) -> Result<SnapshotNode, SessionError> {
-    let selected_variant = selected_variant(bundle)?;
+    let selected_variant = selected_variant(bundle)?.clone();
+    validate_variant_parts(
+        bundle.node.conversation_id,
+        bundle.node.id,
+        &selected_variant.parts,
+    )?;
 
     Ok(SnapshotNode {
         node_id: bundle.node.id,
@@ -441,12 +445,37 @@ fn selected_node_projection(bundle: &NodeBundle) -> Result<SnapshotNode, Session
 }
 
 fn streaming_delta_parts(bundle: &NodeBundle) -> Result<Vec<MessagePart>, SessionError> {
-    Ok(selected_variant(bundle)?
+    let selected_variant = selected_variant(bundle)?;
+    validate_variant_parts(
+        bundle.node.conversation_id,
+        bundle.node.id,
+        &selected_variant.parts,
+    )?;
+
+    Ok(selected_variant
         .parts
         .iter()
         .filter(|part| should_emit_in_streaming_delta(&part.payload))
         .cloned()
         .collect())
+}
+
+fn validate_node_bundle_parts(bundle: &NodeBundle) -> Result<(), SessionError> {
+    for variant in &bundle.variants {
+        validate_variant_parts(bundle.node.conversation_id, bundle.node.id, &variant.parts)?;
+    }
+    Ok(())
+}
+
+fn validate_variant_parts(
+    conversation_id: ConversationId,
+    node_id: NodeId,
+    parts: &[MessagePart],
+) -> Result<(), SessionError> {
+    MessagePart::validate_sequence(parts).map_err(|error| SessionError::InvalidConversationState {
+        conversation_id,
+        reason: format!("node {node_id} has invalid part sequence: {error}"),
+    })
 }
 
 fn should_emit_in_streaming_delta(payload: &MessagePartPayload) -> bool {
@@ -548,9 +577,8 @@ pub fn demo_stream(
                     id: Uuid::new_v4(),
                     variant_id,
                     order_index: 1,
-                    payload: MessagePartPayload::MarkdownBlock {
-                        markdown: "你好，这是一条来自 Rust Engine 的 **demo** 流式消息。"
-                            .to_string(),
+                    payload: MessagePartPayload::Text {
+                        text: "你好，这是一条来自 Rust Engine 的 demo 流式消息。".to_string(),
                     },
                 }],
             },
@@ -698,10 +726,7 @@ mod tests {
             parts[0].payload,
             MessagePartPayload::Reasoning { .. }
         ));
-        assert!(matches!(
-            parts[1].payload,
-            MessagePartPayload::MarkdownBlock { .. }
-        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Text { .. }));
     }
 
     #[test]
@@ -772,7 +797,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_delta_parts_emit_markdown_block_from_selected_variant() {
+    fn streaming_delta_parts_emit_text_from_selected_variant() {
         let now = Utc::now();
         let bundle = build_assistant_node(
             ConversationId::new_v4(),
@@ -786,19 +811,16 @@ mod tests {
         let parts = streaming_delta_parts(&bundle).expect("streaming delta");
 
         assert_eq!(parts.len(), 1);
-        assert!(matches!(
-            parts[0].payload,
-            MessagePartPayload::MarkdownBlock { .. }
-        ));
+        assert!(matches!(parts[0].payload, MessagePartPayload::Text { .. }));
     }
 
     #[test]
-    fn assistant_node_uses_markdown_block_for_final_content() {
+    fn assistant_node_uses_text_for_final_content() {
         let now = Utc::now();
         let bundle = build_assistant_node(
             ConversationId::new_v4(),
             None,
-            "markdown projection",
+            "text projection",
             now,
             VariantStatus::Streaming,
             None,
@@ -806,14 +828,11 @@ mod tests {
         let parts = &bundle.variants[0].parts;
 
         assert_eq!(parts.len(), 2);
-        assert!(matches!(
-            parts[1].payload,
-            MessagePartPayload::MarkdownBlock { .. }
-        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Text { .. }));
     }
 
     #[test]
-    fn send_message_streams_markdown_block_delta_for_assistant_content() {
+    fn send_message_streams_text_delta_for_assistant_content() {
         let engine = test_engine();
 
         let events = engine
@@ -831,7 +850,7 @@ mod tests {
         assert_eq!(delta_parts.len(), 1);
         assert!(matches!(
             delta_parts[0].payload,
-            MessagePartPayload::MarkdownBlock { .. }
+            MessagePartPayload::Text { .. }
         ));
 
         fs::remove_file(engine.store().path()).ok();
@@ -881,7 +900,7 @@ mod tests {
         ));
         assert!(matches!(
             snapshot_nodes[1].selected_variant.parts[1].payload,
-            MessagePartPayload::MarkdownBlock { .. }
+            MessagePartPayload::Text { .. }
         ));
 
         fs::remove_file(engine.store().path()).ok();
@@ -956,7 +975,7 @@ mod tests {
         ));
         assert!(matches!(
             upserted_parts[1].payload,
-            MessagePartPayload::MarkdownBlock { .. }
+            MessagePartPayload::Text { .. }
         ));
 
         fs::remove_file(engine.store().path()).ok();
