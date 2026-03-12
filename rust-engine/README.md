@@ -25,6 +25,9 @@ cargo run -p vcpmobile-bridge-http
 - `GET http://127.0.0.1:4001/api/chat/conversations`
 - `GET http://127.0.0.1:4001/api/chat/catalog`
 - `POST http://127.0.0.1:4001/api/chat`
+- `POST http://127.0.0.1:4001/api/chat/edit`
+- `POST http://127.0.0.1:4001/api/chat/regenerate`
+- `POST http://127.0.0.1:4001/api/chat/select-variant`
 - `GET http://127.0.0.1:4001/api/chat/stream/<conversation_id>`
 
 也可以通过环境变量覆盖：

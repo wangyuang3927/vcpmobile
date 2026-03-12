@@ -321,6 +321,19 @@ pub struct EditMessageRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegenerateNodeRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectVariantRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+    pub variant_id: VariantId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformDocumentPromptRequest {
     #[serde(default)]
     pub attachments: Vec<DocumentAttachmentInput>,
