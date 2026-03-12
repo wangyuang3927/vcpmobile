@@ -52,4 +52,42 @@ class UiMessagePartCompatibilityTest {
             message.rendererParts()
         )
     }
+
+    @Test
+    fun `compatibility projection keeps typed image document tool and error summaries`() {
+        val projection = listOf(
+            UiMessagePart(
+                type = "image",
+                title = "cat preview",
+                url = "https://cdn.example.com/cat.png",
+                mime = "image/png",
+            ),
+            UiMessagePart(
+                type = "document",
+                title = "spec.pdf",
+                url = "file:///spec.pdf",
+                mime = "application/pdf",
+            ),
+            UiMessagePart(
+                type = "tool",
+                title = "search_web",
+                state = "completed",
+                text = "{\"items\":1}",
+            ),
+            UiMessagePart(type = "error", text = "upstream exploded"),
+        ).toCompatibilityProjection()
+
+        assertEquals(
+            "cat preview\nhttps://cdn.example.com/cat.png\nimage/png" +
+                "spec.pdf\nfile:///spec.pdf\napplication/pdf" +
+                "search_web · completed\n{\"items\":1}" +
+                "upstream exploded",
+            projection.content
+        )
+        assertNull(projection.reasoning)
+        assertEquals(
+            listOf("image", "document", "tool", "error"),
+            projection.partTypes
+        )
+    }
 }

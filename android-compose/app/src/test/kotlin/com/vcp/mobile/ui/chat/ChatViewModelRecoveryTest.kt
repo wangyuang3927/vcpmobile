@@ -7,6 +7,7 @@ import com.vcp.mobile.data.network.HubStreamFailureException
 import com.vcp.mobile.data.network.HubSendMessageResponse
 import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
+import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.recovery.RecoveryStore
 import com.vcp.mobile.data.recovery.RecoverySceneAnchor
 import com.vcp.mobile.data.repository.HubChatRepository
@@ -306,6 +307,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
@@ -337,6 +339,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"generation_started",
                           "payload":{
                             "event":"generation_started",
                             "data":{"node_id":"node-stream","variant_id":"variant-stream"}
@@ -351,6 +354,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"generation_part_delta",
                           "payload":{
                             "event":"generation_part_delta",
                             "data":{
@@ -403,6 +407,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
@@ -466,7 +471,7 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
-    fun `stream completion without explicit completed event still exits typing state`() = runTest(dispatcher) {
+    fun `stream completion without explicit completed event keeps typed generation in flight`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             streamEvents = flow {
                 emit(HubStreamEvent.Opened)
@@ -476,6 +481,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
@@ -510,6 +516,56 @@ class ChatViewModelRecoveryTest {
         dispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.detailState.value
+        assertEquals(ChatGenerationPhase.STREAMING, state.generation.phase)
+        assertTrue(state.isTyping)
+    }
+
+    @Test
+    fun `typed generation completed event exits typing state`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_started",
+                          "payload":{
+                            "event":"generation_started",
+                            "data":{"node_id":"node-user","variant_id":"variant-user"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"generation_completed",
+                          "payload":{
+                            "event":"generation_completed",
+                            "data":{"node_id":"node-user","variant_id":"variant-user"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("stream me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.detailState.value
         assertEquals(ChatGenerationPhase.COMPLETED, state.generation.phase)
         assertFalse(state.isTyping)
     }
@@ -531,6 +587,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
@@ -635,6 +692,7 @@ class ChatViewModelRecoveryTest {
                             data = """
                             {
                               "conversation_id":"conversation-stream",
+                              "event_name":"conversation_snapshot",
                               "payload":{
                                 "event":"conversation_snapshot",
                                 "data":{
@@ -762,6 +820,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
@@ -793,6 +852,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"generation_started",
                           "payload":{
                             "event":"generation_started",
                             "data":{"node_id":"node-stream","variant_id":"variant-stream"}
@@ -807,6 +867,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"generation_part_delta",
                           "payload":{
                             "event":"generation_part_delta",
                             "data":{
@@ -827,6 +888,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_node_upsert",
                           "payload":{
                             "event":"conversation_node_upsert",
                             "data":{
@@ -887,6 +949,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_snapshot",
                           "payload":{
                             "event":"conversation_snapshot",
                             "data":{
@@ -917,6 +980,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"conversation_node_upsert",
                           "payload":{
                             "event":"conversation_node_upsert",
                             "data":{
@@ -982,6 +1046,7 @@ class ChatViewModelRecoveryTest {
         )
         return RustChatEventEnvelope(
             conversationId = conversationId,
+            kind = RustChatEventKind.CONVERSATION_SNAPSHOT,
             event = "conversation_snapshot",
             data = data,
         )

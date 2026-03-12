@@ -108,18 +108,18 @@ class OkHttpSseHubApiClientTest {
     }
 
     @Test
-    fun `parseSnapshotEnvelope falls back to tagged payload event for older envelopes`() {
-        val envelope = client.parseSnapshotEnvelope(
-            """
-            event: chat_event
-            data: {"conversation_id":"conv-1","payload":{"event":"conversation_snapshot","data":{"nodes":[]}}}
-            """.trimIndent()
-        )
-
-        assertEquals("conv-1", envelope?.conversationId)
-        assertEquals("conversation_snapshot", envelope?.event)
-        assertNull(envelope?.eventId)
-        assertNull(envelope?.schemaFamily)
+    fun `parseSnapshotEnvelope throws on envelopes missing canonical event name`() {
+        try {
+            client.parseSnapshotEnvelope(
+                """
+                event: chat_event
+                data: {"conversation_id":"conv-1","payload":{"event":"conversation_snapshot","data":{"nodes":[]}}}
+                """.trimIndent()
+            )
+            error("expected snapshot parse failure")
+        } catch (error: HubSnapshotParseException) {
+            assertTrue(error.message.orEmpty().contains("malformed"))
+        }
     }
 
     @Test

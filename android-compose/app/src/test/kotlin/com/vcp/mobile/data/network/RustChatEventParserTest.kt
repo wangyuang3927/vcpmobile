@@ -240,6 +240,89 @@ class RustChatEventParserTest {
     }
 
     @Test
+    fun `extractPartDelta preserves core typed parts beyond markdown`() {
+        val json = JSONObject(
+            """
+            {
+              "appended_parts": [
+                {
+                  "payload": {
+                    "type": "image",
+                    "url": "https://cdn.example.com/cat.png",
+                    "alt": "cat preview",
+                    "mime": "image/png"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "document",
+                    "file_name": "spec.pdf",
+                    "url": "file:///spec.pdf",
+                    "mime": "application/pdf"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "tool",
+                    "tool_name": "search_web",
+                    "state": "completed",
+                    "input_json": "{\"query\":\"rust\"}",
+                    "output_json": "{\"items\":1}"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "error",
+                    "message": "upstream exploded"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        val delta = RustChatEventParser.extractPartDelta(json)
+
+        assertEquals(
+            listOf("image", "document", "tool", "error"),
+            delta.partTypes
+        )
+        assertEquals(
+            listOf(
+                RustMessagePart(
+                    type = "image",
+                    text = "",
+                    title = "cat preview",
+                    url = "https://cdn.example.com/cat.png",
+                    mime = "image/png",
+                ),
+                RustMessagePart(
+                    type = "document",
+                    text = "",
+                    title = "spec.pdf",
+                    url = "file:///spec.pdf",
+                    mime = "application/pdf",
+                ),
+                RustMessagePart(
+                    type = "tool",
+                    text = "{\"items\":1}",
+                    title = "search_web",
+                    state = "completed",
+                ),
+                RustMessagePart(type = "error", text = "upstream exploded"),
+            ),
+            delta.parts
+        )
+        assertEquals(
+            "cat preview\nhttps://cdn.example.com/cat.png\nimage/png" +
+                "spec.pdf\nfile:///spec.pdf\napplication/pdf" +
+                "{\"items\":1}" +
+                "upstream exploded",
+            delta.appendedText
+        )
+    }
+
+    @Test
     fun `extractNodeUpsertMessage reads selected variant rich parts`() {
         val json = JSONObject(
             """
@@ -282,6 +365,194 @@ class RustChatEventParserTest {
                 RustMessagePart(type = "markdown_block", text = "hello **upsert**"),
             ),
             snapshot?.delta?.parts
+        )
+    }
+
+    @Test
+    fun `parseEnvelope resolves canonical typed event kind`() {
+        val envelope = RustChatEventParser.parseEnvelope(
+            """
+            {
+              "schema": { "family": "chat_event", "major": 1, "minor": 0 },
+              "event_id": "event-1",
+              "event_name": "tool_call_started",
+              "conversation_id": "conversation-1",
+              "payload": {
+                "event": "tool_call_started",
+                "data": {
+                  "node_id": "node-1",
+                  "variant_id": "variant-1",
+                  "tool_call_id": "tool-call-1",
+                  "tool_name": "search",
+                  "arguments_json": "{\"query\":\"rust\"}"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(envelope)
+        assertEquals(RustChatEventKind.TOOL_CALL_STARTED, envelope?.kind)
+        assertEquals("tool_call_started", envelope?.event)
+    }
+
+    @Test
+    fun `parseEnvelope rejects envelopes without canonical event_name`() {
+        val envelope = RustChatEventParser.parseEnvelope(
+            """
+            {
+              "conversation_id": "conversation-1",
+              "payload": {
+                "event": "tool_call_started",
+                "data": {
+                  "node_id": "node-1",
+                  "variant_id": "variant-1"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertNull(envelope)
+    }
+
+    @Test
+    fun `parseEnvelope rejects mismatched payload event tag`() {
+        val envelope = RustChatEventParser.parseEnvelope(
+            """
+            {
+              "event_name": "tool_call_started",
+              "payload": {
+                "event": "generation_started",
+                "data": {
+                  "node_id": "node-1",
+                  "variant_id": "variant-1"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertNull(envelope)
+    }
+
+    @Test
+    fun `extractEventError reads typed error payload semantics`() {
+        val json = JSONObject(
+            """
+            {
+              "error": {
+                "kind": "provider",
+                "code": "rate_limit",
+                "message": "provider throttled the request",
+                "retriable": true
+              }
+            }
+            """.trimIndent()
+        )
+
+        val error = RustChatEventParser.extractEventError(json)
+
+        assertNotNull(error)
+        assertEquals(RustEventErrorKind.PROVIDER, error?.kind)
+        assertEquals("rate_limit", error?.code)
+        assertEquals("provider throttled the request", error?.message)
+        assertEquals(true, error?.retriable)
+    }
+
+    @Test
+    fun `extractEventError ignores ad hoc top level message fallback`() {
+        val json = JSONObject(
+            """
+            {
+              "message": "provider throttled the request"
+            }
+            """.trimIndent()
+        )
+
+        val error = RustChatEventParser.extractEventError(json)
+
+        assertNull(error)
+    }
+
+    @Test
+    fun `extractToolCallEvent reads explicit tool lifecycle payload`() {
+        val json = JSONObject(
+            """
+            {
+              "node_id": "node-1",
+              "variant_id": "variant-1",
+              "tool_call_id": "tool-call-1",
+              "tool_name": "search",
+              "arguments_json": "{\"query\":\"rust\"}"
+            }
+            """.trimIndent()
+        )
+
+        val event = RustChatEventParser.extractToolCallEvent(
+            kind = RustChatEventKind.TOOL_CALL_STARTED,
+            data = json,
+        )
+
+        assertNotNull(event)
+        assertEquals("node-1:variant-1", event?.identity?.messageKey)
+        assertEquals("tool-call-1", event?.toolCallId)
+        assertEquals("search", event?.toolName)
+        assertEquals(RustToolCallPhase.STARTED, event?.phase)
+        assertEquals("{\"query\":\"rust\"}", event?.argumentsJson)
+    }
+
+    @Test
+    fun `extractPartDelta preserves tool and error part types without flattening into text`() {
+        val json = JSONObject(
+            """
+            {
+              "appended_parts": [
+                {
+                  "payload": {
+                    "type": "tool_call",
+                    "tool_name": "search",
+                    "arguments_json": "{\"query\":\"rust\"}"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "tool_result",
+                    "tool_name": "search",
+                    "result_json": "{\"hits\":1}"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "error",
+                    "message": "tool failed"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        val delta = RustChatEventParser.extractPartDelta(json)
+
+        assertEquals("", delta.appendedText)
+        assertEquals("", delta.appendedReasoning)
+        assertEquals(listOf("tool_call", "tool_result", "error"), delta.partTypes)
+        assertEquals(
+            listOf(
+                RustMessagePart(
+                    type = "tool_call",
+                    text = "{\"query\":\"rust\"}",
+                    language = "search",
+                ),
+                RustMessagePart(
+                    type = "tool_result",
+                    text = "{\"hits\":1}",
+                    language = "search",
+                ),
+                RustMessagePart(type = "error", text = "tool failed"),
+            ),
+            delta.parts
         )
     }
 }
