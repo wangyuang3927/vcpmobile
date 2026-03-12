@@ -17,11 +17,12 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 use vcpmobile_domain::{ConversationId, DocumentAttachmentInput, GenerationState};
 use vcpmobile_protocol::{
-    ChatEvent, EventEnvelope, SnapshotBranch, SnapshotConversation, TransformDocumentPromptRequest,
-    TransformDocumentPromptResponse,
+    ChatEvent, EditMessageRequest, EventEnvelope, SnapshotBranch, SnapshotConversation,
+    TransformDocumentPromptRequest, TransformDocumentPromptResponse,
 };
 use vcpmobile_session::{
-    SessionEngine, SessionSendRequest, demo_conversation, selected_branch_snapshot_nodes,
+    SessionEditRequest, SessionEngine, SessionSendRequest, demo_conversation,
+    selected_branch_snapshot_nodes,
 };
 use vcpmobile_store::FileStore;
 
@@ -80,6 +81,7 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/conversations", get(chat_conversations))
         .route("/api/chat/catalog", get(chat_catalog))
         .route("/api/chat", post(chat_send))
+        .route("/api/chat/edit", post(chat_edit))
         .route("/api/chat/document-prompt", post(chat_document_prompt))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
         .with_state(state)
@@ -211,6 +213,43 @@ async fn chat_document_prompt(
         .map_err(|error| (axum::http::StatusCode::BAD_REQUEST, error.to_string()))?;
 
     Ok(Json(TransformDocumentPromptResponse { output }))
+}
+
+async fn chat_edit(
+    State(state): State<AppState>,
+    Json(body): Json<EditMessageRequest>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (axum::http::StatusCode, String),
+> {
+    let user_text = body.text.trim().to_string();
+    if user_text.is_empty() && body.attachments.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "edited message must include text or attachments".to_string(),
+        ));
+    }
+
+    let engine = state.engine.lock().await;
+    let events = engine
+        .edit_message(SessionEditRequest {
+            conversation_id: body.conversation_id,
+            node_id: body.node_id,
+            text: user_text,
+            attachments: body.attachments,
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_)
+            | vcpmobile_session::SessionError::NodeNotFound { .. } => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            vcpmobile_session::SessionError::EmptyText => {
+                (axum::http::StatusCode::BAD_REQUEST, error.to_string())
+            }
+            _ => (axum::http::StatusCode::BAD_REQUEST, error.to_string()),
+        })?;
+
+    Ok(build_event_stream(events))
 }
 
 async fn chat_stream(

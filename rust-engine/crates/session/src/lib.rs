@@ -36,6 +36,14 @@ pub struct SessionSendRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct SessionEditRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+    pub text: String,
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone)]
 struct PreparedDocumentAttachment {
     descriptor: DocumentDescriptor,
     bytes: Vec<u8>,
@@ -67,6 +75,11 @@ pub enum SessionError {
     EmptyText,
     #[error("conversation not found: {0}")]
     ConversationNotFound(ConversationId),
+    #[error("node not found in conversation {conversation_id}: {node_id}")]
+    NodeNotFound {
+        conversation_id: ConversationId,
+        node_id: NodeId,
+    },
     #[error("invalid conversation state for {conversation_id}: {reason}")]
     InvalidConversationState {
         conversation_id: ConversationId,
@@ -181,6 +194,139 @@ impl SessionEngine {
             .transition(GenerationSignal::Started);
         stored.conversation.updated_at = now;
         stored.nodes.push(user_node);
+        stored.nodes.push(assistant_node.clone());
+
+        let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
+        let assistant_delta_parts = streaming_delta_parts(&assistant_node)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta)
+            .transition(GenerationSignal::Complete);
+        if let Some(last_node) = stored.nodes.last_mut() {
+            *last_node = completed_assistant_node.clone();
+        }
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationSnapshot {
+                    conversation: SnapshotConversation::from(&inflight_conversation_projection(
+                        &stored.conversation,
+                    )),
+                    branch: SnapshotBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        nodes: snapshot_nodes,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationStarted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationPartDelta {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                    appended_parts: assistant_delta_parts,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationNodeUpsert {
+                    node: selected_node_projection(&completed_assistant_node)?,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationCompleted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+        ])
+    }
+
+    pub fn edit_message(
+        &self,
+        request: SessionEditRequest,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let text = request.text.trim();
+        if text.is_empty() && request.attachments.is_empty() {
+            return Err(SessionError::EmptyText);
+        }
+
+        let now = Utc::now();
+        let mut stored = self
+            .store
+            .get_conversation(request.conversation_id)?
+            .ok_or(SessionError::ConversationNotFound(request.conversation_id))?;
+        let branch_node_ids = selected_branch_node_ids(&stored)?;
+        if !branch_node_ids.contains(&request.node_id) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: request.conversation_id,
+                reason: format!(
+                    "node {} is not on the selected branch for edit",
+                    request.node_id
+                ),
+            });
+        }
+
+        let target_index = stored
+            .nodes
+            .iter()
+            .position(|bundle| bundle.node.id == request.node_id)
+            .ok_or(SessionError::NodeNotFound {
+                conversation_id: request.conversation_id,
+                node_id: request.node_id,
+            })?;
+        let target_bundle = stored.nodes[target_index].clone();
+        if target_bundle.node.role != MessageRole::User {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: request.conversation_id,
+                reason: format!("node {} is not a user node", request.node_id),
+            });
+        }
+        if user_parts_match_request(&target_bundle, text, &request.attachments)? {
+            return Ok(Vec::new());
+        }
+
+        let edited_user_node = build_user_node(
+            stored.conversation.id,
+            target_bundle.node.parent_node_id,
+            text,
+            &request.attachments,
+            now,
+        )?;
+        validate_node_bundle_parts(&edited_user_node)?;
+        let edited_user_node_id = edited_user_node.node.id;
+
+        let assistant_node = build_assistant_node(
+            stored.conversation.id,
+            Some(edited_user_node_id),
+            text,
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+        validate_node_bundle_parts(&assistant_node)?;
+        let assistant_node_id = assistant_node.node.id;
+        let assistant_variant_id = assistant_node.variants[0].variant.id;
+        let completed_assistant_node = finalize_assistant_node(&assistant_node, now);
+
+        stored.conversation.current_cursor = Some(assistant_node_id);
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit)
+            .transition(GenerationSignal::Started);
+        stored.conversation.updated_at = now;
+        stored.nodes.push(edited_user_node);
         stored.nodes.push(assistant_node.clone());
 
         let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
@@ -594,6 +740,38 @@ fn build_user_node(
 ) -> Result<NodeBundle, SessionError> {
     let node_id = NodeId::new_v4();
     let variant_id = Uuid::new_v4();
+    let parts = build_user_parts(variant_id, text, attachments)?;
+
+    Ok(NodeBundle {
+        node: MessageNode {
+            id: node_id,
+            conversation_id,
+            parent_node_id,
+            role: MessageRole::User,
+            select_index: 0,
+            created_at: now,
+            updated_at: now,
+        },
+        variants: vec![VariantBundle {
+            variant: MessageVariant {
+                id: variant_id,
+                node_id,
+                status: VariantStatus::Completed,
+                model_id: None,
+                usage_json: None,
+                created_at: now,
+                finished_at: Some(now),
+            },
+            parts,
+        }],
+    })
+}
+
+fn build_user_parts(
+    variant_id: Uuid,
+    text: &str,
+    attachments: &[DocumentAttachmentInput],
+) -> Result<Vec<MessagePart>, SessionError> {
     let mut parts = Vec::new();
 
     if !text.is_empty() {
@@ -621,29 +799,7 @@ fn build_user_node(
         });
     }
 
-    Ok(NodeBundle {
-        node: MessageNode {
-            id: node_id,
-            conversation_id,
-            parent_node_id,
-            role: MessageRole::User,
-            select_index: 0,
-            created_at: now,
-            updated_at: now,
-        },
-        variants: vec![VariantBundle {
-            variant: MessageVariant {
-                id: variant_id,
-                node_id,
-                status: VariantStatus::Completed,
-                model_id: None,
-                usage_json: None,
-                created_at: now,
-                finished_at: Some(now),
-            },
-            parts,
-        }],
-    })
+    Ok(parts)
 }
 
 fn attachment_document_url(document: &DocumentDescriptor) -> String {
@@ -794,6 +950,47 @@ fn validated_current_cursor(stored: &StoredConversation) -> Result<Option<NodeId
     Ok(Some(current_cursor))
 }
 
+fn selected_branch_node_ids(stored: &StoredConversation) -> Result<BTreeSet<NodeId>, SessionError> {
+    let Some(mut current_cursor) = validated_current_cursor(stored)? else {
+        return Ok(BTreeSet::new());
+    };
+    let node_index = stored_node_index(stored);
+    let mut ordered_branch = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+
+    loop {
+        if !visited.insert(current_cursor) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!("cycle detected while resolving branch at node {current_cursor}"),
+            });
+        }
+        let bundle = node_index.get(&current_cursor).ok_or_else(|| {
+            SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!("node {current_cursor} missing from stored conversation"),
+            }
+        })?;
+        if bundle.node.conversation_id != stored.conversation.id {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!(
+                    "node {current_cursor} belongs to conversation {}",
+                    bundle.node.conversation_id
+                ),
+            });
+        }
+        ordered_branch.insert(current_cursor);
+
+        match bundle.node.parent_node_id {
+            Some(parent_node_id) => current_cursor = parent_node_id,
+            None => break,
+        }
+    }
+
+    Ok(ordered_branch)
+}
+
 fn stored_node_index(stored: &StoredConversation) -> BTreeMap<NodeId, &NodeBundle> {
     stored
         .nodes
@@ -874,6 +1071,29 @@ fn validate_variant_parts(
         conversation_id,
         reason: format!("node {node_id} has invalid part sequence: {error}"),
     })
+}
+
+fn user_parts_match_request(
+    bundle: &NodeBundle,
+    text: &str,
+    attachments: &[DocumentAttachmentInput],
+) -> Result<bool, SessionError> {
+    let selected_variant = selected_variant(bundle)?;
+    let candidate = build_user_parts(Uuid::nil(), text, attachments)?;
+
+    Ok(selected_variant
+        .parts
+        .iter()
+        .map(message_part_signature)
+        .collect::<Vec<_>>()
+        == candidate
+            .iter()
+            .map(message_part_signature)
+            .collect::<Vec<_>>())
+}
+
+fn message_part_signature(part: &MessagePart) -> (i32, MessagePartPayload) {
+    (part.order_index, part.payload.clone())
 }
 
 pub fn demo_conversation(topic_id: TopicId, agent_id: Uuid) -> (Conversation, NodeBundle) {
@@ -1331,6 +1551,212 @@ mod tests {
             .expect_err("missing conversation must fail");
 
         assert!(matches!(error, SessionError::ConversationNotFound(id) if id == missing));
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn edit_message_creates_new_branch_and_preserves_prior_truth() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("follow-up message");
+
+        let before_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_user_node = before_edit.nodes[2].node.clone();
+        let original_assistant_node = before_edit.nodes[3].node.clone();
+        let original_user_parts = before_edit.nodes[2].variants[0].parts.clone();
+
+        let events = engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: original_user_node.id,
+                text: "second edited".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("edit message");
+
+        let snapshot_nodes = match &events[0].payload {
+            ChatEvent::ConversationSnapshot { branch, .. } => &branch.nodes,
+            other => panic!("expected conversation snapshot, got {other:?}"),
+        };
+        assert_eq!(snapshot_nodes.len(), 4);
+        assert_eq!(
+            snapshot_nodes[2].parent_node_id, original_user_node.parent_node_id,
+            "edited user node should branch from the original parent"
+        );
+        assert_eq!(
+            snapshot_nodes[2].selected_variant.parts[0].payload,
+            MessagePartPayload::Text {
+                text: "second edited".to_string(),
+            }
+        );
+        assert_eq!(
+            snapshot_nodes[3].parent_node_id,
+            Some(snapshot_nodes[2].node_id),
+            "replacement assistant should branch from edited user node"
+        );
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load edited snapshot")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.nodes.len(),
+            6,
+            "edit should add a user+assistant branch"
+        );
+        assert_eq!(
+            stored.nodes[2].variants[0].parts, original_user_parts,
+            "original edited turn must remain unchanged"
+        );
+        assert_eq!(
+            stored.nodes[3].node.parent_node_id,
+            Some(original_user_node.id),
+            "old assistant branch should remain attached to the old user node"
+        );
+        assert_eq!(
+            stored.nodes[3].node.id, original_assistant_node.id,
+            "prior assistant node should be preserved"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(stored.nodes[5].node.id),
+            "selected branch should move to the replacement assistant leaf"
+        );
+
+        let branch_text = selected_branch_snapshot_nodes(&stored)
+            .expect("selected branch")
+            .into_iter()
+            .flat_map(|node| node.selected_variant.parts.into_iter())
+            .filter_map(|part| match part.payload {
+                MessagePartPayload::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            branch_text,
+            vec![
+                "first".to_string(),
+                "Rust Engine 已接收你的消息：first\n\n来源：Rust session engine\n形态：text"
+                    .to_string(),
+                "second edited".to_string(),
+                "Rust Engine 已接收你的消息：second edited\n\n来源：Rust session engine\n形态：text"
+                    .to_string(),
+            ]
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn edit_message_rejects_nodes_outside_selected_branch() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("follow-up message");
+
+        let before_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_user_node_id = before_edit.nodes[2].node.id;
+
+        engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: original_user_node_id,
+                text: "second edited".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first edit");
+
+        let error = engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: original_user_node_id,
+                text: "second edited again".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect_err("old branch node should no longer be editable");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState {
+                conversation_id: id,
+                reason,
+            } if id == conversation_id && reason.contains("is not on the selected branch")
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn edit_message_noop_does_not_create_sibling_branch() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        let before_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_node_count = before_edit.nodes.len();
+        let user_node_id = before_edit.nodes[0].node.id;
+
+        let events = engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: user_node_id,
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("noop edit should succeed");
+
+        assert!(
+            events.is_empty(),
+            "noop edit should not emit mutation events"
+        );
+        let after_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        assert_eq!(after_edit.nodes.len(), original_node_count);
+
         fs::remove_file(engine.store().path()).ok();
     }
 
