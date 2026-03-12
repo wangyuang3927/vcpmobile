@@ -6,7 +6,10 @@ use vcpmobile_domain::{
     Conversation, ConversationId, GenerationSignal, GenerationState, MessageNode, MessagePart,
     MessagePartPayload, MessageRole, MessageVariant, NodeId, TopicId, VariantStatus,
 };
-use vcpmobile_protocol::{ChatEvent, EventEnvelope, NodeBundle, VariantBundle};
+use vcpmobile_protocol::{
+    ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
+    SnapshotPart, SnapshotVariant, VariantBundle,
+};
 use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
 
 #[derive(Debug, Clone)]
@@ -145,8 +148,13 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationSnapshot {
-                    conversation: inflight_conversation_projection(&stored.conversation),
-                    nodes: snapshot_nodes,
+                    conversation: SnapshotConversation::from(
+                        &inflight_conversation_projection(&stored.conversation),
+                    ),
+                    branch: SnapshotBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        nodes: snapshot_nodes,
+                    },
                 },
             ),
             EventEnvelope::new(
@@ -167,7 +175,7 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationNodeUpsert {
-                    node: completed_assistant_node,
+                    node: selected_node_projection(&completed_assistant_node)?,
                 },
             ),
             EventEnvelope::new(
@@ -309,7 +317,7 @@ fn inflight_conversation_projection(conversation: &Conversation) -> Conversation
 
 pub fn selected_branch_snapshot_nodes(
     stored: &StoredConversation,
-) -> Result<Vec<NodeBundle>, SessionError> {
+) -> Result<Vec<SnapshotNode>, SessionError> {
     let Some(mut current_cursor) = validated_current_cursor(stored)? else {
         return Ok(Vec::new());
     };
@@ -339,7 +347,7 @@ pub fn selected_branch_snapshot_nodes(
                 ),
             });
         }
-        ordered_branch.push(selected_variant_snapshot_projection(bundle)?);
+        ordered_branch.push(selected_node_projection(bundle)?);
 
         match bundle.node.parent_node_id {
             Some(parent_node_id) => current_cursor = parent_node_id,
@@ -407,14 +415,28 @@ fn selected_variant(bundle: &NodeBundle) -> Result<&VariantBundle, SessionError>
         })
 }
 
-fn selected_variant_snapshot_projection(bundle: &NodeBundle) -> Result<NodeBundle, SessionError> {
-    let selected_variant = selected_variant(bundle)?.clone();
-    let mut node = bundle.node.clone();
-    node.select_index = 0;
+fn selected_node_projection(bundle: &NodeBundle) -> Result<SnapshotNode, SessionError> {
+    let selected_variant = selected_variant(bundle)?;
 
-    Ok(NodeBundle {
-        node,
-        variants: vec![selected_variant],
+    Ok(SnapshotNode {
+        node_id: bundle.node.id,
+        parent_node_id: bundle.node.parent_node_id,
+        role: bundle.node.role,
+        created_at: bundle.node.created_at,
+        updated_at: bundle.node.updated_at,
+        selected_variant: SnapshotVariant {
+            variant_id: selected_variant.variant.id,
+            status: selected_variant.variant.status,
+            model_id: selected_variant.variant.model_id.clone(),
+            usage_json: selected_variant.variant.usage_json.clone(),
+            created_at: selected_variant.variant.created_at,
+            finished_at: selected_variant.variant.finished_at,
+            parts: selected_variant
+                .parts
+                .iter()
+                .map(SnapshotPart::from)
+                .collect(),
+        },
     })
 }
 
@@ -501,8 +523,13 @@ pub fn demo_stream(
         EventEnvelope::new(
             Some(conversation.id),
             ChatEvent::ConversationSnapshot {
-                conversation: conversation.clone(),
-                nodes: vec![node_bundle.clone()],
+                conversation: SnapshotConversation::from(&conversation),
+                branch: SnapshotBranch {
+                    cursor_node_id: conversation.current_cursor,
+                    nodes: vec![
+                        selected_node_projection(&node_bundle).expect("demo node projection"),
+                    ],
+                },
             },
         ),
         EventEnvelope::new(
@@ -652,7 +679,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_variant_snapshot_projection_keeps_selected_variant_full_parts() {
+    fn selected_node_projection_keeps_selected_variant_full_parts() {
         let now = Utc::now();
         let bundle = build_assistant_node(
             ConversationId::new_v4(),
@@ -663,10 +690,9 @@ mod tests {
             None,
         );
 
-        let projected = selected_variant_snapshot_projection(&bundle).expect("projection");
-        let parts = &projected.variants[0].parts;
+        let projected = selected_node_projection(&bundle).expect("projection");
+        let parts = &projected.selected_variant.parts;
 
-        assert_eq!(projected.variants.len(), 1);
         assert_eq!(parts.len(), 2);
         assert!(matches!(
             parts[0].payload,
@@ -679,7 +705,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_variant_snapshot_projection_rebases_selected_variant_to_index_zero() {
+    fn selected_node_projection_surfaces_only_the_selected_variant() {
         let now = Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
@@ -737,11 +763,12 @@ mod tests {
             ],
         };
 
-        let projected = selected_variant_snapshot_projection(&bundle).expect("projection");
+        let projected = selected_node_projection(&bundle).expect("projection");
 
-        assert_eq!(projected.node.select_index, 0);
-        assert_eq!(projected.variants.len(), 1);
-        assert_eq!(projected.variants[0].variant.id, second_variant_id);
+        assert_eq!(projected.node_id, node_id);
+        assert_eq!(projected.selected_variant.variant_id, second_variant_id);
+        assert_eq!(projected.selected_variant.parts.len(), 1);
+        assert_eq!(projected.selected_variant.parts[0].order_index, 0);
     }
 
     #[test]
@@ -822,7 +849,7 @@ mod tests {
             .expect("send message");
 
         let snapshot_nodes = match &events[0].payload {
-            ChatEvent::ConversationSnapshot { nodes, .. } => nodes,
+            ChatEvent::ConversationSnapshot { branch, .. } => &branch.nodes,
             other => panic!("expected conversation_snapshot, got {other:?}"),
         };
 
@@ -831,33 +858,29 @@ mod tests {
             2,
             "send snapshot should materialize both new nodes"
         );
-        assert_eq!(snapshot_nodes[0].node.role, MessageRole::User);
-        assert_eq!(snapshot_nodes[0].node.parent_node_id, None);
-        assert_eq!(snapshot_nodes[0].node.select_index, 0);
-        assert_eq!(snapshot_nodes[0].variants.len(), 1);
+        assert_eq!(snapshot_nodes[0].role, MessageRole::User);
+        assert_eq!(snapshot_nodes[0].parent_node_id, None);
         assert!(matches!(
-            snapshot_nodes[0].variants[0].parts[0].payload,
+            snapshot_nodes[0].selected_variant.parts[0].payload,
             MessagePartPayload::Text { .. }
         ));
-        assert_eq!(snapshot_nodes[1].node.role, MessageRole::Assistant);
+        assert_eq!(snapshot_nodes[1].role, MessageRole::Assistant);
         assert_eq!(
-            snapshot_nodes[1].node.parent_node_id,
-            Some(snapshot_nodes[0].node.id),
+            snapshot_nodes[1].parent_node_id,
+            Some(snapshot_nodes[0].node_id),
             "assistant snapshot should preserve the persisted user-node edge"
         );
-        assert_eq!(snapshot_nodes[1].node.select_index, 0);
-        assert_eq!(snapshot_nodes[1].variants.len(), 1);
         assert_eq!(
-            snapshot_nodes[1].variants[0].variant.status,
+            snapshot_nodes[1].selected_variant.status,
             VariantStatus::Streaming
         );
-        assert_eq!(snapshot_nodes[1].variants[0].parts.len(), 2);
+        assert_eq!(snapshot_nodes[1].selected_variant.parts.len(), 2);
         assert!(matches!(
-            snapshot_nodes[1].variants[0].parts[0].payload,
+            snapshot_nodes[1].selected_variant.parts[0].payload,
             MessagePartPayload::Reasoning { .. }
         ));
         assert!(matches!(
-            snapshot_nodes[1].variants[0].parts[1].payload,
+            snapshot_nodes[1].selected_variant.parts[1].payload,
             MessagePartPayload::MarkdownBlock { .. }
         ));
 
@@ -884,27 +907,27 @@ mod tests {
             .expect("second message");
 
         let snapshot_nodes = match &second_events[0].payload {
-            ChatEvent::ConversationSnapshot { nodes, .. } => nodes,
+            ChatEvent::ConversationSnapshot { branch, .. } => &branch.nodes,
             other => panic!("expected conversation_snapshot, got {other:?}"),
         };
 
         assert_eq!(snapshot_nodes.len(), 4);
-        assert_eq!(snapshot_nodes[0].node.role, MessageRole::User);
-        assert_eq!(snapshot_nodes[0].node.parent_node_id, None);
-        assert_eq!(snapshot_nodes[1].node.role, MessageRole::Assistant);
+        assert_eq!(snapshot_nodes[0].role, MessageRole::User);
+        assert_eq!(snapshot_nodes[0].parent_node_id, None);
+        assert_eq!(snapshot_nodes[1].role, MessageRole::Assistant);
         assert_eq!(
-            snapshot_nodes[1].node.parent_node_id,
-            Some(snapshot_nodes[0].node.id)
+            snapshot_nodes[1].parent_node_id,
+            Some(snapshot_nodes[0].node_id)
         );
-        assert_eq!(snapshot_nodes[2].node.role, MessageRole::User);
+        assert_eq!(snapshot_nodes[2].role, MessageRole::User);
         assert_eq!(
-            snapshot_nodes[2].node.parent_node_id,
-            Some(snapshot_nodes[1].node.id)
+            snapshot_nodes[2].parent_node_id,
+            Some(snapshot_nodes[1].node_id)
         );
-        assert_eq!(snapshot_nodes[3].node.role, MessageRole::Assistant);
+        assert_eq!(snapshot_nodes[3].role, MessageRole::Assistant);
         assert_eq!(
-            snapshot_nodes[3].node.parent_node_id,
-            Some(snapshot_nodes[2].node.id)
+            snapshot_nodes[3].parent_node_id,
+            Some(snapshot_nodes[2].node_id)
         );
 
         fs::remove_file(engine.store().path()).ok();
@@ -922,7 +945,7 @@ mod tests {
             .expect("send message");
 
         let upserted_parts = match &events[3].payload {
-            ChatEvent::ConversationNodeUpsert { node } => &node.variants[0].parts,
+            ChatEvent::ConversationNodeUpsert { node } => &node.selected_variant.parts,
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
 
@@ -1105,7 +1128,7 @@ mod tests {
     }
 
     #[test]
-    fn selected_variant_snapshot_projection_rejects_invalid_select_index() {
+    fn selected_node_projection_rejects_invalid_select_index() {
         let now = Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
@@ -1141,7 +1164,7 @@ mod tests {
             }],
         };
 
-        let error = selected_variant_snapshot_projection(&bundle)
+        let error = selected_node_projection(&bundle)
             .expect_err("invalid select_index must degrade to invalid state");
 
         assert!(matches!(

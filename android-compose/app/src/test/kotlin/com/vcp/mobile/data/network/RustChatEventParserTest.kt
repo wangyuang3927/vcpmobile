@@ -18,19 +18,15 @@ class RustChatEventParserTest {
         val json = JSONObject(
             """
             {
-              "nodes": [
+              "branch": {
+                "cursor_node_id": "node-1",
+                "nodes": [
                 {
-                  "node": {
-                    "id": "node-1",
-                    "role": "assistant",
-                    "select_index": 0
-                  },
-                  "variants": [
-                    {
-                      "variant": {
-                        "id": "variant-1"
-                      },
-                      "parts": [
+                  "node_id": "node-1",
+                  "role": "assistant",
+                  "selected_variant": {
+                    "variant_id": "variant-1",
+                    "parts": [
                         {
                           "payload": {
                             "type": "reasoning",
@@ -43,11 +39,11 @@ class RustChatEventParserTest {
                             "text": "hello"
                           }
                         }
-                      ]
-                    }
-                  ]
+                    ]
+                  }
                 }
-              ]
+                ]
+              }
             }
             """.trimIndent()
         )
@@ -70,49 +66,36 @@ class RustChatEventParserTest {
     }
 
     @Test
-    fun `extractSnapshotMessages expands multiple nodes and respects selected variant`() {
+    fun `extractSnapshotMessages expands multiple nodes from the selected branch shape`() {
         val json = JSONObject(
             """
             {
-              "nodes": [
+              "branch": {
+                "cursor_node_id": "node-2",
+                "nodes": [
                 {
-                  "node": {
-                    "id": "node-1",
-                    "role": "assistant",
-                    "select_index": 1
-                  },
-                  "variants": [
-                    {
-                      "variant": { "id": "variant-1a" },
-                      "parts": [
-                        { "payload": { "type": "text", "text": "old" } }
-                      ]
-                    },
-                    {
-                      "variant": { "id": "variant-1b" },
-                      "parts": [
+                  "node_id": "node-1",
+                  "role": "assistant",
+                  "selected_variant": {
+                    "variant_id": "variant-1b",
+                    "parts": [
                         { "payload": { "type": "reasoning", "text": "r1" } },
                         { "payload": { "type": "text", "text": "new" } }
-                      ]
-                    }
-                  ]
+                    ]
+                  }
                 },
                 {
-                  "node": {
-                    "id": "node-2",
-                    "role": "user",
-                    "select_index": 0
-                  },
-                  "variants": [
-                    {
-                      "variant": { "id": "variant-2a" },
-                      "parts": [
+                  "node_id": "node-2",
+                  "role": "user",
+                  "selected_variant": {
+                    "variant_id": "variant-2a",
+                    "parts": [
                         { "payload": { "type": "text", "text": "tail" } }
-                      ]
-                    }
-                  ]
+                    ]
+                  }
                 }
-              ]
+                ]
+              }
             }
             """.trimIndent()
         )
@@ -156,17 +139,15 @@ class RustChatEventParserTest {
         val json = JSONObject(
             """
             {
-              "nodes": [
+              "branch": {
+                "cursor_node_id": "node-rich",
+                "nodes": [
                 {
-                  "node": {
-                    "id": "node-rich",
-                    "role": "assistant",
-                    "select_index": 0
-                  },
-                  "variants": [
-                    {
-                      "variant": { "id": "variant-rich" },
-                      "parts": [
+                  "node_id": "node-rich",
+                  "role": "assistant",
+                  "selected_variant": {
+                    "variant_id": "variant-rich",
+                    "parts": [
                         {
                           "payload": {
                             "type": "reasoning",
@@ -186,11 +167,11 @@ class RustChatEventParserTest {
                             "code": "println(1)"
                           }
                         }
-                      ]
-                    }
-                  ]
+                    ]
+                  }
                 }
-              ]
+                ]
+              }
             }
             """.trimIndent()
         )
@@ -264,15 +245,11 @@ class RustChatEventParserTest {
             """
             {
               "node": {
-                "node": {
-                  "id": "node-upsert",
-                  "role": "assistant",
-                  "select_index": 0
-                },
-                "variants": [
-                  {
-                    "variant": { "id": "variant-upsert" },
-                    "parts": [
+                "node_id": "node-upsert",
+                "role": "assistant",
+                "selected_variant": {
+                  "variant_id": "variant-upsert",
+                  "parts": [
                       {
                         "payload": {
                           "type": "reasoning",
@@ -285,9 +262,8 @@ class RustChatEventParserTest {
                           "markdown": "hello **upsert**"
                         }
                       }
-                    ]
-                  }
-                ]
+                  ]
+                }
               }
             }
             """.trimIndent()

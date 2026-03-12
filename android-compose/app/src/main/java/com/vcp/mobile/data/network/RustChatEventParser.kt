@@ -71,12 +71,13 @@ object RustChatEventParser {
     }
 
     fun extractSnapshotMessages(data: JSONObject): List<RustSnapshotMessage> {
-        val nodes = data.optJSONArray("nodes") ?: return emptyList()
+        val branch = data.optJSONObject("branch") ?: return emptyList()
+        val nodes = branch.optJSONArray("nodes") ?: return emptyList()
         val results = mutableListOf<RustSnapshotMessage>()
 
         for (nodeIndex in 0 until nodes.length()) {
-            val nodeBundle = nodes.optJSONObject(nodeIndex) ?: continue
-            val message = extractNodeBundleMessage(nodeBundle) ?: continue
+            val snapshotNode = nodes.optJSONObject(nodeIndex) ?: continue
+            val message = extractSnapshotNodeMessage(snapshotNode) ?: continue
             results += message
         }
 
@@ -95,8 +96,8 @@ object RustChatEventParser {
     }
 
     fun extractNodeUpsertMessage(data: JSONObject): RustSnapshotMessage? {
-        val nodeBundle = data.optJSONObject("node") ?: return null
-        return extractNodeBundleMessage(nodeBundle)
+        val snapshotNode = data.optJSONObject("node") ?: return null
+        return extractSnapshotNodeMessage(snapshotNode)
     }
 
     fun extractPartDelta(data: JSONObject): RustMessageDelta {
@@ -166,20 +167,13 @@ object RustChatEventParser {
         )
     }
 
-    private fun extractNodeBundleMessage(nodeBundle: JSONObject): RustSnapshotMessage? {
-        val node = nodeBundle.optJSONObject("node") ?: return null
-        val nodeId = node.optString("id").trim()
+    private fun extractSnapshotNodeMessage(snapshotNode: JSONObject): RustSnapshotMessage? {
+        val nodeId = snapshotNode.optString("node_id").trim()
         if (nodeId.isBlank()) return null
-        val role = node.optString("role").trim().ifBlank { HUB_ROLE_ASSISTANT }
+        val role = snapshotNode.optString("role").trim().ifBlank { HUB_ROLE_ASSISTANT }
 
-        val variants = nodeBundle.optJSONArray("variants") ?: return null
-        if (variants.length() == 0) return null
-        val selectIndex = node.optInt("select_index", 0).coerceAtLeast(0)
-        val selectedVariant = variants.optJSONObject(selectIndex)
-            ?: variants.optJSONObject(0)
-            ?: return null
-        val variant = selectedVariant.optJSONObject("variant") ?: return null
-        val variantId = variant.optString("id").trim()
+        val selectedVariant = snapshotNode.optJSONObject("selected_variant") ?: return null
+        val variantId = selectedVariant.optString("variant_id").trim()
         if (variantId.isBlank()) return null
 
         return RustSnapshotMessage(
