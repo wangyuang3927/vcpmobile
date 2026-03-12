@@ -1288,8 +1288,8 @@ mod tests {
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
 
-        assert_eq!(upsert.variants[0].variant.status, VariantStatus::Completed);
-        assert!(upsert.variants[0].variant.finished_at.is_some());
+        assert_eq!(upsert.selected_variant.status, VariantStatus::Completed);
+        assert!(upsert.selected_variant.finished_at.is_some());
 
         fs::remove_file(engine.store().path()).ok();
     }

@@ -135,6 +135,7 @@ impl NamedEvent for ChatEvent {
             Self::GenerationPartDelta { .. } => "generation_part_delta",
             Self::GenerationCompleted { .. } => "generation_completed",
             Self::GenerationFailed { .. } => "generation_failed",
+            Self::GenerationCancelled { .. } => "generation_cancelled",
             Self::DraftUpdated { .. } => "draft_updated",
             Self::DraftCleared { .. } => "draft_cleared",
             Self::AuthQrPlaceholder { .. } => "auth_qr_placeholder",
@@ -299,6 +300,14 @@ mod tests {
                     conversation_id: Uuid::nil(),
                 },
                 "draft_cleared",
+            ),
+            (
+                ChatEvent::GenerationCancelled {
+                    node_id: Uuid::nil(),
+                    variant_id: Uuid::nil(),
+                    message: None,
+                },
+                "generation_cancelled",
             ),
             (
                 ChatEvent::EngineError {
