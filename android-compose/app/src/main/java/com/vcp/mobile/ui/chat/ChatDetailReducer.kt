@@ -207,7 +207,7 @@ object ChatDetailReducer {
         } else {
             state.messages.toMutableList().apply {
                 val previous = this[targetIndex]
-                val mergedParts = previous.parts + parts
+                val mergedParts = mergeStreamingParts(previous.parts, parts)
                 val compatibilityProjection = mergedParts.toCompatibilityProjection()
                 this[targetIndex] = previous.copy(
                     sender = sender,
@@ -354,5 +354,76 @@ object ChatDetailReducer {
                 activeMessageKey = resolvedMessageKey,
             )
         }
+    }
+
+    private fun mergeStreamingParts(
+        existing: List<UiMessagePart>,
+        incoming: List<UiMessagePart>,
+    ): List<UiMessagePart> {
+        if (existing.isEmpty()) return incoming
+        if (incoming.isEmpty()) return existing
+
+        val merged = existing.toMutableList()
+        incoming.forEach { part ->
+            val existingIndex = merged.indexOfFirst { candidate ->
+                candidate.matchesStreamingIdentity(part)
+            }
+            if (existingIndex == -1) {
+                insertPartInOrder(merged, part)
+            } else {
+                merged[existingIndex] = merged[existingIndex].mergeStreamingUpdate(part)
+            }
+        }
+        return merged
+    }
+
+    private fun insertPartInOrder(
+        parts: MutableList<UiMessagePart>,
+        incoming: UiMessagePart,
+    ) {
+        val incomingOrderIndex = incoming.orderIndex
+        if (incomingOrderIndex == null) {
+            parts += incoming
+            return
+        }
+        val insertAt = parts.indexOfFirst { existing ->
+            existing.orderIndex?.let { it > incomingOrderIndex } == true
+        }
+        if (insertAt == -1) {
+            parts += incoming
+        } else {
+            parts.add(insertAt, incoming)
+        }
+    }
+
+    private fun UiMessagePart.matchesStreamingIdentity(other: UiMessagePart): Boolean {
+        val ownPartId = partId?.takeIf { it.isNotBlank() }
+        val otherPartId = other.partId?.takeIf { it.isNotBlank() }
+        if (ownPartId != null && otherPartId != null) {
+            return ownPartId == otherPartId
+        }
+
+        val ownToolCallId = toolCallId?.takeIf { it.isNotBlank() }
+        val otherToolCallId = other.toolCallId?.takeIf { it.isNotBlank() }
+        if (ownToolCallId != null && otherToolCallId != null) {
+            return ownToolCallId == otherToolCallId
+        }
+
+        return orderIndex != null && other.orderIndex != null && orderIndex == other.orderIndex
+    }
+
+    private fun UiMessagePart.mergeStreamingUpdate(other: UiMessagePart): UiMessagePart {
+        return copy(
+            type = other.type.ifBlank { type },
+            text = if (other.text.isBlank()) text else other.text,
+            language = other.language ?: language,
+            title = other.title ?: title,
+            url = other.url ?: url,
+            mime = other.mime ?: mime,
+            state = other.state ?: state,
+            partId = other.partId ?: partId,
+            orderIndex = other.orderIndex ?: orderIndex,
+            toolCallId = other.toolCallId ?: toolCallId,
+        )
     }
 }

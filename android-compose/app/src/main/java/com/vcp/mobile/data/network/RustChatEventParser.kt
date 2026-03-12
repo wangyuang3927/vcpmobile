@@ -80,6 +80,9 @@ data class RustMessagePart(
     val url: String? = null,
     val mime: String? = null,
     val state: String? = null,
+    val partId: String? = null,
+    val orderIndex: Int? = null,
+    val toolCallId: String? = null,
 )
 
 data class RustEventError(
@@ -232,23 +235,41 @@ object RustChatEventParser {
             val part = parts.optJSONObject(index) ?: continue
             val payload = part.optJSONObject("payload") ?: continue
             val type = payload.optString("type")
+            val partId = part.optNonBlankString("part_id") ?: part.optNonBlankString("id")
+            val orderIndex = part.takeIf { it.has("order_index") }?.optInt("order_index")
+            val toolCallId = payload.optNonBlankString("tool_call_id")
             if (type.isNotBlank()) {
                 partTypes += type
             }
             when (type) {
                 "text" -> {
                     val text = payload.optString("text")
-                    orderedParts += RustMessagePart(type = type, text = text)
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = text,
+                        partId = partId,
+                        orderIndex = orderIndex,
+                    )
                     textBuilder.append(text)
                 }
                 "reasoning" -> {
                     val text = payload.optString("text")
-                    orderedParts += RustMessagePart(type = type, text = text)
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = text,
+                        partId = partId,
+                        orderIndex = orderIndex,
+                    )
                     reasoningBuilder.append(text)
                 }
                 "markdown_block" -> {
                     val markdown = payload.optString("markdown")
-                    orderedParts += RustMessagePart(type = type, text = markdown)
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = markdown,
+                        partId = partId,
+                        orderIndex = orderIndex,
+                    )
                     textBuilder.append(markdown)
                 }
                 "code_block" -> {
@@ -258,6 +279,8 @@ object RustChatEventParser {
                         type = type,
                         text = code,
                         language = language,
+                        partId = partId,
+                        orderIndex = orderIndex,
                     )
                     if (language != null) {
                         textBuilder.append("```").append(language).append('\n')
@@ -277,6 +300,9 @@ object RustChatEventParser {
                         type = type,
                         text = argumentsJson,
                         language = toolName.takeIf { it.isNotBlank() },
+                        partId = partId,
+                        orderIndex = orderIndex,
+                        toolCallId = toolCallId,
                     )
                 }
                 "tool_result" -> {
@@ -286,6 +312,9 @@ object RustChatEventParser {
                         type = type,
                         text = resultJson,
                         language = toolName.takeIf { it.isNotBlank() },
+                        partId = partId,
+                        orderIndex = orderIndex,
+                        toolCallId = toolCallId,
                     )
                 }
                 "image" -> {
@@ -299,6 +328,8 @@ object RustChatEventParser {
                         title = alt,
                         url = url,
                         mime = mime,
+                        partId = partId,
+                        orderIndex = orderIndex,
                     )
                     textBuilder.append(summaryText)
                 }
@@ -314,6 +345,8 @@ object RustChatEventParser {
                         title = fileName,
                         url = url,
                         mime = mime,
+                        partId = partId,
+                        orderIndex = orderIndex,
                     )
                     textBuilder.append(summaryText)
                 }
@@ -336,12 +369,20 @@ object RustChatEventParser {
                         ),
                         title = toolName,
                         state = state,
+                        partId = partId,
+                        orderIndex = orderIndex,
+                        toolCallId = toolCallId,
                     )
                     textBuilder.append(orderedParts.last().text)
                 }
                 "error" -> {
                     val message = payload.optString("message")
-                    orderedParts += RustMessagePart(type = type, text = message)
+                    orderedParts += RustMessagePart(
+                        type = type,
+                        text = message,
+                        partId = partId,
+                        orderIndex = orderIndex,
+                    )
                     if (textBuilder.isNotEmpty()) {
                         textBuilder.append(message)
                     }

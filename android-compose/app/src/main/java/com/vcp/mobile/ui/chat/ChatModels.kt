@@ -63,6 +63,9 @@ data class UiMessagePart(
     val url: String? = null,
     val mime: String? = null,
     val state: String? = null,
+    val partId: String? = null,
+    val orderIndex: Int? = null,
+    val toolCallId: String? = null,
 )
 
 data class UiMessageCompatibilityProjection(

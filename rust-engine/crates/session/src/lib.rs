@@ -452,12 +452,7 @@ fn streaming_delta_parts(bundle: &NodeBundle) -> Result<Vec<MessagePart>, Sessio
         &selected_variant.parts,
     )?;
 
-    Ok(selected_variant
-        .parts
-        .iter()
-        .filter(|part| should_emit_in_streaming_delta(&part.payload))
-        .cloned()
-        .collect())
+    Ok(selected_variant.parts.clone())
 }
 
 fn validate_node_bundle_parts(bundle: &NodeBundle) -> Result<(), SessionError> {
@@ -476,10 +471,6 @@ fn validate_variant_parts(
         conversation_id,
         reason: format!("node {node_id} has invalid part sequence: {error}"),
     })
-}
-
-fn should_emit_in_streaming_delta(payload: &MessagePartPayload) -> bool {
-    !matches!(payload, MessagePartPayload::Reasoning { .. })
 }
 
 pub fn demo_conversation(topic_id: TopicId, agent_id: Uuid) -> (Conversation, NodeBundle) {
@@ -797,7 +788,7 @@ mod tests {
     }
 
     #[test]
-    fn streaming_delta_parts_emit_text_from_selected_variant() {
+    fn streaming_delta_parts_keep_reasoning_and_text_from_selected_variant() {
         let now = Utc::now();
         let bundle = build_assistant_node(
             ConversationId::new_v4(),
@@ -810,8 +801,83 @@ mod tests {
 
         let parts = streaming_delta_parts(&bundle).expect("streaming delta");
 
-        assert_eq!(parts.len(), 1);
-        assert!(matches!(parts[0].payload, MessagePartPayload::Text { .. }));
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(
+            parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Text { .. }));
+    }
+
+    #[test]
+    fn streaming_delta_parts_keep_tool_parts_typed() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+        let bundle = NodeBundle {
+            node: MessageNode {
+                id: node_id,
+                conversation_id,
+                parent_node_id: None,
+                role: MessageRole::Assistant,
+                select_index: 0,
+                created_at: now,
+                updated_at: now,
+            },
+            variants: vec![VariantBundle {
+                variant: MessageVariant {
+                    id: variant_id,
+                    node_id,
+                    status: VariantStatus::Streaming,
+                    model_id: Some("rust-session-engine".to_string()),
+                    usage_json: None,
+                    created_at: now,
+                    finished_at: None,
+                },
+                parts: vec![
+                    MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Reasoning {
+                            text: "thinking".to_string(),
+                        },
+                    },
+                    MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 1,
+                        payload: MessagePartPayload::Tool {
+                            tool_call_id: Some("tool-call-1".to_string()),
+                            tool_name: "search".to_string(),
+                            input_json: "{\"query\":\"rust\"}".to_string(),
+                            output_json: Some("{\"hits\":1}".to_string()),
+                            error_message: None,
+                            state: vcpmobile_domain::ToolPartState::Completed,
+                        },
+                    },
+                    MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 2,
+                        payload: MessagePartPayload::Text {
+                            text: "hello".to_string(),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        let parts = streaming_delta_parts(&bundle).expect("streaming delta");
+
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Tool { .. }));
+        assert!(matches!(parts[2].payload, MessagePartPayload::Text { .. }));
     }
 
     #[test]
@@ -832,7 +898,7 @@ mod tests {
     }
 
     #[test]
-    fn send_message_streams_text_delta_for_assistant_content() {
+    fn send_message_streams_reasoning_and_text_delta_for_assistant_content() {
         let engine = test_engine();
 
         let events = engine
@@ -847,9 +913,13 @@ mod tests {
             other => panic!("expected generation_part_delta, got {other:?}"),
         };
 
-        assert_eq!(delta_parts.len(), 1);
+        assert_eq!(delta_parts.len(), 2);
         assert!(matches!(
             delta_parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(
+            delta_parts[1].payload,
             MessagePartPayload::Text { .. }
         ));
 

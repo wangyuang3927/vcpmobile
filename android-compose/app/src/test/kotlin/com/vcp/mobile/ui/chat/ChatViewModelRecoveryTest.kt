@@ -394,6 +394,92 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
+    fun `tool lifecycle events merge into one typed tool part during streaming`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"generation_started",
+                            "data":{"node_id":"node-tool","variant_id":"variant-tool"}
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"tool_call_started",
+                            "data":{
+                              "node_id":"node-tool",
+                              "variant_id":"variant-tool",
+                              "tool_call_id":"tool-call-1",
+                              "tool_name":"search",
+                              "arguments_json":"{\"query\":\"rust\"}"
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"tool_call_completed",
+                            "data":{
+                              "node_id":"node-tool",
+                              "variant_id":"variant-tool",
+                              "tool_call_id":"tool-call-1",
+                              "tool_name":"search"
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("stream me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val toolMessage = viewModel.detailState.value.messages.last()
+        assertEquals("node-tool:variant-tool", toolMessage.id)
+        assertEquals(
+            listOf(
+                UiMessagePart(
+                    type = "tool",
+                    text = "{\"query\":\"rust\"}",
+                    title = "search",
+                    state = "completed",
+                    partId = "tool-call:tool-call-1",
+                    toolCallId = "tool-call-1",
+                )
+            ),
+            toolMessage.parts
+        )
+        assertEquals("search · completed\n{\"query\":\"rust\"}", toolMessage.content)
+    }
+
+    @Test
     fun `stream snapshot reconciles optimistic user message with rust identity`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             streamEvents = flow {
