@@ -1,0 +1,57 @@
+{
+  "appended_parts": [
+    {
+      "payload": {
+        "type": "markdown_block",
+        "markdown": "## Fixture\n- markdown\n- code"
+      }
+    },
+    {
+      "payload": {
+        "type": "code_block",
+        "language": "kotlin",
+        "code": "println(\"fixture\")"
+      }
+    },
+    {
+      "payload": {
+        "type": "document",
+        "file_name": "notes.txt",
+        "url": "file:///fixtures/notes.txt",
+        "mime": "text/plain"
+      }
+    },
+    {
+      "payload": {
+        "type": "document",
+        "file_name": "guide.md",
+        "url": "file:///fixtures/guide.md",
+        "mime": "text/markdown"
+      }
+    },
+    {
+      "payload": {
+        "type": "document",
+        "file_name": "spec.pdf",
+        "url": "file:///fixtures/spec.pdf",
+        "mime": "application/pdf"
+      }
+    },
+    {
+      "payload": {
+        "type": "document",
+        "file_name": "brief.docx",
+        "url": "file:///fixtures/brief.docx",
+        "mime": "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      }
+    },
+    {
+      "payload": {
+        "type": "document",
+        "file_name": "deck.pptx",
+        "url": "file:///fixtures/deck.pptx",
+        "mime": "application/vnd.openxmlformats-officedocument.presentationml.presentation"
+      }
+    }
+  ]
+}

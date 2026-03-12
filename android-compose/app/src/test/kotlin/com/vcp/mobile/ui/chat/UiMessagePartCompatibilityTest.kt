@@ -1,5 +1,6 @@
 package com.vcp.mobile.ui.chat
 
+import com.vcp.mobile.testing.RichContentSmokeFixtures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -132,6 +133,22 @@ class UiMessagePartCompatibilityTest {
         )
         assertNull(projection.reasoning)
         assertEquals(listOf("tool_call", "tool_result"), projection.partTypes)
+    }
+
+    @Test
+    fun `compatibility projection smoke fixture keeps markdown code and document summaries observable`() {
+        val projection = RichContentSmokeFixtures.compatibilitySmokeParts()
+            .toCompatibilityProjection()
+
+        assertEquals(
+            RichContentSmokeFixtures.expectedCompatibilityContent(),
+            projection.content,
+        )
+        assertEquals("thinking through fixtures", projection.reasoning)
+        assertEquals(
+            listOf("reasoning", "markdown_block", "code_block", "document"),
+            projection.partTypes,
+        )
     }
 
     @Test

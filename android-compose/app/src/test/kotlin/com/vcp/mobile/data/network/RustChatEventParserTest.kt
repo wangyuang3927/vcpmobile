@@ -1,5 +1,6 @@
 package com.vcp.mobile.data.network
 
+import com.vcp.mobile.testing.RichContentSmokeFixtures
 import org.json.JSONObject
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -365,6 +366,44 @@ class RustChatEventParserTest {
                 RustMessagePart(type = "markdown_block", text = "hello **upsert**"),
             ),
             snapshot?.delta?.parts
+        )
+    }
+
+    @Test
+    fun `extractPartDelta smoke fixture keeps markdown code and supported document ingestion observable`() {
+        val delta = RustChatEventParser.extractPartDelta(
+            JSONObject(RichContentSmokeFixtures.documentIngestionJson)
+        )
+
+        assertEquals(
+            listOf(
+                "markdown_block",
+                "code_block",
+                "document",
+                "document",
+                "document",
+                "document",
+                "document",
+            ),
+            delta.partTypes,
+        )
+        assertEquals(
+            RichContentSmokeFixtures.expectedCompatibilityContent(),
+            delta.appendedText,
+        )
+        assertEquals(
+            listOf(
+                "text/plain",
+                "text/markdown",
+                "application/pdf",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+            ),
+            delta.parts.filter { it.type == "document" }.map { it.mime },
+        )
+        assertEquals(
+            listOf("notes.txt", "guide.md", "spec.pdf", "brief.docx", "deck.pptx"),
+            delta.parts.filter { it.type == "document" }.map { it.title },
         )
     }
 

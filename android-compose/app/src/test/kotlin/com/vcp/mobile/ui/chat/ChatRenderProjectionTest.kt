@@ -1,6 +1,7 @@
 package com.vcp.mobile.ui.chat
 
 import com.vcp.mobile.domain.model.ast.MarkdownDocument
+import com.vcp.mobile.testing.RichContentSmokeFixtures
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -95,5 +96,24 @@ class ChatRenderProjectionTest {
 
         assertEquals(ChatBodyMode.PLAIN_TEXT, projection.bodyMode)
         assertEquals(listOf("图片", "文档", "工具", "错误"), projection.labels)
+    }
+
+    @Test
+    fun `smoke fixtures keep markdown code and supported document modes observable`() {
+        val markdownProjection = RichContentSmokeFixtures.markdownRenderMessage().renderProjection()
+        val codeProjection = RichContentSmokeFixtures.codeRenderMessage().renderProjection()
+        val documentProjection = RichContentSmokeFixtures.documentRenderMessage().renderProjection()
+
+        assertEquals(ChatBodyMode.MARKDOWN, markdownProjection.bodyMode)
+        assertEquals(listOf("Markdown"), markdownProjection.labels)
+        assertTrue(markdownProjection.identity.isTyped)
+
+        assertEquals(ChatBodyMode.CODE_FALLBACK, codeProjection.bodyMode)
+        assertEquals(listOf("代码"), codeProjection.labels)
+        assertTrue(codeProjection.identity.isTyped)
+
+        assertEquals(ChatBodyMode.PLAIN_TEXT, documentProjection.bodyMode)
+        assertEquals(listOf("文档"), documentProjection.labels)
+        assertTrue(documentProjection.identity.isTyped)
     }
 }
