@@ -108,12 +108,10 @@ object RustChatEventParser {
             val root = JSONObject(raw)
             val payload = root.optJSONObject("payload") ?: return null
             val event = root.optString("event_name").trim()
-                .ifBlank { payload.optString("event").trim() }
-            val data = payload.optJSONObject("data")
-                ?: root.optJSONObject("data")
-                ?: JSONObject()
+            val payloadEvent = payload.optString("event").trim()
+            val data = payload.optJSONObject("data") ?: JSONObject()
             val schema = root.optJSONObject("schema")
-            if (event.isEmpty()) {
+            if (event.isEmpty() || (payloadEvent.isNotEmpty() && payloadEvent != event)) {
                 null
             } else {
                 val kind = RustChatEventKind.fromWireName(event) ?: return null
@@ -178,13 +176,7 @@ object RustChatEventParser {
                 retriable = error.takeIf { it.has("retriable") }?.optBoolean("retriable"),
             )
         }
-
-        val message = data.optString("message").trim()
-        if (message.isBlank()) return null
-        return RustEventError(
-            kind = RustEventErrorKind.UNKNOWN,
-            message = message,
-        )
+        return null
     }
 
     fun extractToolCallEvent(

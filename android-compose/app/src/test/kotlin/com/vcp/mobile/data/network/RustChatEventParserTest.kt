@@ -314,6 +314,46 @@ class RustChatEventParserTest {
     }
 
     @Test
+    fun `parseEnvelope rejects envelopes without canonical event_name`() {
+        val envelope = RustChatEventParser.parseEnvelope(
+            """
+            {
+              "conversation_id": "conversation-1",
+              "payload": {
+                "event": "tool_call_started",
+                "data": {
+                  "node_id": "node-1",
+                  "variant_id": "variant-1"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertNull(envelope)
+    }
+
+    @Test
+    fun `parseEnvelope rejects mismatched payload event tag`() {
+        val envelope = RustChatEventParser.parseEnvelope(
+            """
+            {
+              "event_name": "tool_call_started",
+              "payload": {
+                "event": "generation_started",
+                "data": {
+                  "node_id": "node-1",
+                  "variant_id": "variant-1"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertNull(envelope)
+    }
+
+    @Test
     fun `extractEventError reads typed error payload semantics`() {
         val json = JSONObject(
             """
@@ -335,6 +375,21 @@ class RustChatEventParserTest {
         assertEquals("rate_limit", error?.code)
         assertEquals("provider throttled the request", error?.message)
         assertEquals(true, error?.retriable)
+    }
+
+    @Test
+    fun `extractEventError ignores ad hoc top level message fallback`() {
+        val json = JSONObject(
+            """
+            {
+              "message": "provider throttled the request"
+            }
+            """.trimIndent()
+        )
+
+        val error = RustChatEventParser.extractEventError(json)
+
+        assertNull(error)
     }
 
     @Test

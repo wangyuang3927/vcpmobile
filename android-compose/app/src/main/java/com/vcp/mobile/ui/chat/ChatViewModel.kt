@@ -2,7 +2,6 @@ package com.vcp.mobile.ui.chat
 
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
-import com.vcp.mobile.data.network.AstStreamParser
 import com.vcp.mobile.data.network.HubMessage
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubStreamEvent
@@ -15,14 +14,12 @@ import com.vcp.mobile.data.network.toRole
 import com.vcp.mobile.data.recovery.RecoveryStore
 import com.vcp.mobile.data.recovery.RecoverySceneAnchor
 import com.vcp.mobile.data.repository.HubChatRepository
-import com.vcp.mobile.domain.model.ast.MarkdownDocument
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
-import org.json.JSONObject
 import javax.inject.Inject
 
 @HiltViewModel
@@ -73,26 +70,14 @@ class ChatViewModel @Inject constructor(
             )
 
             var assistantMessageKey: String? = _detailState.value.generation.activeMessageKey
-            val renderBuffer = StreamingRenderBuffer()
-            renderBuffer.onMessageKeyChanged(assistantMessageKey)
-            var sawStreamEvent = false
 
             try {
                 repository.observeStream(request).collect { event ->
-                    sawStreamEvent = true
                     when (event) {
-                        HubStreamEvent.Opened -> {
-                            val activeKey = _detailState.value.generation.activeMessageKey
-                            dispatchGeneration(ChatGenerationPhase.STARTED, activeKey)
-                        }
-
-                        HubStreamEvent.Completed -> {
-                            renderBuffer.clear()
-                            dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
-                        }
+                        HubStreamEvent.Opened,
+                        HubStreamEvent.Completed -> Unit
 
                         is HubStreamEvent.Error -> {
-                            renderBuffer.clear()
                             discardPendingOptimisticUserMessage()
                             dispatchGeneration(
                                 ChatGenerationPhase.FAILED,
@@ -106,64 +91,18 @@ class ChatViewModel @Inject constructor(
                         }
 
                         is HubStreamEvent.Message -> {
-                            when {
-                                event.event == "ast" -> {
-                                    val astNodes = AstStreamParser.parseJson(event.data)
-                                    val targetMessageKey = assistantMessageKey
-                                        ?: _detailState.value.generation.activeMessageKey
-                                    if (targetMessageKey != null && astNodes.isNotEmpty()) {
-                                        val document = renderBuffer.appendAst(targetMessageKey, astNodes)
-                                        if (document != null) {
-                                            assistantMessageKey = appendAssistantDelta(
-                                                currentMessageId = targetMessageKey,
-                                                sender = event.role?.toMessageSender() ?: MessageSender.AGENT,
-                                                appendText = "",
-                                                ast = document,
-                                            )
-                                            renderBuffer.onMessageKeyChanged(assistantMessageKey)
-                                        }
-                                    }
-                                }
-
-                                event.event == "chat_event" -> {
-                                    val envelope = RustChatEventParser.parseEnvelope(event.data) ?: return@collect
-                                    envelope.conversationId?.let { bindConversationId(it) }
-                                    assistantMessageKey = handleRustChatEnvelope(
-                                        envelope = envelope,
-                                        currentMessageKey = assistantMessageKey,
-                                    )
-                                    renderBuffer.onMessageKeyChanged(assistantMessageKey)
-                                }
-
-                                else -> {
-                                    val tokenText = extractTokenText(event.data)
-                                    if (tokenText.isNotBlank()) {
-                                        val astDoc = renderBuffer.currentDocumentFor(assistantMessageKey)
-
-                                        assistantMessageKey = appendAssistantDelta(
-                                            currentMessageId = assistantMessageKey,
-                                            sender = event.role?.toMessageSender() ?: MessageSender.AGENT,
-                                            appendText = tokenText,
-                                            ast = astDoc,
-                                        )
-                                        renderBuffer.onMessageKeyChanged(assistantMessageKey)
-                                    }
-                                }
+                            if (event.event == "chat_event") {
+                                val envelope = RustChatEventParser.parseEnvelope(event.data) ?: return@collect
+                                envelope.conversationId?.let { bindConversationId(it) }
+                                assistantMessageKey = handleRustChatEnvelope(
+                                    envelope = envelope,
+                                    currentMessageKey = assistantMessageKey,
+                                )
                             }
                         }
                     }
                 }
-                if (sawStreamEvent && _detailState.value.generation.phase in setOf(
-                        ChatGenerationPhase.REQUESTING,
-                        ChatGenerationPhase.STARTED,
-                        ChatGenerationPhase.STREAMING,
-                    )
-                ) {
-                    renderBuffer.clear()
-                    dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
-                }
             } catch (error: Throwable) {
-                renderBuffer.clear()
                 discardPendingOptimisticUserMessage()
                 dispatchGeneration(
                     ChatGenerationPhase.FAILED,
@@ -321,7 +260,6 @@ class ChatViewModel @Inject constructor(
         sender: MessageSender,
         appendText: String,
         appendReasoning: String = "",
-        ast: MarkdownDocument? = null,
         nodeId: String? = null,
         variantId: String? = null,
         parts: List<UiMessagePart> = emptyList(),
@@ -333,7 +271,6 @@ class ChatViewModel @Inject constructor(
             sender = sender,
             appendText = appendText,
             appendReasoning = appendReasoning,
-            ast = ast,
             nodeId = nodeId,
             variantId = variantId,
             parts = parts,
@@ -348,7 +285,6 @@ class ChatViewModel @Inject constructor(
         sender: MessageSender,
         content: String,
         reasoning: String = "",
-        ast: MarkdownDocument? = null,
         nodeId: String? = null,
         variantId: String? = null,
         parts: List<UiMessagePart> = emptyList(),
@@ -367,7 +303,6 @@ class ChatViewModel @Inject constructor(
             sender = sender,
             content = content,
             reasoning = reasoning,
-            ast = ast,
             nodeId = nodeId,
             variantId = variantId,
             parts = parts,
@@ -468,14 +403,16 @@ class ChatViewModel @Inject constructor(
 
             RustChatEventKind.GENERATION_STARTED -> {
                 val identity = RustChatEventParser.extractGenerationIdentity(envelope.data)
-                val messageKey = identity?.messageKey ?: currentMessageKey
+                    ?: return currentMessageKey
+                val messageKey = identity.messageKey
                 dispatchGeneration(ChatGenerationPhase.STARTED, messageKey)
                 messageKey
             }
 
             RustChatEventKind.GENERATION_PART_DELTA -> {
                 val identity = RustChatEventParser.extractGenerationIdentity(envelope.data)
-                val messageKey = identity?.messageKey ?: currentMessageKey
+                    ?: return currentMessageKey
+                val messageKey = identity.messageKey
                 val delta = RustChatEventParser.extractPartDelta(envelope.data)
                 val existingMessage = currentMessage(messageKey)
                 val duplicatesExistingSnapshot = existingMessage != null &&
@@ -493,8 +430,8 @@ class ChatViewModel @Inject constructor(
                     sender = MessageSender.AGENT,
                     appendText = delta.appendedText,
                     appendReasoning = delta.appendedReasoning,
-                    nodeId = identity?.nodeId,
-                    variantId = identity?.variantId,
+                    nodeId = identity.nodeId,
+                    variantId = identity.variantId,
                     parts = delta.parts.toUiMessageParts(),
                     partTypes = delta.partTypes,
                 )
@@ -516,42 +453,66 @@ class ChatViewModel @Inject constructor(
             }
 
             RustChatEventKind.GENERATION_COMPLETED -> {
+                val messageKey = RustChatEventParser.extractGenerationIdentity(envelope.data)
+                    ?.messageKey
+                    ?: return currentMessageKey
+                if (currentMessageKey != null && currentMessageKey != messageKey) {
+                    return currentMessageKey
+                }
                 dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
-                currentMessageKey
+                messageKey
             }
 
             RustChatEventKind.GENERATION_CANCELLED -> {
-                dispatchGeneration(ChatGenerationPhase.CANCELLED, currentMessageKey)
+                val messageKey = RustChatEventParser.extractGenerationIdentity(envelope.data)
+                    ?.messageKey
+                    ?: return currentMessageKey
+                if (currentMessageKey != null && currentMessageKey != messageKey) {
+                    return currentMessageKey
+                }
+                dispatchGeneration(ChatGenerationPhase.CANCELLED, messageKey)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
                         text = envelope.data.optString("message").ifBlank { "生成已取消" },
                     )
                 )
-                currentMessageKey
+                messageKey
             }
 
             RustChatEventKind.GENERATION_FAILED -> {
+                val messageKey = RustChatEventParser.extractGenerationIdentity(envelope.data)
+                    ?.messageKey
+                    ?: return currentMessageKey
+                if (currentMessageKey != null && currentMessageKey != messageKey) {
+                    return currentMessageKey
+                }
                 discardPendingOptimisticUserMessage()
-                dispatchGeneration(ChatGenerationPhase.FAILED, currentMessageKey)
+                dispatchGeneration(ChatGenerationPhase.FAILED, messageKey)
                 val error = RustChatEventParser.extractEventError(envelope.data)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
                         text = error?.message ?: "生成失败",
                     )
                 )
-                currentMessageKey
+                messageKey
             }
 
             RustChatEventKind.ENGINE_ERROR -> {
+                val messageKey = RustChatEventParser.extractGenerationIdentity(envelope.data)
+                    ?.messageKey
+                    ?: return currentMessageKey
+                if (currentMessageKey != null && currentMessageKey != messageKey) {
+                    return currentMessageKey
+                }
                 discardPendingOptimisticUserMessage()
-                dispatchGeneration(ChatGenerationPhase.FAILED, currentMessageKey)
+                dispatchGeneration(ChatGenerationPhase.FAILED, messageKey)
                 val error = RustChatEventParser.extractEventError(envelope.data)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
                         text = error?.message ?: "引擎异常",
                     )
                 )
-                currentMessageKey
+                messageKey
             }
 
             RustChatEventKind.TOOL_CALL_STARTED,
@@ -638,17 +599,6 @@ class ChatViewModel @Inject constructor(
         }
     }
 
-    private fun extractTokenText(rawData: String): String {
-        return runCatching {
-            val json = JSONObject(rawData)
-            when {
-                json.has("text") -> json.optString("text")
-                json.has("content") -> json.optString("content")
-                json.has("message") -> json.optString("message")
-                else -> rawData
-            }
-        }.getOrDefault(rawData)
-    }
 }
 
 private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map { part ->
