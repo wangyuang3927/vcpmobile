@@ -82,18 +82,21 @@ class ChatViewModel @Inject constructor(
                     when (event) {
                         HubStreamEvent.Opened -> {
                             val activeKey = _detailState.value.generation.activeMessageKey
-                            dispatchGeneration(ChatGenerationPhase.STREAMING, activeKey)
+                            dispatchGeneration(ChatGenerationPhase.STARTED, activeKey)
                         }
 
                         HubStreamEvent.Completed -> {
                             renderBuffer.clear()
-                            dispatchGeneration(ChatGenerationPhase.IDLE, null)
+                            dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
                         }
 
                         is HubStreamEvent.Error -> {
                             renderBuffer.clear()
                             discardPendingOptimisticUserMessage()
-                            dispatchGeneration(ChatGenerationPhase.IDLE, null)
+                            dispatchGeneration(
+                                ChatGenerationPhase.FAILED,
+                                _detailState.value.generation.activeMessageKey,
+                            )
                             dispatchDetail(
                                 ChatDetailAction.SystemMessageAppended(
                                     text = "网络错误：${event.throwable.message ?: "未知错误"}",
@@ -151,16 +154,20 @@ class ChatViewModel @Inject constructor(
                 }
                 if (sawStreamEvent && _detailState.value.generation.phase in setOf(
                         ChatGenerationPhase.REQUESTING,
+                        ChatGenerationPhase.STARTED,
                         ChatGenerationPhase.STREAMING,
                     )
                 ) {
                     renderBuffer.clear()
-                    dispatchGeneration(ChatGenerationPhase.IDLE, null)
+                    dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
                 }
             } catch (error: Throwable) {
                 renderBuffer.clear()
                 discardPendingOptimisticUserMessage()
-                dispatchGeneration(ChatGenerationPhase.IDLE, null)
+                dispatchGeneration(
+                    ChatGenerationPhase.FAILED,
+                    _detailState.value.generation.activeMessageKey,
+                )
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
                         text = "请求失败：${error.message ?: "未知异常"}",
@@ -442,7 +449,7 @@ class ChatViewModel @Inject constructor(
                 if (snapshots.isEmpty()) return currentMessageKey
 
                 var latestMessageKey: String? = currentMessageKey
-                snapshots.forEachIndexed { index, snapshot ->
+                snapshots.forEach { snapshot ->
                     val messageKey = snapshot.identity.messageKey
                     latestMessageKey = replaceSnapshotMessage(
                         messageId = messageKey,
@@ -454,9 +461,6 @@ class ChatViewModel @Inject constructor(
                         parts = snapshot.delta.parts.toUiMessageParts(),
                         partTypes = snapshot.delta.partTypes,
                     )
-                    if (index == snapshots.lastIndex) {
-                        dispatchGeneration(ChatGenerationPhase.STREAMING, messageKey)
-                    }
                 }
                 latestMessageKey
             }
@@ -464,7 +468,7 @@ class ChatViewModel @Inject constructor(
             "generation_started" -> {
                 val identity = RustChatEventParser.extractGenerationIdentity(envelope.data)
                 val messageKey = identity?.messageKey ?: currentMessageKey
-                dispatchGeneration(ChatGenerationPhase.STREAMING, messageKey)
+                dispatchGeneration(ChatGenerationPhase.STARTED, messageKey)
                 messageKey
             }
 
@@ -511,7 +515,17 @@ class ChatViewModel @Inject constructor(
             }
 
             "generation_completed" -> {
-                dispatchGeneration(ChatGenerationPhase.IDLE, null)
+                dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
+                currentMessageKey
+            }
+
+            "generation_cancelled" -> {
+                dispatchGeneration(ChatGenerationPhase.CANCELLED, currentMessageKey)
+                dispatchDetail(
+                    ChatDetailAction.SystemMessageAppended(
+                        text = envelope.data.optString("message").ifBlank { "生成已取消" },
+                    )
+                )
                 currentMessageKey
             }
 

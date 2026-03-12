@@ -3,8 +3,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
-    Conversation, ConversationId, GenerationState, MessageNode, MessagePart, MessagePartPayload,
-    MessageRole, MessageVariant, NodeId, TopicId, VariantStatus,
+    Conversation, ConversationId, GenerationSignal, GenerationState, MessageNode, MessagePart,
+    MessagePartPayload, MessageRole, MessageVariant, NodeId, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{ChatEvent, EventEnvelope, NodeBundle, VariantBundle};
 use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
@@ -107,27 +107,45 @@ impl SessionEngine {
         let parent_cursor = validated_current_cursor(&stored)?;
         let user_node = build_user_node(stored.conversation.id, parent_cursor, text, now);
         let user_node_id = user_node.node.id;
-        stored.nodes.push(user_node);
-
-        let assistant_node =
-            build_assistant_node(stored.conversation.id, Some(user_node_id), text, now);
+        let assistant_node = build_assistant_node(
+            stored.conversation.id,
+            Some(user_node_id),
+            text,
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
         let assistant_node_id = assistant_node.node.id;
         let assistant_variant_id = assistant_node.variants[0].variant.id;
+        let completed_assistant_node = finalize_assistant_node(&assistant_node, now);
 
         stored.conversation.current_cursor = Some(assistant_node_id);
-        stored.conversation.generation_state = GenerationState::Idle;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit)
+            .transition(GenerationSignal::Started);
         stored.conversation.updated_at = now;
+        stored.nodes.push(user_node);
         stored.nodes.push(assistant_node.clone());
-        self.store.upsert_conversation(stored.clone())?;
 
         let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
         let assistant_delta_parts = streaming_delta_parts(&assistant_node)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta)
+            .transition(GenerationSignal::Complete);
+        if let Some(last_node) = stored.nodes.last_mut() {
+            *last_node = completed_assistant_node.clone();
+        }
+        self.store.upsert_conversation(stored.clone())?;
 
         Ok(vec![
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationSnapshot {
-                    conversation: stored.conversation.clone(),
+                    conversation: inflight_conversation_projection(&stored.conversation),
                     nodes: snapshot_nodes,
                 },
             ),
@@ -149,7 +167,7 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationNodeUpsert {
-                    node: assistant_node,
+                    node: completed_assistant_node,
                 },
             ),
             EventEnvelope::new(
@@ -227,6 +245,8 @@ fn build_assistant_node(
     parent_node_id: Option<NodeId>,
     text: &str,
     now: chrono::DateTime<Utc>,
+    status: VariantStatus,
+    finished_at: Option<chrono::DateTime<Utc>>,
 ) -> NodeBundle {
     let node_id = NodeId::new_v4();
     let variant_id = Uuid::new_v4();
@@ -244,11 +264,11 @@ fn build_assistant_node(
             variant: MessageVariant {
                 id: variant_id,
                 node_id,
-                status: VariantStatus::Completed,
+                status,
                 model_id: Some("rust-session-engine".to_string()),
                 usage_json: None,
                 created_at: now,
-                finished_at: Some(now),
+                finished_at,
             },
             parts: vec![
                 MessagePart {
@@ -270,6 +290,21 @@ fn build_assistant_node(
             ],
         }],
     }
+}
+
+fn finalize_assistant_node(bundle: &NodeBundle, finished_at: chrono::DateTime<Utc>) -> NodeBundle {
+    let mut finalized = bundle.clone();
+    if let Some(selected_variant) = finalized.variants.get_mut(finalized.node.select_index) {
+        selected_variant.variant.status = VariantStatus::Completed;
+        selected_variant.variant.finished_at = Some(finished_at);
+    }
+    finalized
+}
+
+fn inflight_conversation_projection(conversation: &Conversation) -> Conversation {
+    let mut projection = conversation.clone();
+    projection.generation_state = GenerationState::Started;
+    projection
 }
 
 pub fn selected_branch_snapshot_nodes(
@@ -619,7 +654,14 @@ mod tests {
     #[test]
     fn selected_variant_snapshot_projection_keeps_selected_variant_full_parts() {
         let now = Utc::now();
-        let bundle = build_assistant_node(ConversationId::new_v4(), None, "projection", now);
+        let bundle = build_assistant_node(
+            ConversationId::new_v4(),
+            None,
+            "projection",
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
 
         let projected = selected_variant_snapshot_projection(&bundle).expect("projection");
         let parts = &projected.variants[0].parts;
@@ -705,7 +747,14 @@ mod tests {
     #[test]
     fn streaming_delta_parts_emit_markdown_block_from_selected_variant() {
         let now = Utc::now();
-        let bundle = build_assistant_node(ConversationId::new_v4(), None, "projection", now);
+        let bundle = build_assistant_node(
+            ConversationId::new_v4(),
+            None,
+            "projection",
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
 
         let parts = streaming_delta_parts(&bundle).expect("streaming delta");
 
@@ -719,8 +768,14 @@ mod tests {
     #[test]
     fn assistant_node_uses_markdown_block_for_final_content() {
         let now = Utc::now();
-        let bundle =
-            build_assistant_node(ConversationId::new_v4(), None, "markdown projection", now);
+        let bundle = build_assistant_node(
+            ConversationId::new_v4(),
+            None,
+            "markdown projection",
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
         let parts = &bundle.variants[0].parts;
 
         assert_eq!(parts.len(), 2);
@@ -792,6 +847,10 @@ mod tests {
         );
         assert_eq!(snapshot_nodes[1].node.select_index, 0);
         assert_eq!(snapshot_nodes[1].variants.len(), 1);
+        assert_eq!(
+            snapshot_nodes[1].variants[0].variant.status,
+            VariantStatus::Streaming
+        );
         assert_eq!(snapshot_nodes[1].variants[0].parts.len(), 2);
         assert!(matches!(
             snapshot_nodes[1].variants[0].parts[0].payload,
@@ -1185,6 +1244,29 @@ mod tests {
         assert_eq!(item.updated_at, stored.conversation.updated_at);
         assert_eq!(item.current_cursor, stored.conversation.current_cursor);
         assert_eq!(item.generation_state, stored.conversation.generation_state);
+        assert_eq!(item.generation_state, GenerationState::Completed);
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_upsert_finalizes_assistant_variant_status() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "finalize".to_string(),
+            })
+            .expect("send message");
+
+        let upsert = match &events[3].payload {
+            ChatEvent::ConversationNodeUpsert { node } => node,
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        };
+
+        assert_eq!(upsert.variants[0].variant.status, VariantStatus::Completed);
+        assert!(upsert.variants[0].variant.finished_at.is_some());
 
         fs::remove_file(engine.store().path()).ok();
     }

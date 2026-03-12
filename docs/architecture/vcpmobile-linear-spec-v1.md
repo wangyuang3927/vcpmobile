@@ -196,6 +196,14 @@ Stories:
 3. 收敛 snapshot/upsert/delta 的真相边界
 4. 明确 draft persistence 与 conversation persistence 的接口
 
+Single-chat lifecycle state machine baseline:
+
+- reducer/runtime shared states: `idle -> requesting -> started -> streaming -> completed|failed|cancelled`
+- `generation_started` only advances `requesting -> started`
+- `generation_part_delta` advances `requesting|started -> streaming` and keeps later deltas in `streaming`
+- `generation_completed`, `generation_failed`, `generation_cancelled` are the only terminalizers
+- resume/recovery should only auto-anchor to `requesting|started|streaming`
+
 ### Epic B: Android State Refactor
 
 目标：将 Android 从“单 ViewModel 承载一切”进一步收敛为明确状态边界。

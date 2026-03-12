@@ -101,6 +101,11 @@ pub enum ChatEvent {
         variant_id: Uuid,
         message: String,
     },
+    GenerationCancelled {
+        node_id: NodeId,
+        variant_id: Uuid,
+        message: Option<String>,
+    },
     DraftUpdated {
         draft: DraftState,
     },

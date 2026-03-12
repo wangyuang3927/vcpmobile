@@ -45,8 +45,8 @@ object ConversationCatalogWorkbench {
             .filter { conversation ->
                 when (filter) {
                     ConversationCatalogFilter.ALL -> true
-                    ConversationCatalogFilter.IDLE -> conversation.generationState.equals("idle", ignoreCase = true)
-                    ConversationCatalogFilter.FAILED -> conversation.generationState.equals("failed", ignoreCase = true)
+                    ConversationCatalogFilter.IDLE -> conversation.generationState.isIdleLikeGenerationState()
+                    ConversationCatalogFilter.FAILED -> conversation.generationState.isFailureGenerationState()
                 }
             }
 
@@ -116,10 +116,26 @@ private fun conversationCatalogComparator(
 
 private fun RecoverableConversation.workflowPriority(): Int = when {
     isCurrent -> 3
-    generationState.equals("failed", ignoreCase = true) -> 2
-    generationState.equals("streaming", ignoreCase = true) -> 1
+    generationState.isFailureGenerationState() -> 2
+    generationState.isActiveGenerationState() -> 1
     else -> 0
 }
+
+private fun String.normalizedGenerationState(): String = trim().lowercase()
+
+private fun String.isActiveGenerationState(): Boolean = normalizedGenerationState() in setOf(
+    "requesting",
+    "started",
+    "streaming",
+)
+
+private fun String.isFailureGenerationState(): Boolean = normalizedGenerationState() == "failed"
+
+private fun String.isIdleLikeGenerationState(): Boolean = normalizedGenerationState() in setOf(
+    "idle",
+    "completed",
+    "cancelled",
+)
 
 private fun String.toEpochMillisOrZero(): Long {
     return runCatching {

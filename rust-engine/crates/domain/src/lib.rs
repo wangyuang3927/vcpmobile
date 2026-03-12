@@ -44,9 +44,71 @@ pub enum VariantStatus {
 #[serde(rename_all = "snake_case")]
 pub enum GenerationState {
     Idle,
+    Requesting,
+    Started,
     Streaming,
-    WaitingTool,
+    Completed,
     Failed,
+    Cancelled,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum GenerationSignal {
+    Submit,
+    Started,
+    Delta,
+    Complete,
+    Fail,
+    Cancel,
+    Reset,
+}
+
+impl GenerationState {
+    pub fn transition(self, signal: GenerationSignal) -> Self {
+        match signal {
+            GenerationSignal::Submit => {
+                if self.is_active() {
+                    self
+                } else {
+                    Self::Requesting
+                }
+            }
+            GenerationSignal::Started => match self {
+                Self::Requesting => Self::Started,
+                _ => self,
+            },
+            GenerationSignal::Delta => match self {
+                Self::Requesting | Self::Started | Self::Streaming => Self::Streaming,
+                _ => self,
+            },
+            GenerationSignal::Complete => match self {
+                Self::Requesting | Self::Started | Self::Streaming => Self::Completed,
+                _ => self,
+            },
+            GenerationSignal::Fail => match self {
+                Self::Requesting | Self::Started | Self::Streaming => Self::Failed,
+                _ => self,
+            },
+            GenerationSignal::Cancel => match self {
+                Self::Requesting | Self::Started | Self::Streaming => Self::Cancelled,
+                _ => self,
+            },
+            GenerationSignal::Reset => Self::Idle,
+        }
+    }
+
+    pub fn is_active(self) -> bool {
+        matches!(self, Self::Requesting | Self::Started | Self::Streaming)
+    }
+
+    pub fn is_terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+
+    pub fn can_resume(self) -> bool {
+        matches!(self, Self::Requesting | Self::Started | Self::Streaming)
+    }
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -240,6 +302,51 @@ pub struct ProviderModelCatalog {
     pub default_model: Option<String>,
     #[serde(default)]
     pub entries: Vec<ProviderModelCatalogEntry>,
+}
+
+#[cfg(test)]
+mod generation_state_tests {
+    use super::{GenerationSignal, GenerationState};
+
+    #[test]
+    fn generation_state_machine_tracks_send_stream_terminal_states() {
+        let requesting = GenerationState::Idle.transition(GenerationSignal::Submit);
+        let started = requesting.transition(GenerationSignal::Started);
+        let streaming = started.transition(GenerationSignal::Delta);
+        let completed = streaming.transition(GenerationSignal::Complete);
+
+        assert_eq!(requesting, GenerationState::Requesting);
+        assert_eq!(started, GenerationState::Started);
+        assert_eq!(streaming, GenerationState::Streaming);
+        assert_eq!(completed, GenerationState::Completed);
+        assert!(completed.is_terminal());
+        assert!(!completed.is_active());
+    }
+
+    #[test]
+    fn generation_state_machine_marks_failed_and_cancelled_as_terminal() {
+        let failed = GenerationState::Requesting.transition(GenerationSignal::Fail);
+        let cancelled = GenerationState::Started.transition(GenerationSignal::Cancel);
+
+        assert_eq!(failed, GenerationState::Failed);
+        assert_eq!(cancelled, GenerationState::Cancelled);
+        assert!(failed.is_terminal());
+        assert!(cancelled.is_terminal());
+        assert!(!failed.can_resume());
+        assert!(!cancelled.can_resume());
+    }
+
+    #[test]
+    fn generation_state_machine_anchors_resume_to_named_inflight_states() {
+        assert!(GenerationState::Requesting.can_resume());
+        assert!(GenerationState::Started.can_resume());
+        assert!(GenerationState::Streaming.can_resume());
+
+        assert!(!GenerationState::Idle.can_resume());
+        assert!(!GenerationState::Completed.can_resume());
+        assert!(!GenerationState::Failed.can_resume());
+        assert!(!GenerationState::Cancelled.can_resume());
+    }
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
