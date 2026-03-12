@@ -7,6 +7,7 @@ import com.vcp.mobile.data.network.HubStreamFailureException
 import com.vcp.mobile.data.network.HubSendMessageResponse
 import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
+import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.recovery.RecoveryStore
 import com.vcp.mobile.data.recovery.RecoverySceneAnchor
 import com.vcp.mobile.data.repository.HubChatRepository
@@ -982,6 +983,7 @@ class ChatViewModelRecoveryTest {
         )
         return RustChatEventEnvelope(
             conversationId = conversationId,
+            kind = RustChatEventKind.CONVERSATION_SNAPSHOT,
             event = "conversation_snapshot",
             data = data,
         )

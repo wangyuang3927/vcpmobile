@@ -284,4 +284,137 @@ class RustChatEventParserTest {
             snapshot?.delta?.parts
         )
     }
+
+    @Test
+    fun `parseEnvelope resolves canonical typed event kind`() {
+        val envelope = RustChatEventParser.parseEnvelope(
+            """
+            {
+              "schema": { "family": "chat_event", "major": 1, "minor": 0 },
+              "event_id": "event-1",
+              "event_name": "tool_call_started",
+              "conversation_id": "conversation-1",
+              "payload": {
+                "event": "tool_call_started",
+                "data": {
+                  "node_id": "node-1",
+                  "variant_id": "variant-1",
+                  "tool_call_id": "tool-call-1",
+                  "tool_name": "search",
+                  "arguments_json": "{\"query\":\"rust\"}"
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertNotNull(envelope)
+        assertEquals(RustChatEventKind.TOOL_CALL_STARTED, envelope?.kind)
+        assertEquals("tool_call_started", envelope?.event)
+    }
+
+    @Test
+    fun `extractEventError reads typed error payload semantics`() {
+        val json = JSONObject(
+            """
+            {
+              "error": {
+                "kind": "provider",
+                "code": "rate_limit",
+                "message": "provider throttled the request",
+                "retriable": true
+              }
+            }
+            """.trimIndent()
+        )
+
+        val error = RustChatEventParser.extractEventError(json)
+
+        assertNotNull(error)
+        assertEquals(RustEventErrorKind.PROVIDER, error?.kind)
+        assertEquals("rate_limit", error?.code)
+        assertEquals("provider throttled the request", error?.message)
+        assertEquals(true, error?.retriable)
+    }
+
+    @Test
+    fun `extractToolCallEvent reads explicit tool lifecycle payload`() {
+        val json = JSONObject(
+            """
+            {
+              "node_id": "node-1",
+              "variant_id": "variant-1",
+              "tool_call_id": "tool-call-1",
+              "tool_name": "search",
+              "arguments_json": "{\"query\":\"rust\"}"
+            }
+            """.trimIndent()
+        )
+
+        val event = RustChatEventParser.extractToolCallEvent(
+            kind = RustChatEventKind.TOOL_CALL_STARTED,
+            data = json,
+        )
+
+        assertNotNull(event)
+        assertEquals("node-1:variant-1", event?.identity?.messageKey)
+        assertEquals("tool-call-1", event?.toolCallId)
+        assertEquals("search", event?.toolName)
+        assertEquals(RustToolCallPhase.STARTED, event?.phase)
+        assertEquals("{\"query\":\"rust\"}", event?.argumentsJson)
+    }
+
+    @Test
+    fun `extractPartDelta preserves tool and error part types without flattening into text`() {
+        val json = JSONObject(
+            """
+            {
+              "appended_parts": [
+                {
+                  "payload": {
+                    "type": "tool_call",
+                    "tool_name": "search",
+                    "arguments_json": "{\"query\":\"rust\"}"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "tool_result",
+                    "tool_name": "search",
+                    "result_json": "{\"hits\":1}"
+                  }
+                },
+                {
+                  "payload": {
+                    "type": "error",
+                    "message": "tool failed"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        val delta = RustChatEventParser.extractPartDelta(json)
+
+        assertEquals("", delta.appendedText)
+        assertEquals("", delta.appendedReasoning)
+        assertEquals(listOf("tool_call", "tool_result", "error"), delta.partTypes)
+        assertEquals(
+            listOf(
+                RustMessagePart(
+                    type = "tool_call",
+                    text = "{\"query\":\"rust\"}",
+                    language = "search",
+                ),
+                RustMessagePart(
+                    type = "tool_result",
+                    text = "{\"hits\":1}",
+                    language = "search",
+                ),
+                RustMessagePart(type = "error", text = "tool failed"),
+            ),
+            delta.parts
+        )
+    }
 }

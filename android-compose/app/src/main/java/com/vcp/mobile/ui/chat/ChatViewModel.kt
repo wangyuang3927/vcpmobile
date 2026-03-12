@@ -7,6 +7,7 @@ import com.vcp.mobile.data.network.HubMessage
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
+import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.network.RustChatEventParser
 import com.vcp.mobile.data.network.RustMessagePart
 import com.vcp.mobile.data.network.toMessageSender
@@ -443,8 +444,8 @@ class ChatViewModel @Inject constructor(
         envelope: RustChatEventEnvelope,
         currentMessageKey: String?,
     ): String? {
-        return when (envelope.event) {
-            "conversation_snapshot" -> {
+        return when (envelope.kind) {
+            RustChatEventKind.CONVERSATION_SNAPSHOT -> {
                 val snapshots = RustChatEventParser.extractSnapshotMessages(envelope.data)
                 if (snapshots.isEmpty()) return currentMessageKey
 
@@ -465,14 +466,14 @@ class ChatViewModel @Inject constructor(
                 latestMessageKey
             }
 
-            "generation_started" -> {
+            RustChatEventKind.GENERATION_STARTED -> {
                 val identity = RustChatEventParser.extractGenerationIdentity(envelope.data)
                 val messageKey = identity?.messageKey ?: currentMessageKey
                 dispatchGeneration(ChatGenerationPhase.STARTED, messageKey)
                 messageKey
             }
 
-            "generation_part_delta" -> {
+            RustChatEventKind.GENERATION_PART_DELTA -> {
                 val identity = RustChatEventParser.extractGenerationIdentity(envelope.data)
                 val messageKey = identity?.messageKey ?: currentMessageKey
                 val delta = RustChatEventParser.extractPartDelta(envelope.data)
@@ -499,7 +500,7 @@ class ChatViewModel @Inject constructor(
                 )
             }
 
-            "conversation_node_upsert" -> {
+            RustChatEventKind.CONVERSATION_NODE_UPSERT -> {
                 val snapshot = RustChatEventParser.extractNodeUpsertMessage(envelope.data)
                     ?: return currentMessageKey
                 replaceSnapshotMessage(
@@ -514,12 +515,12 @@ class ChatViewModel @Inject constructor(
                 )
             }
 
-            "generation_completed" -> {
+            RustChatEventKind.GENERATION_COMPLETED -> {
                 dispatchGeneration(ChatGenerationPhase.COMPLETED, null)
                 currentMessageKey
             }
 
-            "generation_cancelled" -> {
+            RustChatEventKind.GENERATION_CANCELLED -> {
                 dispatchGeneration(ChatGenerationPhase.CANCELLED, currentMessageKey)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
@@ -529,34 +530,45 @@ class ChatViewModel @Inject constructor(
                 currentMessageKey
             }
 
-            "generation_failed" -> {
+            RustChatEventKind.GENERATION_FAILED -> {
                 discardPendingOptimisticUserMessage()
                 dispatchGeneration(ChatGenerationPhase.FAILED, currentMessageKey)
+                val error = RustChatEventParser.extractEventError(envelope.data)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
-                        text = envelope.data.optString("message").ifBlank { "生成失败" },
+                        text = error?.message ?: "生成失败",
                     )
                 )
                 currentMessageKey
             }
 
-            "engine_error" -> {
+            RustChatEventKind.ENGINE_ERROR -> {
                 discardPendingOptimisticUserMessage()
                 dispatchGeneration(ChatGenerationPhase.FAILED, currentMessageKey)
+                val error = RustChatEventParser.extractEventError(envelope.data)
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
-                        text = envelope.data.optString("message").ifBlank { "引擎异常" },
+                        text = error?.message ?: "引擎异常",
                     )
                 )
                 currentMessageKey
             }
 
-            else -> currentMessageKey
+            RustChatEventKind.TOOL_CALL_STARTED,
+            RustChatEventKind.TOOL_CALL_COMPLETED,
+            RustChatEventKind.TOOL_CALL_FAILED,
+            RustChatEventKind.TOOL_CALL_CANCELLED,
+            RustChatEventKind.CONVERSATION_LIST_INVALIDATE,
+            RustChatEventKind.CONVERSATION_NODE_SELECT,
+            RustChatEventKind.CONVERSATION_META_UPDATE,
+            RustChatEventKind.DRAFT_UPDATED,
+            RustChatEventKind.DRAFT_CLEARED,
+            RustChatEventKind.AUTH_QR_PLACEHOLDER -> currentMessageKey
         }
     }
 
     private fun hydrateConversationSnapshot(envelope: RustChatEventEnvelope) {
-        if (envelope.event != "conversation_snapshot") return
+        if (envelope.kind != RustChatEventKind.CONVERSATION_SNAPSHOT) return
         val conversationId = envelope.conversationId ?: return
         val snapshots = RustChatEventParser.extractSnapshotMessages(envelope.data)
         if (snapshots.isEmpty()) return
