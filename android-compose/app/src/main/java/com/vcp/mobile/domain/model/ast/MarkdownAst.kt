@@ -57,6 +57,63 @@ sealed interface MarkdownAstNode {
      */
     data class ListItem(
         val content: String,
-        val index: Int? = null
+        val index: Int? = null,
+        val checked: Boolean? = null,
+    ) : MarkdownAstNode
+
+    /**
+     * 引用块节点。
+     *
+     * Args:
+     *   content: 引用文本。
+     */
+    data class Quote(
+        val content: String
+    ) : MarkdownAstNode
+
+    /**
+     * 独立链接节点。
+     *
+     * Args:
+     *   label: 展示文本。
+     *   destination: 链接目标地址。
+     */
+    data class Link(
+        val label: String,
+        val destination: String
+    ) : MarkdownAstNode
+
+    /**
+     * 表格节点。
+     *
+     * Args:
+     *   headers: 表头单元格。
+     *   rows: 数据行。
+     */
+    data class Table(
+        val headers: List<String> = emptyList(),
+        val rows: List<List<String>> = emptyList(),
+    ) : MarkdownAstNode
+
+    /**
+     * 数学公式节点。
+     *
+     * Args:
+     *   expression: 公式内容。
+     *   isBlock: 是否按块级公式显示。
+     */
+    data class Math(
+        val expression: String,
+        val isBlock: Boolean = false,
+    ) : MarkdownAstNode
+
+    /**
+     * 行内代码节点。
+     *
+     * Args:
+     *   content: 代码内容。
+     */
+    data class InlineCode(
+        val content: String
     ) : MarkdownAstNode
 }

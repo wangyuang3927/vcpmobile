@@ -13,9 +13,9 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.vcp.mobile.ui.markdown.MarkdownAstContent
+import com.vcp.mobile.ui.markdown.MarkdownCodeBlock
 
 @Composable
 fun TypedPartsRenderer(
@@ -65,24 +65,11 @@ fun TypedPartsRenderer(
                 }
 
                 "code_block" -> {
-                    Surface(
-                        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.18f),
-                        shape = RoundedCornerShape(12.dp),
-                    ) {
-                        val codeText = buildString {
-                            if (!part.language.isNullOrBlank()) {
-                                append(part.language).append('\n')
-                            }
-                            append(part.text)
-                        }
-                        Text(
-                            text = codeText,
-                            modifier = Modifier.fillMaxWidth().padding(10.dp),
-                            color = textColor,
-                            style = MaterialTheme.typography.bodyMedium,
-                            fontFamily = FontFamily.Monospace,
-                        )
-                    }
+                    MarkdownCodeBlock(
+                        code = part.text,
+                        language = part.language,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
                 }
 
                 "image" -> {

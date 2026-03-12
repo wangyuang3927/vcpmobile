@@ -28,6 +28,11 @@ data class AstStreamNode(
     val depth: Int? = null,
     val lang: String? = null,
     val ordered: Boolean? = null,
+    val checked: Boolean? = null,
+    val url: String? = null,
+    val display: Boolean? = null,
+    val headers: List<String>? = null,
+    val rows: List<List<String>>? = null,
 )
 
 /**
@@ -114,7 +119,7 @@ object AstStreamParser {
                     orderedIndex = 0
                 }
 
-                "code" -> {
+                "code", "code_block", "fenced_code" -> {
                     node.text?.let {
                         markdownNodes += MarkdownAstNode.Code(
                             content = it,
@@ -125,7 +130,7 @@ object AstStreamParser {
                     orderedIndex = 0
                 }
 
-                "listItem", "list_item" -> {
+                "listItem", "list_item", "task_list_item", "taskItem", "checkbox" -> {
                     node.text?.takeIf { it.isNotBlank() }?.let { text ->
                         val itemIndex = if (node.ordered == true) {
                             orderedIndex = if (previousOrderedListItem) orderedIndex + 1 else 1
@@ -136,12 +141,61 @@ object AstStreamParser {
                         markdownNodes += MarkdownAstNode.ListItem(
                             content = text,
                             index = itemIndex,
+                            checked = node.checked,
                         )
                     }
                     previousOrderedListItem = node.ordered == true
                     if (!previousOrderedListItem) {
                         orderedIndex = 0
                     }
+                }
+
+                "quote", "blockquote", "block_quote" -> {
+                    node.text?.takeIf { it.isNotBlank() }?.let {
+                        markdownNodes += MarkdownAstNode.Quote(content = it)
+                    }
+                    previousOrderedListItem = false
+                    orderedIndex = 0
+                }
+
+                "link" -> {
+                    val destination = node.url?.takeIf { it.isNotBlank() }
+                    val label = node.text?.takeIf { it.isNotBlank() } ?: destination
+                    if (destination != null && label != null) {
+                        markdownNodes += MarkdownAstNode.Link(
+                            label = label,
+                            destination = destination,
+                        )
+                    }
+                    previousOrderedListItem = false
+                    orderedIndex = 0
+                }
+
+                "inline_code", "inlineCode" -> {
+                    node.text?.takeIf { it.isNotBlank() }?.let {
+                        markdownNodes += MarkdownAstNode.InlineCode(content = it)
+                    }
+                    previousOrderedListItem = false
+                    orderedIndex = 0
+                }
+
+                "math", "math_block", "block_math", "inline_math" -> {
+                    node.text?.takeIf { it.isNotBlank() }?.let {
+                        markdownNodes += MarkdownAstNode.Math(
+                            expression = it,
+                            isBlock = node.display == true ||
+                                node.type == "math_block" ||
+                                node.type == "block_math",
+                        )
+                    }
+                    previousOrderedListItem = false
+                    orderedIndex = 0
+                }
+
+                "table" -> {
+                    tableNodeOrNull(node)?.let(markdownNodes::add)
+                    previousOrderedListItem = false
+                    orderedIndex = 0
                 }
 
                 else -> {
@@ -187,6 +241,14 @@ object AstStreamParser {
             depth = nodeObject.optIntOrNull("depth"),
             lang = nodeObject.optNullableString("lang"),
             ordered = nodeObject.optBooleanOrNull("ordered"),
+            checked = nodeObject.optBooleanOrNull("checked"),
+            url = nodeObject.optNullableString("url") ?: nodeObject.optNullableString("href"),
+            display = nodeObject.optBooleanOrNull("display"),
+            headers = nodeObject.optStringList("headers")
+                ?: nodeObject.optStringList("header")
+                ?: nodeObject.optStringList("columns"),
+            rows = nodeObject.optStringMatrix("rows")
+                ?: nodeObject.optStringMatrix("cells"),
         )
     }
 
@@ -196,6 +258,68 @@ object AstStreamParser {
             source.optBoolean("done", false) && !source.has("type") -> null
             else -> source
         }
+    }
+}
+
+private fun tableNodeOrNull(node: AstStreamNode): MarkdownAstNode.Table? {
+    val structuredTable = if (!node.headers.isNullOrEmpty() || !node.rows.isNullOrEmpty()) {
+        MarkdownAstNode.Table(
+            headers = node.headers.orEmpty(),
+            rows = node.rows.orEmpty(),
+        )
+    } else {
+        null
+    }
+
+    if (structuredTable != null) {
+        return structuredTable
+    }
+
+    val text = node.text?.takeIf { it.isNotBlank() } ?: return null
+    return parseMarkdownTable(text)
+}
+
+private fun parseMarkdownTable(text: String): MarkdownAstNode.Table? {
+    val lines = text
+        .lineSequence()
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+        .toList()
+    if (lines.size < 2) {
+        return null
+    }
+
+    val headers = parseTableRow(lines[0])
+    if (headers.isEmpty() || !isMarkdownTableDivider(lines[1])) {
+        return null
+    }
+
+    val rows = lines.drop(2).mapNotNull { row ->
+        parseTableRow(row).takeIf { it.isNotEmpty() }
+    }
+    return MarkdownAstNode.Table(
+        headers = headers,
+        rows = rows,
+    )
+}
+
+private fun parseTableRow(line: String): List<String> {
+    return line
+        .trim()
+        .trim('|')
+        .split('|')
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+}
+
+private fun isMarkdownTableDivider(line: String): Boolean {
+    val cells = parseTableRow(line)
+    if (cells.isEmpty()) {
+        return false
+    }
+
+    return cells.all { cell ->
+        cell.all { it == '-' || it == ':' }
     }
 }
 
@@ -227,5 +351,55 @@ private fun JSONObject.optBooleanOrNull(key: String): Boolean? {
         is Boolean -> value
         is String -> value.toBooleanStrictOrNull()
         else -> null
+    }
+}
+
+private fun JSONObject.optStringList(key: String): List<String>? {
+    if (!has(key) || isNull(key)) {
+        return null
+    }
+    return (opt(key) as? JSONArray)?.toStringList()
+}
+
+private fun JSONObject.optStringMatrix(key: String): List<List<String>>? {
+    if (!has(key) || isNull(key)) {
+        return null
+    }
+    return (opt(key) as? JSONArray)?.toStringMatrix()
+}
+
+private fun JSONArray.toStringList(): List<String> {
+    return buildList {
+        for (index in 0 until length()) {
+            val value = opt(index)
+            when (value) {
+                null,
+                JSONObject.NULL -> Unit
+                is String -> add(value)
+                else -> add(value.toString())
+            }
+        }
+    }
+}
+
+private fun JSONArray.toStringMatrix(): List<List<String>> {
+    return buildList {
+        for (index in 0 until length()) {
+            when (val value = opt(index)) {
+                is JSONArray -> add(value.toStringList())
+                is JSONObject -> {
+                    val cells = value.optStringList("cells") ?: value.optStringList("columns")
+                    if (cells != null) {
+                        add(cells)
+                    }
+                }
+                is String -> {
+                    val parsed = parseTableRow(value)
+                    if (parsed.isNotEmpty()) {
+                        add(parsed)
+                    }
+                }
+            }
+        }
     }
 }
