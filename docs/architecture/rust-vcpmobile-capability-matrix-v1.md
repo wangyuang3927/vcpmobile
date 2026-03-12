@@ -18,7 +18,7 @@
 | Streaming semantics | part-aware merge, reasoning/tool aware | SSE events for app state | streamed group messages with agent metadata | stream + tool loop + interrupt | SSE chat events + node upsert | keep SSE for phase 1, upgrade event richness |
 | Provider/API config | strong per-provider config + QR import/export | no | not main reference | upstream target endpoints | minimal/no real provider config | inherit rib-style provider config, Rust-owned |
 | Agent config | full assistant surfaces | no | prompt modes + config persistence | alias/prompt/config.env/admin APIs | almost none | create full Rust-owned agent config system, informed by rib + vcptoolbox |
-| Placeholder system | template/injection support | no | prompt modes and `{{AgentName}}` | staged `{{}}` pipeline, plugin placeholders, sticker placeholders | none | preserve staged placeholder semantics, resolve in Rust |
+| Placeholder system | template/injection support | no | prompt modes and `{{AgentName}}` | staged `{{}}` pipeline, plugin placeholders, sticker placeholders | none | preserve staged placeholder semantics in Rust with frozen order: `agent -> generic -> plugin -> static`, then separate `sticker_media` expansion |
 | QR onboarding | provider QR import/export | QR bootstrap + long/short token split | no | target backend | placeholder only | use hapi-style minimal bootstrap for VCPToolBox pairing; optionally keep rib-style provider QR for API import |
 | Group chat | none native | no | strongest reference: @agent, naturerandom, invite_only, topic/history | upstream can service it | none | new Rust-native agent group chat |
 | Forum | none | no | client reference | backend/forum/plugin truth | none | P1: normalized thread model, do not copy markdown-floor parsing as truth |
