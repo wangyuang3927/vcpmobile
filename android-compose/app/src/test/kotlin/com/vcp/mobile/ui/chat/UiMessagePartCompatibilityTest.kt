@@ -29,6 +29,23 @@ class UiMessagePartCompatibilityTest {
     }
 
     @Test
+    fun `compatibility projection preserves code block whitespace without language`() {
+        val projection = listOf(
+            UiMessagePart(
+                type = "code_block",
+                text = "fun main() {\n    println(\"ok\")\n}",
+            ),
+        ).toCompatibilityProjection()
+
+        assertEquals(
+            "```\nfun main() {\n    println(\"ok\")\n}\n```",
+            projection.content,
+        )
+        assertNull(projection.reasoning)
+        assertEquals(listOf("code_block"), projection.partTypes)
+    }
+
+    @Test
     fun `compatibility projection returns empty defaults when no parts`() {
         val projection = emptyList<UiMessagePart>().toCompatibilityProjection()
 
