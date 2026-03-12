@@ -190,6 +190,41 @@ Owns typed app-facing contracts:
 - typed event envelopes
 - schema versioning
 
+#### App-facing event envelope v1
+
+All app-facing chat events must share one stable outer shape:
+
+```json
+{
+  "schema": {
+    "family": "chat_event",
+    "major": 1,
+    "minor": 0
+  },
+  "event_id": "uuid",
+  "event_name": "conversation_snapshot",
+  "conversation_id": "uuid|null",
+  "emitted_at": "RFC3339 timestamp",
+  "payload": {
+    "event": "conversation_snapshot",
+    "data": {}
+  }
+}
+```
+
+Rules:
+
+- `event_name` is the canonical snake_case event identifier consumed by app reducers.
+- `payload` carries the typed event body. During the v1 transition it may still repeat
+  the same event tag internally, but reducers should treat the outer shape as the durable
+  compatibility boundary.
+- `schema.family` names the event family. It changes only when the stream is no longer a
+  chat-event stream.
+- `schema.major` increments for breaking changes: envelope field rename/removal, event rename,
+  required payload field removal, or semantic reinterpretation of an existing event.
+- `schema.minor` increments for backward-compatible additions: new optional fields, new event
+  types, or additive payload data that old clients may ignore safely.
+
 ### 6.3 `store`
 
 Moves from JSON file store to SQLite-backed durable truth.

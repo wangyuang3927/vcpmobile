@@ -91,7 +91,7 @@ class OkHttpSseHubApiClientTest {
         val envelope = client.parseSnapshotEnvelope(
             """
             event: chat_event
-            data: {"conversation_id":"conv-1","payload":{"event":"conversation_snapshot","data":{"nodes":[]}}}
+            data: {"schema":{"family":"chat_event","major":1,"minor":0},"event_id":"evt-1","event_name":"conversation_snapshot","conversation_id":"conv-1","emitted_at":"2026-03-12T00:00:00Z","payload":{"event":"conversation_snapshot","data":{"nodes":[]}}}
 
             event: relay.done
             data: {}
@@ -100,6 +100,26 @@ class OkHttpSseHubApiClientTest {
 
         assertEquals("conv-1", envelope?.conversationId)
         assertEquals("conversation_snapshot", envelope?.event)
+        assertEquals("evt-1", envelope?.eventId)
+        assertEquals("chat_event", envelope?.schemaFamily)
+        assertEquals(1, envelope?.schemaMajor)
+        assertEquals(0, envelope?.schemaMinor)
+        assertEquals("2026-03-12T00:00:00Z", envelope?.emittedAt)
+    }
+
+    @Test
+    fun `parseSnapshotEnvelope falls back to tagged payload event for older envelopes`() {
+        val envelope = client.parseSnapshotEnvelope(
+            """
+            event: chat_event
+            data: {"conversation_id":"conv-1","payload":{"event":"conversation_snapshot","data":{"nodes":[]}}}
+            """.trimIndent()
+        )
+
+        assertEquals("conv-1", envelope?.conversationId)
+        assertEquals("conversation_snapshot", envelope?.event)
+        assertNull(envelope?.eventId)
+        assertNull(envelope?.schemaFamily)
     }
 
     @Test
