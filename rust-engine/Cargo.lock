@@ -1234,6 +1234,7 @@ dependencies = [
  "chrono",
  "pdf-extract",
  "roxmltree",
+ "serde_json",
  "sha2",
  "thiserror",
  "uuid",

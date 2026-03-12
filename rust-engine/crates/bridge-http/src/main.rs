@@ -315,7 +315,7 @@ fn build_event_stream(
 fn default_store_path() -> PathBuf {
     std::env::var("VCPMOBILE_STORE_PATH")
         .map(PathBuf::from)
-        .unwrap_or_else(|_| PathBuf::from("data/store.json"))
+        .unwrap_or_else(|_| PathBuf::from("data/store.sqlite3"))
 }
 
 fn server_host() -> String {
