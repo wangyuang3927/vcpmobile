@@ -555,4 +555,58 @@ class RustChatEventParserTest {
             delta.parts
         )
     }
+
+    @Test
+    fun `extractPartDelta keeps stable part identity for streaming merge`() {
+        val json = JSONObject(
+            """
+            {
+              "appended_parts": [
+                {
+                  "id": "part-reasoning-1",
+                  "order_index": 0,
+                  "payload": {
+                    "type": "reasoning",
+                    "text": "thinking"
+                  }
+                },
+                {
+                  "id": "part-tool-1",
+                  "order_index": 1,
+                  "payload": {
+                    "type": "tool",
+                    "tool_call_id": "tool-call-1",
+                    "tool_name": "search",
+                    "state": "started",
+                    "input_json": "{\"query\":\"rust\"}"
+                  }
+                }
+              ]
+            }
+            """.trimIndent()
+        )
+
+        val delta = RustChatEventParser.extractPartDelta(json)
+
+        assertEquals(
+            listOf(
+                RustMessagePart(
+                    type = "reasoning",
+                    text = "thinking",
+                    partId = "part-reasoning-1",
+                    orderIndex = 0,
+                ),
+                RustMessagePart(
+                    type = "tool",
+                    text = "{\"query\":\"rust\"}",
+                    title = "search",
+                    state = "started",
+                    partId = "part-tool-1",
+                    orderIndex = 1,
+                    toolCallId = "tool-call-1",
+                ),
+            ),
+            delta.parts
+        )
+    }
 }

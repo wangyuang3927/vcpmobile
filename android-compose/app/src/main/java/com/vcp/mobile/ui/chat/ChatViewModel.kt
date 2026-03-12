@@ -9,6 +9,8 @@ import com.vcp.mobile.data.network.RustChatEventEnvelope
 import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.network.RustChatEventParser
 import com.vcp.mobile.data.network.RustMessagePart
+import com.vcp.mobile.data.network.RustToolCallEvent
+import com.vcp.mobile.data.network.RustToolCallPhase
 import com.vcp.mobile.data.network.toMessageSender
 import com.vcp.mobile.data.network.toRole
 import com.vcp.mobile.data.recovery.RecoveryStore
@@ -518,7 +520,20 @@ class ChatViewModel @Inject constructor(
             RustChatEventKind.TOOL_CALL_STARTED,
             RustChatEventKind.TOOL_CALL_COMPLETED,
             RustChatEventKind.TOOL_CALL_FAILED,
-            RustChatEventKind.TOOL_CALL_CANCELLED,
+            RustChatEventKind.TOOL_CALL_CANCELLED -> {
+                val toolEvent = RustChatEventParser.extractToolCallEvent(envelope.kind, envelope.data)
+                    ?: return currentMessageKey
+                appendAssistantDelta(
+                    currentMessageId = toolEvent.identity.messageKey,
+                    sender = MessageSender.AGENT,
+                    appendText = "",
+                    nodeId = toolEvent.identity.nodeId,
+                    variantId = toolEvent.identity.variantId,
+                    parts = listOf(toolEvent.toUiMessagePart()),
+                    partTypes = listOf("tool"),
+                )
+            }
+
             RustChatEventKind.CONVERSATION_LIST_INVALIDATE,
             RustChatEventKind.CONVERSATION_NODE_SELECT,
             RustChatEventKind.CONVERSATION_META_UPDATE,
@@ -610,5 +625,25 @@ private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map 
         url = part.url,
         mime = part.mime,
         state = part.state,
+        partId = part.partId,
+        orderIndex = part.orderIndex,
+        toolCallId = part.toolCallId,
+    )
+}
+
+private fun RustToolCallEvent.toUiMessagePart(): UiMessagePart {
+    val detailText = when (phase) {
+        RustToolCallPhase.STARTED -> argumentsJson.orEmpty()
+        RustToolCallPhase.COMPLETED -> ""
+        RustToolCallPhase.FAILED -> error?.message.orEmpty()
+        RustToolCallPhase.CANCELLED -> message.orEmpty()
+    }
+    return UiMessagePart(
+        type = "tool",
+        text = detailText,
+        title = toolName,
+        state = phase.name.lowercase(),
+        partId = "tool-call:$toolCallId",
+        toolCallId = toolCallId,
     )
 }

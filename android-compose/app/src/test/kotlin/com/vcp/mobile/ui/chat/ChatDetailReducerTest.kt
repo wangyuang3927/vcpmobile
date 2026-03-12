@@ -371,6 +371,123 @@ class ChatDetailReducerTest {
     }
 
     @Test
+    fun `assistant delta merges repeated reasoning part updates by stable order`() {
+        val started = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.STREAMING,
+                messageKey = "node-3:variant-3",
+            )
+        )
+
+        val first = ChatDetailReducer.appendAssistantDelta(
+            state = started,
+            currentMessageId = "node-3:variant-3",
+            sender = MessageSender.AGENT,
+            appendText = "",
+            appendReasoning = "thinking",
+            nodeId = "node-3",
+            variantId = "variant-3",
+            parts = listOf(
+                UiMessagePart(type = "reasoning", text = "thinking", orderIndex = 0),
+                UiMessagePart(type = "text", text = "hello", orderIndex = 1),
+            ),
+            partTypes = listOf("reasoning", "text"),
+        )
+        val second = ChatDetailReducer.appendAssistantDelta(
+            state = first.state,
+            currentMessageId = first.messageId,
+            sender = MessageSender.AGENT,
+            appendText = "",
+            appendReasoning = "thinking harder",
+            nodeId = "node-3",
+            variantId = "variant-3",
+            parts = listOf(
+                UiMessagePart(type = "reasoning", text = "thinking harder", orderIndex = 0),
+                UiMessagePart(type = "text", text = "hello world", orderIndex = 1),
+            ),
+            partTypes = listOf("reasoning", "text"),
+        )
+
+        val lastMessage = second.state.messages.last()
+        assertEquals("thinking harder", lastMessage.reasoning)
+        assertEquals("hello world", lastMessage.content)
+        assertEquals(
+            listOf(
+                UiMessagePart(type = "reasoning", text = "thinking harder", orderIndex = 0),
+                UiMessagePart(type = "text", text = "hello world", orderIndex = 1),
+            ),
+            lastMessage.parts
+        )
+    }
+
+    @Test
+    fun `assistant delta merges tool state updates by tool call identity`() {
+        val started = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.STREAMING,
+                messageKey = "node-tool:variant-tool",
+            )
+        )
+
+        val first = ChatDetailReducer.appendAssistantDelta(
+            state = started,
+            currentMessageId = "node-tool:variant-tool",
+            sender = MessageSender.AGENT,
+            appendText = "",
+            nodeId = "node-tool",
+            variantId = "variant-tool",
+            parts = listOf(
+                UiMessagePart(
+                    type = "tool",
+                    text = "{\"query\":\"rust\"}",
+                    title = "search",
+                    state = "started",
+                    partId = "tool-call:tool-1",
+                    toolCallId = "tool-1",
+                )
+            ),
+            partTypes = listOf("tool"),
+        )
+        val second = ChatDetailReducer.appendAssistantDelta(
+            state = first.state,
+            currentMessageId = first.messageId,
+            sender = MessageSender.AGENT,
+            appendText = "",
+            nodeId = "node-tool",
+            variantId = "variant-tool",
+            parts = listOf(
+                UiMessagePart(
+                    type = "tool",
+                    text = "",
+                    title = "search",
+                    state = "completed",
+                    partId = "tool-call:tool-1",
+                    toolCallId = "tool-1",
+                )
+            ),
+            partTypes = listOf("tool"),
+        )
+
+        val lastMessage = second.state.messages.last()
+        assertEquals(
+            listOf(
+                UiMessagePart(
+                    type = "tool",
+                    text = "{\"query\":\"rust\"}",
+                    title = "search",
+                    state = "completed",
+                    partId = "tool-call:tool-1",
+                    toolCallId = "tool-1",
+                )
+            ),
+            lastMessage.parts
+        )
+        assertEquals("search · completed\n{\"query\":\"rust\"}", lastMessage.content)
+    }
+
+    @Test
     fun `conversation hydrated replaces placeholder messages and bumps content version`() {
         val initial = ChatDetailReducer.initialState()
 
