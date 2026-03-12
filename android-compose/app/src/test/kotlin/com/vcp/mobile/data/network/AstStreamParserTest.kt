@@ -1,6 +1,7 @@
 package com.vcp.mobile.data.network
 
 import com.vcp.mobile.domain.model.ast.MarkdownAstNode
+import com.vcp.mobile.testing.RichContentSmokeFixtures
 import org.junit.Assert.assertEquals
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -85,6 +86,18 @@ class AstStreamParserTest {
                     rows = listOf(listOf("Pass", "yes")),
                 ),
             ),
+            document.nodes,
+        )
+    }
+
+    @Test
+    fun `parser smoke fixture covers markdown parity floor constructs`() {
+        val document = AstStreamParser.parseJsonToDocument(
+            RichContentSmokeFixtures.markdownAstJson
+        )
+
+        assertEquals(
+            RichContentSmokeFixtures.markdownAstExpectedNodes(),
             document.nodes,
         )
     }
