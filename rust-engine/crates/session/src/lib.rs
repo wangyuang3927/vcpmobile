@@ -13,14 +13,18 @@ use vcpmobile_domain::{
     DocumentAttachmentInput, DocumentDescriptor, DocumentPromptTransformItem,
     DocumentPromptTransformOutput, DocumentPromptTransformStatus, GenerationSignal,
     GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
-    NodeId, PromptPlaceholderValue, PromptResolutionPreview, PromptResolutionRecord,
-    PromptResolutionStatus, TopicId, VariantStatus,
+    NodeId, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{
     ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
     SnapshotPart, SnapshotVariant, VariantBundle,
 };
 use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
+
+#[cfg(test)]
+use vcpmobile_domain::{PromptPlaceholderValue, PromptResolutionStatus};
+
+pub use vcpmobile_domain::resolve_prompt_preview;
 
 #[derive(Debug, Clone)]
 pub struct SessionEngine {
@@ -75,53 +79,6 @@ pub enum SessionError {
     },
     #[error("document transform error: {0}")]
     DocumentTransform(#[from] DocumentTransformError),
-}
-
-pub fn resolve_prompt_preview(
-    raw_prompt: impl AsRef<str>,
-    placeholders: &[PromptPlaceholderValue],
-) -> PromptResolutionPreview {
-    let raw_prompt = raw_prompt.as_ref().to_string();
-    let mut resolved_prompt = raw_prompt.clone();
-    let mut ordered = placeholders.iter().enumerate().collect::<Vec<_>>();
-    ordered.sort_by_key(|(index, placeholder)| (placeholder.category.resolution_rank(), *index));
-
-    let mut claimed_keys = BTreeSet::new();
-    let mut records = Vec::with_capacity(ordered.len());
-
-    for (_, placeholder) in ordered {
-        let status = if !placeholder.category.participates_in_prompt_preview() {
-            PromptResolutionStatus::Deferred
-        } else if !claimed_keys.insert(placeholder.key.clone()) {
-            PromptResolutionStatus::Shadowed
-        } else {
-            resolved_prompt = replace_placeholder_tokens(&resolved_prompt, placeholder);
-            PromptResolutionStatus::Applied
-        };
-
-        records.push(PromptResolutionRecord {
-            key: placeholder.key.clone(),
-            value: placeholder.value.clone(),
-            category: placeholder.category,
-            source: placeholder.source,
-            status,
-        });
-    }
-
-    PromptResolutionPreview {
-        raw_prompt,
-        resolved_prompt,
-        records,
-    }
-}
-
-fn replace_placeholder_tokens(prompt: &str, placeholder: &PromptPlaceholderValue) -> String {
-    let mut result = prompt.replace(&placeholder.canonical_token(), &placeholder.value);
-    let legacy_token = format!("{{{}}}", placeholder.key);
-    if legacy_token != placeholder.canonical_token() {
-        result = result.replace(&legacy_token, &placeholder.value);
-    }
-    result
 }
 
 impl SessionEngine {
