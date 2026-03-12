@@ -15,8 +15,11 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
-use vcpmobile_domain::{ConversationId, GenerationState};
-use vcpmobile_protocol::{ChatEvent, EventEnvelope, SnapshotBranch, SnapshotConversation};
+use vcpmobile_domain::{ConversationId, DocumentAttachmentInput, GenerationState};
+use vcpmobile_protocol::{
+    ChatEvent, EventEnvelope, SnapshotBranch, SnapshotConversation, TransformDocumentPromptRequest,
+    TransformDocumentPromptResponse,
+};
 use vcpmobile_session::{
     SessionEngine, SessionSendRequest, demo_conversation, selected_branch_snapshot_nodes,
 };
@@ -31,6 +34,8 @@ struct AppState {
 struct BridgeChatMessage {
     role: String,
     content: String,
+    #[serde(default)]
+    attachments: Vec<DocumentAttachmentInput>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -75,6 +80,7 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/conversations", get(chat_conversations))
         .route("/api/chat/catalog", get(chat_catalog))
         .route("/api/chat", post(chat_send))
+        .route("/api/chat/document-prompt", post(chat_document_prompt))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
         .with_state(state)
 }
@@ -158,23 +164,29 @@ async fn chat_send(
     Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
     (axum::http::StatusCode, String),
 > {
-    let user_text = body
+    let latest_user_message = body
         .messages
         .iter()
         .rev()
         .find(|message| message.role.trim().eq_ignore_ascii_case("user"))
-        .map(|message| message.content.trim().to_string())
-        .filter(|text| !text.is_empty())
         .ok_or((
             axum::http::StatusCode::BAD_REQUEST,
             "missing latest user message".to_string(),
         ))?;
+    let user_text = latest_user_message.content.trim().to_string();
+    if user_text.is_empty() && latest_user_message.attachments.is_empty() {
+        return Err((
+            axum::http::StatusCode::BAD_REQUEST,
+            "latest user message must include text or attachments".to_string(),
+        ));
+    }
 
     let engine = state.engine.lock().await;
     let events = engine
         .send_message(SessionSendRequest {
             conversation_id: body.conversation_id,
             text: user_text,
+            attachments: latest_user_message.attachments.clone(),
         })
         .map_err(|error| match error {
             vcpmobile_session::SessionError::ConversationNotFound(_) => {
@@ -187,6 +199,18 @@ async fn chat_send(
         })?;
 
     Ok(build_event_stream(events))
+}
+
+async fn chat_document_prompt(
+    State(state): State<AppState>,
+    Json(body): Json<TransformDocumentPromptRequest>,
+) -> Result<Json<TransformDocumentPromptResponse>, (axum::http::StatusCode, String)> {
+    let engine = state.engine.lock().await;
+    let output = engine
+        .transform_document_prompt(body.attachments)
+        .map_err(|error| (axum::http::StatusCode::BAD_REQUEST, error.to_string()))?;
+
+    Ok(Json(TransformDocumentPromptResponse { output }))
 }
 
 async fn chat_stream(

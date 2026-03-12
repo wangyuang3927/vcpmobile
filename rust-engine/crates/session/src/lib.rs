@@ -1,10 +1,19 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
-use std::collections::{BTreeMap, BTreeSet};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::{Cursor, Read},
+};
 use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
-    Conversation, ConversationId, GenerationSignal, GenerationState, MessageNode, MessagePart,
-    MessagePartPayload, MessageRole, MessageVariant, NodeId, TopicId, VariantStatus,
+    Conversation, ConversationId, DOCUMENT_MIME_APPLICATION_PDF, DOCUMENT_MIME_DOCX,
+    DOCUMENT_MIME_PPTX, DOCUMENT_MIME_TEXT_MARKDOWN, DOCUMENT_MIME_TEXT_PLAIN,
+    DocumentAttachmentInput, DocumentDescriptor, DocumentPromptTransformItem,
+    DocumentPromptTransformOutput, DocumentPromptTransformStatus, GenerationSignal,
+    GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
+    NodeId, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{
     ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
@@ -23,6 +32,31 @@ pub struct SessionEngine {
 pub struct SessionSendRequest {
     pub conversation_id: Option<ConversationId>,
     pub text: String,
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedDocumentAttachment {
+    descriptor: DocumentDescriptor,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Error)]
+pub enum DocumentTransformError {
+    #[error("invalid base64 payload for {name}: {reason}")]
+    InvalidBase64 { name: String, reason: String },
+    #[error("unsupported document type for {name}: {mime}")]
+    UnsupportedType { name: String, mime: String },
+    #[error("invalid utf-8 content for {name}: {reason}")]
+    InvalidUtf8 { name: String, reason: String },
+    #[error("pdf extraction failed for {name}: {reason}")]
+    PdfExtract { name: String, reason: String },
+    #[error("zip parse failed for {name}: {reason}")]
+    ZipParse { name: String, reason: String },
+    #[error("xml parse failed for {name}: {reason}")]
+    XmlParse { name: String, reason: String },
+    #[error("document payload missing required path {path} in {name}")]
+    MissingArchivePath { name: String, path: String },
 }
 
 #[derive(Debug, Error)]
@@ -38,6 +72,8 @@ pub enum SessionError {
         conversation_id: ConversationId,
         reason: String,
     },
+    #[error("document transform error: {0}")]
+    DocumentTransform(#[from] DocumentTransformError),
 }
 
 impl SessionEngine {
@@ -75,12 +111,19 @@ impl SessionEngine {
         Ok(self.store.list_conversation_catalog()?)
     }
 
+    pub fn transform_document_prompt(
+        &self,
+        attachments: Vec<DocumentAttachmentInput>,
+    ) -> Result<DocumentPromptTransformOutput, SessionError> {
+        transform_document_prompt_output(&attachments).map_err(SessionError::from)
+    }
+
     pub fn send_message(
         &self,
         request: SessionSendRequest,
     ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
         let text = request.text.trim();
-        if text.is_empty() {
+        if text.is_empty() && request.attachments.is_empty() {
             return Err(SessionError::EmptyText);
         }
 
@@ -95,7 +138,7 @@ impl SessionEngine {
                     id: ConversationId::new_v4(),
                     topic_id: self.default_topic_id,
                     agent_id: self.default_agent_id,
-                    title: truncate_title(text),
+                    title: truncate_title(text, &request.attachments),
                     summary: Some("Rust session store conversation".to_string()),
                     pinned: false,
                     generation_state: GenerationState::Idle,
@@ -108,7 +151,13 @@ impl SessionEngine {
         };
 
         let parent_cursor = validated_current_cursor(&stored)?;
-        let user_node = build_user_node(stored.conversation.id, parent_cursor, text, now);
+        let user_node = build_user_node(
+            stored.conversation.id,
+            parent_cursor,
+            text,
+            &request.attachments,
+            now,
+        )?;
         let user_node_id = user_node.node.id;
         let assistant_node = build_assistant_node(
             stored.conversation.id,
@@ -148,9 +197,9 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationSnapshot {
-                    conversation: SnapshotConversation::from(
-                        &inflight_conversation_projection(&stored.conversation),
-                    ),
+                    conversation: SnapshotConversation::from(&inflight_conversation_projection(
+                        &stored.conversation,
+                    )),
                     branch: SnapshotBranch {
                         cursor_node_id: stored.conversation.current_cursor,
                         nodes: snapshot_nodes,
@@ -189,9 +238,17 @@ impl SessionEngine {
     }
 }
 
-fn truncate_title(text: &str) -> String {
-    let mut title = text.chars().take(18).collect::<String>();
-    if text.chars().count() > 18 {
+fn truncate_title(text: &str, attachments: &[DocumentAttachmentInput]) -> String {
+    let source = if text.is_empty() {
+        attachments
+            .first()
+            .map(|attachment| attachment.name.as_str())
+            .unwrap_or("文档输入")
+    } else {
+        text
+    };
+    let mut title = source.chars().take(18).collect::<String>();
+    if source.chars().count() > 18 {
         title.push('…');
     }
     if title.is_empty() {
@@ -208,15 +265,362 @@ fn assistant_markdown_reply(user_text: &str) -> String {
     )
 }
 
+fn transform_document_prompt_output(
+    attachments: &[DocumentAttachmentInput],
+) -> Result<DocumentPromptTransformOutput, DocumentTransformError> {
+    let mut items = Vec::with_capacity(attachments.len());
+
+    for attachment in attachments {
+        let prepared = match prepare_document_attachment(attachment) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let document = fallback_document_descriptor(attachment);
+                items.push(DocumentPromptTransformItem {
+                    document: document.clone(),
+                    status: DocumentPromptTransformStatus::ParseFailed,
+                    prompt_text: format_document_prompt_failure(&document, &error.to_string()),
+                    extracted_char_count: 0,
+                    error: Some(error.to_string()),
+                });
+                continue;
+            }
+        };
+        let result = match extract_document_text(&prepared) {
+            Ok(text) => {
+                let prompt_text = format_document_prompt_text(&prepared.descriptor, &text);
+                let extracted_char_count = text.chars().count();
+                DocumentPromptTransformItem {
+                    document: prepared.descriptor,
+                    status: DocumentPromptTransformStatus::Ready,
+                    prompt_text,
+                    extracted_char_count,
+                    error: None,
+                }
+            }
+            Err(error) => {
+                let prompt_text =
+                    format_document_prompt_failure(&prepared.descriptor, &error.to_string());
+                DocumentPromptTransformItem {
+                    document: prepared.descriptor,
+                    status: DocumentPromptTransformStatus::ParseFailed,
+                    prompt_text,
+                    extracted_char_count: 0,
+                    error: Some(error.to_string()),
+                }
+            }
+        };
+        items.push(result);
+    }
+
+    let combined_prompt_text = items
+        .iter()
+        .map(|item| item.prompt_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Ok(DocumentPromptTransformOutput {
+        items,
+        combined_prompt_text,
+    })
+}
+
+fn fallback_document_descriptor(attachment: &DocumentAttachmentInput) -> DocumentDescriptor {
+    DocumentDescriptor {
+        name: attachment.name.clone(),
+        mime: normalized_document_mime(attachment),
+        size_bytes: 0,
+        sha256: "unavailable".to_string(),
+    }
+}
+
+fn prepare_document_attachment(
+    attachment: &DocumentAttachmentInput,
+) -> Result<PreparedDocumentAttachment, DocumentTransformError> {
+    let bytes = STANDARD
+        .decode(attachment.content_base64.as_bytes())
+        .map_err(|error| DocumentTransformError::InvalidBase64 {
+            name: attachment.name.clone(),
+            reason: error.to_string(),
+        })?;
+    let mime = normalized_document_mime(attachment);
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+
+    Ok(PreparedDocumentAttachment {
+        descriptor: DocumentDescriptor {
+            name: attachment.name.clone(),
+            mime,
+            size_bytes: bytes.len(),
+            sha256,
+        },
+        bytes,
+    })
+}
+
+fn normalized_document_mime(attachment: &DocumentAttachmentInput) -> String {
+    if let Some(mime) = attachment.mime.as_deref() {
+        let trimmed = mime.trim().to_ascii_lowercase();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    match attachment
+        .name
+        .rsplit('.')
+        .next()
+        .map(|ext| ext.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("txt") => DOCUMENT_MIME_TEXT_PLAIN.to_string(),
+        Some("md") | Some("markdown") => DOCUMENT_MIME_TEXT_MARKDOWN.to_string(),
+        Some("pdf") => DOCUMENT_MIME_APPLICATION_PDF.to_string(),
+        Some("docx") => DOCUMENT_MIME_DOCX.to_string(),
+        Some("pptx") => DOCUMENT_MIME_PPTX.to_string(),
+        _ => attachment
+            .mime
+            .as_deref()
+            .map(str::trim)
+            .filter(|mime| !mime.is_empty())
+            .unwrap_or("application/octet-stream")
+            .to_ascii_lowercase(),
+    }
+}
+
+fn extract_document_text(
+    attachment: &PreparedDocumentAttachment,
+) -> Result<String, DocumentTransformError> {
+    match attachment.descriptor.mime.as_str() {
+        DOCUMENT_MIME_TEXT_PLAIN | DOCUMENT_MIME_TEXT_MARKDOWN => {
+            String::from_utf8(attachment.bytes.clone()).map_err(|error| {
+                DocumentTransformError::InvalidUtf8 {
+                    name: attachment.descriptor.name.clone(),
+                    reason: error.to_string(),
+                }
+            })
+        }
+        DOCUMENT_MIME_APPLICATION_PDF => pdf_extract::extract_text_from_mem(&attachment.bytes)
+            .map(normalize_extracted_text)
+            .map_err(|error| DocumentTransformError::PdfExtract {
+                name: attachment.descriptor.name.clone(),
+                reason: error.to_string(),
+            }),
+        DOCUMENT_MIME_DOCX => extract_docx_text(attachment),
+        DOCUMENT_MIME_PPTX => extract_pptx_text(attachment),
+        other => Err(DocumentTransformError::UnsupportedType {
+            name: attachment.descriptor.name.clone(),
+            mime: other.to_string(),
+        }),
+    }
+}
+
+fn extract_docx_text(
+    attachment: &PreparedDocumentAttachment,
+) -> Result<String, DocumentTransformError> {
+    extract_zip_xml_text(
+        attachment,
+        &["word/document.xml", "word/header1.xml", "word/footer1.xml"],
+        &["t"],
+    )
+}
+
+fn extract_pptx_text(
+    attachment: &PreparedDocumentAttachment,
+) -> Result<String, DocumentTransformError> {
+    let cursor = Cursor::new(&attachment.bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| DocumentTransformError::ZipParse {
+            name: attachment.descriptor.name.clone(),
+            reason: error.to_string(),
+        })?;
+    let mut slide_names = archive
+        .file_names()
+        .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    slide_names.sort();
+    if slide_names.is_empty() {
+        return Err(DocumentTransformError::MissingArchivePath {
+            name: attachment.descriptor.name.clone(),
+            path: "ppt/slides/slide*.xml".to_string(),
+        });
+    }
+
+    let mut slides = Vec::with_capacity(slide_names.len());
+    for slide_name in slide_names {
+        let xml = read_zip_entry(
+            &mut archive,
+            &slide_name,
+            attachment.descriptor.name.as_str(),
+        )?;
+        let text = extract_text_nodes(&xml, &["t"], attachment.descriptor.name.as_str())?;
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            slides.push(trimmed.to_string());
+        }
+    }
+
+    Ok(slides.join("\n\n"))
+}
+
+fn extract_zip_xml_text(
+    attachment: &PreparedDocumentAttachment,
+    candidate_paths: &[&str],
+    tag_suffixes: &[&str],
+) -> Result<String, DocumentTransformError> {
+    let cursor = Cursor::new(&attachment.bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| DocumentTransformError::ZipParse {
+            name: attachment.descriptor.name.clone(),
+            reason: error.to_string(),
+        })?;
+
+    let mut sections = Vec::new();
+    let mut found_any = false;
+    for path in candidate_paths {
+        if archive.by_name(path).is_ok() {
+            found_any = true;
+            let xml = read_zip_entry(&mut archive, path, attachment.descriptor.name.as_str())?;
+            let text = extract_text_nodes(&xml, tag_suffixes, attachment.descriptor.name.as_str())?;
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                sections.push(trimmed.to_string());
+            }
+        }
+    }
+
+    if !found_any {
+        return Err(DocumentTransformError::MissingArchivePath {
+            name: attachment.descriptor.name.clone(),
+            path: candidate_paths.join(", "),
+        });
+    }
+
+    Ok(sections.join("\n\n"))
+}
+
+fn read_zip_entry<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    path: &str,
+    name: &str,
+) -> Result<String, DocumentTransformError> {
+    let mut file = archive
+        .by_name(path)
+        .map_err(|error| DocumentTransformError::ZipParse {
+            name: name.to_string(),
+            reason: error.to_string(),
+        })?;
+    let mut xml = String::new();
+    file.read_to_string(&mut xml)
+        .map_err(|error| DocumentTransformError::ZipParse {
+            name: name.to_string(),
+            reason: error.to_string(),
+        })?;
+    Ok(xml)
+}
+
+fn extract_text_nodes(
+    xml: &str,
+    tag_suffixes: &[&str],
+    name: &str,
+) -> Result<String, DocumentTransformError> {
+    let document =
+        roxmltree::Document::parse(xml).map_err(|error| DocumentTransformError::XmlParse {
+            name: name.to_string(),
+            reason: error.to_string(),
+        })?;
+    let mut text = String::new();
+
+    for node in document.descendants().filter(|node| node.is_element()) {
+        let tag_name = node.tag_name().name();
+        if tag_suffixes.iter().any(|suffix| tag_name.ends_with(suffix)) {
+            if let Some(content) = node.text() {
+                text.push_str(content);
+            }
+        } else if tag_name == "p" && !text.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+
+    Ok(normalize_extracted_text(text))
+}
+
+fn normalize_extracted_text(text: String) -> String {
+    let mut normalized = String::new();
+    let mut previous_blank = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            if !previous_blank && !normalized.is_empty() {
+                normalized.push('\n');
+            }
+            previous_blank = true;
+            continue;
+        }
+        if !normalized.is_empty() {
+            normalized.push('\n');
+        }
+        normalized.push_str(trimmed);
+        previous_blank = false;
+    }
+
+    normalized.trim().to_string()
+}
+
+fn format_document_prompt_text(document: &DocumentDescriptor, text: &str) -> String {
+    format!(
+        "[Document: {name}]\nMIME: {mime}\nSHA256: {sha256}\n\n{text}",
+        name = document.name,
+        mime = document.mime,
+        sha256 = document.sha256,
+    )
+}
+
+fn format_document_prompt_failure(document: &DocumentDescriptor, error: &str) -> String {
+    format!(
+        "[Document Parse Failure: {name}]\nMIME: {mime}\nSHA256: {sha256}\nReason: {error}",
+        name = document.name,
+        mime = document.mime,
+        sha256 = document.sha256,
+        error = error,
+    )
+}
+
 fn build_user_node(
     conversation_id: ConversationId,
     parent_node_id: Option<NodeId>,
     text: &str,
+    attachments: &[DocumentAttachmentInput],
     now: chrono::DateTime<Utc>,
-) -> NodeBundle {
+) -> Result<NodeBundle, SessionError> {
     let node_id = NodeId::new_v4();
     let variant_id = Uuid::new_v4();
-    NodeBundle {
+    let mut parts = Vec::new();
+
+    if !text.is_empty() {
+        parts.push(MessagePart {
+            id: Uuid::new_v4(),
+            variant_id,
+            order_index: 0,
+            payload: MessagePartPayload::Text {
+                text: text.to_string(),
+            },
+        });
+    }
+
+    for attachment in attachments {
+        let prepared = prepare_document_attachment(attachment)?;
+        parts.push(MessagePart {
+            id: Uuid::new_v4(),
+            variant_id,
+            order_index: parts.len() as i32,
+            payload: MessagePartPayload::Document {
+                document: prepared.descriptor,
+            },
+        });
+    }
+
+    Ok(NodeBundle {
         node: MessageNode {
             id: node_id,
             conversation_id,
@@ -236,16 +640,9 @@ fn build_user_node(
                 created_at: now,
                 finished_at: Some(now),
             },
-            parts: vec![MessagePart {
-                id: Uuid::new_v4(),
-                variant_id,
-                order_index: 0,
-                payload: MessagePartPayload::Text {
-                    text: text.to_string(),
-                },
-            }],
+            parts,
         }],
-    }
+    })
 }
 
 fn build_assistant_node(
@@ -284,7 +681,7 @@ fn build_assistant_node(
                     variant_id,
                     order_index: 0,
                     payload: MessagePartPayload::Reasoning {
-                        text: format!("正在基于用户消息生成回复：{}", truncate_title(text)),
+                        text: format!("正在基于用户消息生成回复：{}", truncate_title(text, &[])),
                     },
                 },
                 MessagePart {
@@ -568,12 +965,175 @@ pub fn demo_stream(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{env, fs};
+    use std::{
+        env, fs,
+        io::{Cursor, Write},
+    };
 
     fn test_engine() -> SessionEngine {
         let path = env::temp_dir().join(format!("vcpmobile-session-test-{}.json", Uuid::new_v4()));
         let store = FileStore::new(path);
         SessionEngine::new(store, Uuid::new_v4(), Uuid::new_v4())
+    }
+
+    fn attachment(name: &str, mime: Option<&str>, bytes: &[u8]) -> DocumentAttachmentInput {
+        DocumentAttachmentInput {
+            name: name.to_string(),
+            mime: mime.map(str::to_string),
+            content_base64: STANDARD.encode(bytes),
+        }
+    }
+
+    fn build_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        for (path, body) in entries {
+            writer.start_file(path, options).expect("start zip file");
+            writer
+                .write_all(body.as_bytes())
+                .expect("write zip file body");
+        }
+
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    fn docx_bytes() -> Vec<u8> {
+        build_zip(&[(
+            "word/document.xml",
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello DOCX</w:t></w:r></w:p><w:p><w:r><w:t>Second line</w:t></w:r></w:p></w:body></w:document>"#,
+        )])
+    }
+
+    fn pptx_bytes() -> Vec<u8> {
+        build_zip(&[
+            (
+                "ppt/slides/slide1.xml",
+                r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Hello PPTX</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+            (
+                "ppt/slides/slide2.xml",
+                r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+        ])
+    }
+
+    fn pdf_bytes() -> Vec<u8> {
+        STANDARD
+            .decode("JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0MSA+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjcyIDEwMCBUZAooSGVsbG8gUERGKSBUagpFVAoKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzMzIgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MDIKJSVFT0YK")
+            .expect("decode pdf fixture")
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_plain_text_with_file_framing() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "notes.txt",
+                Some(DOCUMENT_MIME_TEXT_PLAIN),
+                b"hello\nworld",
+            )])
+            .expect("transform plain text");
+
+        assert_eq!(output.items.len(), 1);
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert_eq!(
+            output.items[0].extracted_char_count,
+            "hello\nworld".chars().count()
+        );
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("[Document: notes.txt]")
+        );
+        assert!(output.items[0].prompt_text.contains("MIME: text/plain"));
+        assert!(output.items[0].prompt_text.contains("hello\nworld"));
+        assert_eq!(output.combined_prompt_text, output.items[0].prompt_text);
+    }
+
+    #[test]
+    fn transform_document_prompt_surfaces_parse_failures_without_dropping_documents() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![DocumentAttachmentInput {
+                name: "broken.pdf".to_string(),
+                mime: Some(DOCUMENT_MIME_APPLICATION_PDF.to_string()),
+                content_base64: "%%%".to_string(),
+            }])
+            .expect("transform should return parse_failed output");
+
+        assert_eq!(output.items.len(), 1);
+        assert_eq!(
+            output.items[0].status,
+            DocumentPromptTransformStatus::ParseFailed
+        );
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("[Document Parse Failure: broken.pdf]")
+        );
+        assert!(
+            output.items[0]
+                .error
+                .as_deref()
+                .expect("parse failure error")
+                .contains("invalid base64 payload")
+        );
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_docx_body_text() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "notes.docx",
+                Some(DOCUMENT_MIME_DOCX),
+                &docx_bytes(),
+            )])
+            .expect("transform docx");
+
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("Hello DOCX\nSecond line")
+        );
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_pptx_slide_text_in_order() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "slides.pptx",
+                Some(DOCUMENT_MIME_PPTX),
+                &pptx_bytes(),
+            )])
+            .expect("transform pptx");
+
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("Hello PPTX\n\nSecond slide")
+        );
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_pdf_text() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "paper.pdf",
+                Some(DOCUMENT_MIME_APPLICATION_PDF),
+                &pdf_bytes(),
+            )])
+            .expect("transform pdf");
+
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert!(output.items[0].prompt_text.contains("Hello PDF"));
     }
 
     #[test]
@@ -584,6 +1144,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "hello rust".to_string(),
+                attachments: Vec::new(),
             })
             .expect("create conversation");
 
@@ -616,6 +1177,73 @@ mod tests {
     }
 
     #[test]
+    fn send_message_persists_document_parts_on_user_node() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "see attachment".to_string(),
+                attachments: vec![attachment(
+                    "notes.md",
+                    Some(DOCUMENT_MIME_TEXT_MARKDOWN),
+                    b"# Heading\nbody",
+                )],
+            })
+            .expect("send with document attachment");
+
+        let conversation_id = events[0].conversation_id.expect("conversation id");
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let user_parts = &stored.nodes[0].variants[0].parts;
+
+        assert_eq!(user_parts.len(), 2);
+        assert!(matches!(
+            user_parts[0].payload,
+            MessagePartPayload::Text { .. }
+        ));
+        assert!(matches!(
+            user_parts[1].payload,
+            MessagePartPayload::Document { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_accepts_attachment_only_turns() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: String::new(),
+                attachments: vec![attachment(
+                    "paper.pdf",
+                    Some(DOCUMENT_MIME_APPLICATION_PDF),
+                    &pdf_bytes(),
+                )],
+            })
+            .expect("send attachment only turn");
+
+        let conversation_id = events[0].conversation_id.expect("conversation id");
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+
+        assert_eq!(stored.conversation.title, "paper.pdf");
+        assert!(matches!(
+            stored.nodes[0].variants[0].parts[0].payload,
+            MessagePartPayload::Document { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
     fn send_message_with_existing_conversation_id_appends_to_same_conversation() {
         let engine = test_engine();
 
@@ -623,6 +1251,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "first".to_string(),
+                attachments: Vec::new(),
             })
             .expect("first message");
         let conversation_id = first_events[0].conversation_id.expect("conversation id");
@@ -631,6 +1260,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: Some(conversation_id),
                 text: "second".to_string(),
+                attachments: Vec::new(),
             })
             .expect("resume existing conversation");
 
@@ -671,6 +1301,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: Some(missing),
                 text: "resume".to_string(),
+                attachments: Vec::new(),
             })
             .expect_err("missing conversation must fail");
 
@@ -820,6 +1451,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "hello rust".to_string(),
+                attachments: Vec::new(),
             })
             .expect("send message");
 
@@ -845,6 +1477,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "hello rust".to_string(),
+                attachments: Vec::new(),
             })
             .expect("send message");
 
@@ -895,6 +1528,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "first".to_string(),
+                attachments: Vec::new(),
             })
             .expect("first message");
         let conversation_id = first_events[0].conversation_id.expect("conversation id");
@@ -903,6 +1537,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: Some(conversation_id),
                 text: "second".to_string(),
+                attachments: Vec::new(),
             })
             .expect("second message");
 
@@ -941,6 +1576,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "hello rust".to_string(),
+                attachments: Vec::new(),
             })
             .expect("send message");
 
@@ -1022,6 +1658,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: Some(conversation_id),
                 text: "resume".to_string(),
+                attachments: Vec::new(),
             })
             .expect_err("broken cursor must fail");
 
@@ -1241,6 +1878,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "first".to_string(),
+                attachments: Vec::new(),
             })
             .expect("first message");
         let conversation_id = first_events[0].conversation_id.expect("conversation id");
@@ -1249,6 +1887,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: Some(conversation_id),
                 text: "second".to_string(),
+                attachments: Vec::new(),
             })
             .expect("second message");
 
@@ -1280,6 +1919,7 @@ mod tests {
             .send_message(SessionSendRequest {
                 conversation_id: None,
                 text: "finalize".to_string(),
+                attachments: Vec::new(),
             })
             .expect("send message");
 

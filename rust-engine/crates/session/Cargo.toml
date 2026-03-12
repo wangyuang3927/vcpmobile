@@ -9,6 +9,11 @@ authors.workspace = true
 chrono.workspace = true
 uuid.workspace = true
 thiserror.workspace = true
+base64.workspace = true
+sha2.workspace = true
+zip.workspace = true
+roxmltree.workspace = true
+pdf-extract.workspace = true
 vcpmobile-domain = { path = "../domain" }
 vcpmobile-protocol = { path = "../protocol" }
 vcpmobile-store = { path = "../store" }
