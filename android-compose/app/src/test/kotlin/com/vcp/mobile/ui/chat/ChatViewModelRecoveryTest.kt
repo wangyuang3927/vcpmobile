@@ -981,15 +981,18 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_node_upsert",
                             "data":{
-                              "node":{
-                                "node_id":"node-stream",
-                                "role":"assistant",
-                                "selected_variant":{
-                                  "variant_id":"variant-stream",
-                                  "parts":[
-                                      {"payload":{"type":"reasoning","text":"thinking"}},
-                                      {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
-                                  ]
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "node":{
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-stream",
+                                    "parts":[
+                                        {"payload":{"type":"reasoning","text":"thinking"}},
+                                        {"payload":{"type":"markdown_block","markdown":"hello **markdown**"}}
+                                    ]
+                                  }
                                 }
                               }
                             }
@@ -1073,14 +1076,17 @@ class ChatViewModelRecoveryTest {
                           "payload":{
                             "event":"conversation_node_upsert",
                             "data":{
-                              "node":{
-                                "node_id":"node-stream",
-                                "role":"assistant",
-                                "selected_variant":{
-                                  "variant_id":"variant-new",
-                                  "parts":[
-                                      {"payload":{"type":"text","text":"new"}}
-                                  ]
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "node":{
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-new",
+                                    "parts":[
+                                        {"payload":{"type":"text","text":"new"}}
+                                    ]
+                                  }
                                 }
                               }
                             }
