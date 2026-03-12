@@ -428,6 +428,21 @@ Provider truth should also support:
 - per-provider avatar/display metadata when useful
 - stable local IDs so chat history survives endpoint edits
 
+P0 local schema should treat provider identity as:
+
+- `local_id`: opaque Rust-owned stable ID, not derived from endpoint fields
+- `reference_aliases`: compatibility references for old endpoint-based or imported identities
+- `presets[*].local_id`: stable preset identity independent from preset display name
+- `default_preset_local_id`: explicit default preset pointer
+
+Migration compatibility boundary:
+
+- legacy stores may still be keyed by endpoint/base URL
+- Rust store normalization must migrate those keys into stable `local_id` keys
+- the old endpoint should remain resolvable through `reference_aliases`
+- editing `base_url` must never rewrite historical references to the provider
+- legacy `default_preset_local_id` values must be remapped onto the normalized preset `local_id` when preset identities are migrated
+
 ### 10.2 Two P0 Paths
 
 - general API providers
