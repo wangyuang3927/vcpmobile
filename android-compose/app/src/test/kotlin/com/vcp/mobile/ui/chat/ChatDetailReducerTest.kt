@@ -95,7 +95,7 @@ class ChatDetailReducerTest {
             )
         )
 
-        val first = ChatDetailReducer.replaceOrUpsertAssistantSnapshot(
+        val first = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = started,
             messageId = "node-1:variant-1",
             sender = MessageSender.AGENT,
@@ -109,7 +109,7 @@ class ChatDetailReducerTest {
             ),
             partTypes = listOf("reasoning", "markdown_block"),
         )
-        val second = ChatDetailReducer.replaceOrUpsertAssistantSnapshot(
+        val second = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = first.state,
             messageId = "node-1:variant-1",
             sender = MessageSender.AGENT,
@@ -140,6 +140,75 @@ class ChatDetailReducerTest {
         assertEquals(listOf("reasoning", "markdown_block"), lastMessage.partTypes)
         assertEquals("node-1:variant-1", second.state.generation.activeMessageKey)
         assertTrue(second.state.contentVersion > started.contentVersion)
+    }
+
+    @Test
+    fun `snapshot replace can reconcile optimistic user placeholder with rust identity`() {
+        val submitted = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.UserMessageSubmitted("hi")
+        )
+        val optimisticUser = submitted.messages.last()
+
+        val result = ChatDetailReducer.replaceOrUpsertSnapshot(
+            state = submitted,
+            messageId = "node-user:variant-user",
+            sender = MessageSender.USER,
+            content = "hi",
+            nodeId = "node-user",
+            variantId = "variant-user",
+            parts = listOf(UiMessagePart(type = "text", text = "hi")),
+            partTypes = listOf("text"),
+            fallbackMessageId = optimisticUser.id,
+        )
+
+        assertEquals(submitted.messages.size, result.state.messages.size)
+        val reconciledUser = result.state.messages.last()
+        assertEquals("node-user:variant-user", reconciledUser.id)
+        assertEquals(MessageSender.USER, reconciledUser.sender)
+        assertEquals("hi", reconciledUser.content)
+        assertEquals("node-user", reconciledUser.nodeId)
+        assertEquals("variant-user", reconciledUser.variantId)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "hi")), reconciledUser.parts)
+        assertEquals(listOf("text"), reconciledUser.partTypes)
+        assertEquals(optimisticUser.timestampMillis, reconciledUser.timestampMillis)
+    }
+
+    @Test
+    fun `snapshot replace updates selected variant for existing node without duplicating bubble`() {
+        val existingMessage = ChatMessage(
+            id = "node-1:variant-old",
+            sender = MessageSender.AGENT,
+            content = "old",
+            nodeId = "node-1",
+            variantId = "variant-old",
+            parts = listOf(UiMessagePart(type = "text", text = "old")),
+            partTypes = listOf("text"),
+            timestampMillis = 1234L,
+        )
+        val initial = ChatDetailReducer.initialState()
+        val state = initial.copy(messages = initial.messages + existingMessage)
+
+        val result = ChatDetailReducer.replaceOrUpsertSnapshot(
+            state = state,
+            messageId = "node-1:variant-new",
+            sender = MessageSender.AGENT,
+            content = "new",
+            nodeId = "node-1",
+            variantId = "variant-new",
+            parts = listOf(UiMessagePart(type = "text", text = "new")),
+            partTypes = listOf("text"),
+            fallbackNodeId = "node-1",
+        )
+
+        assertEquals(state.messages.size, result.state.messages.size)
+        val updated = result.state.messages.last()
+        assertEquals("node-1:variant-new", updated.id)
+        assertEquals("node-1", updated.nodeId)
+        assertEquals("variant-new", updated.variantId)
+        assertEquals("new", updated.content)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "new")), updated.parts)
+        assertEquals(existingMessage.timestampMillis, updated.timestampMillis)
     }
 
     @Test
@@ -178,6 +247,48 @@ class ChatDetailReducerTest {
             listOf("reasoning", "markdown_block", "code_block"),
             lastMessage.partTypes
         )
+    }
+
+    @Test
+    fun `assistant delta switches selected variant on same node without duplicating bubble`() {
+        val existingMessage = ChatMessage(
+            id = "node-2:variant-old",
+            sender = MessageSender.AGENT,
+            content = "old",
+            nodeId = "node-2",
+            variantId = "variant-old",
+            parts = listOf(UiMessagePart(type = "text", text = "old")),
+            partTypes = listOf("text"),
+            timestampMillis = 5678L,
+        )
+        val initial = ChatDetailReducer.initialState()
+        val state = initial.copy(
+            messages = initial.messages + existingMessage,
+            generation = ChatGenerationState(
+                phase = ChatGenerationPhase.STREAMING,
+                activeMessageKey = "node-2:variant-new",
+            ),
+        )
+
+        val result = ChatDetailReducer.appendAssistantDelta(
+            state = state,
+            currentMessageId = "node-2:variant-new",
+            sender = MessageSender.AGENT,
+            appendText = "new",
+            nodeId = "node-2",
+            variantId = "variant-new",
+            parts = listOf(UiMessagePart(type = "text", text = "new")),
+            partTypes = listOf("text"),
+        )
+
+        assertEquals(state.messages.size, result.state.messages.size)
+        val updated = result.state.messages.last()
+        assertEquals("node-2:variant-new", updated.id)
+        assertEquals("node-2", updated.nodeId)
+        assertEquals("variant-new", updated.variantId)
+        assertEquals("new", updated.content)
+        assertEquals(listOf(UiMessagePart(type = "text", text = "new")), updated.parts)
+        assertEquals(existingMessage.timestampMillis, updated.timestampMillis)
     }
 
     @Test

@@ -32,6 +32,10 @@ pub enum ChatEvent {
     ConversationListInvalidate {
         reason: String,
     },
+    /// Full selected-branch snapshot for one conversation.
+    ///
+    /// Recovery/hydration surfaces and live send flows both use this event to materialize the
+    /// complete currently selected branch from root to `Conversation.current_cursor`.
     ConversationSnapshot {
         conversation: Conversation,
         nodes: Vec<NodeBundle>,
@@ -39,6 +43,12 @@ pub enum ChatEvent {
     ConversationNodeUpsert {
         node: NodeBundle,
     },
+    /// Selection-only mutation for an existing node.
+    ///
+    /// Reducers must treat this as a variant switch on the same `MessageNode`, not as a new
+    /// branch or a signal to synthesize missing parts on the client. This event is only valid
+    /// for recipients that already hold the full variant array for the node; selected-only
+    /// payload surfaces must use `ConversationNodeUpsert` or `ConversationSnapshot` instead.
     ConversationNodeSelect {
         node_id: NodeId,
         select_index: usize,
@@ -79,12 +89,19 @@ pub enum ChatEvent {
     },
 }
 
+/// Transport shape for one node plus its variants.
+///
+/// Canonical Rust/store truth may include every variant and use `node.select_index` against the
+/// full `variants` array. Client-facing selected-only projections must include exactly one variant
+/// and normalize `node.select_index` to `0` so the bundle stays self-consistent without Android
+/// fallback guesses.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NodeBundle {
     pub node: MessageNode,
     pub variants: Vec<VariantBundle>,
 }
 
+/// Transport shape for one variant and its ordered typed parts.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VariantBundle {
     pub variant: MessageVariant,
