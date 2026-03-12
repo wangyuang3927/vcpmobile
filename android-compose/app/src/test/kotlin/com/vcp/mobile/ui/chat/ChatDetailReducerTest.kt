@@ -117,6 +117,7 @@ class ChatDetailReducerTest {
 
         assertEquals("node-1:variant-1", first.messageId)
         assertEquals("node-1:variant-1", second.messageId)
+        assertEquals(ChatGenerationPhase.STREAMING, second.state.generation.phase)
         assertEquals("node-1:variant-1", second.state.generation.activeMessageKey)
 
         val lastMessage = second.state.messages.last()
@@ -189,6 +190,7 @@ class ChatDetailReducerTest {
             lastMessage.parts
         )
         assertEquals(listOf("reasoning", "markdown_block"), lastMessage.partTypes)
+        assertEquals(ChatGenerationPhase.STREAMING, second.state.generation.phase)
         assertEquals("node-1:variant-1", second.state.generation.activeMessageKey)
         assertTrue(second.state.contentVersion > started.contentVersion)
     }
