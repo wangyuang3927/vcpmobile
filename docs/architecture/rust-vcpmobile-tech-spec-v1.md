@@ -279,33 +279,37 @@ store/domain node bundles:
 
 #### `conversation_node_upsert` payload shape
 
-`conversation_node_upsert` reuses the same selected-node projection so Android can replace the
-node truth directly instead of interpreting `variants[]` + `select_index`:
+`conversation_node_upsert` carries the same explicit branch anchor as
+`conversation_snapshot`, but narrows the payload to one selected node so Android can replace that
+node truth directly without inferring whether branch selection moved:
 
 ```json
 {
   "event": "conversation_node_upsert",
   "data": {
-    "node": {
-      "node_id": "node-uuid",
-      "parent_node_id": "node-uuid|null",
-      "role": "user|assistant|system|tool",
-      "created_at": "RFC3339 timestamp",
-      "updated_at": "RFC3339 timestamp",
-      "selected_variant": {
-        "variant_id": "variant-uuid",
-        "status": "streaming|completed|failed|cancelled",
-        "model_id": "string|null",
-        "usage_json": "string|null",
+    "branch": {
+      "cursor_node_id": "node-uuid|null",
+      "node": {
+        "node_id": "node-uuid",
+        "parent_node_id": "node-uuid|null",
+        "role": "user|assistant|system|tool",
         "created_at": "RFC3339 timestamp",
-        "finished_at": "RFC3339 timestamp|null",
-        "parts": [
-          {
-            "part_id": "part-uuid",
-            "order_index": 0,
-            "payload": {}
-          }
-        ]
+        "updated_at": "RFC3339 timestamp",
+        "selected_variant": {
+          "variant_id": "variant-uuid",
+          "status": "streaming|completed|failed|cancelled",
+          "model_id": "string|null",
+          "usage_json": "string|null",
+          "created_at": "RFC3339 timestamp",
+          "finished_at": "RFC3339 timestamp|null",
+          "parts": [
+            {
+              "part_id": "part-uuid",
+              "order_index": 0,
+              "payload": {}
+            }
+          ]
+        }
       }
     }
   }
@@ -316,8 +320,8 @@ Rules:
 
 - Snapshot and upsert payloads are selected-only projections. They do not expose a `variants` array
   or `select_index`.
-- `branch.cursor_node_id` duplicates `conversation.current_cursor` on purpose so branch selection
-  stays explicit at the protocol boundary.
+- `branch.cursor_node_id` duplicates `conversation.current_cursor` on purpose on both snapshot and
+  upsert payloads so branch selection stays explicit at the protocol boundary.
 - `parent_node_id` is always a node identity; variants never encode branch ancestry.
 - `parts` are ordered by `order_index` and carried inside the selected variant, so Android never
   needs to infer which branch/variant owns them.

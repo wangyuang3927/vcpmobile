@@ -17,7 +17,7 @@ use vcpmobile_domain::{
 };
 use vcpmobile_protocol::{
     ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
-    SnapshotPart, SnapshotVariant, VariantBundle,
+    SnapshotPart, SnapshotVariant, UpsertBranch, VariantBundle,
 };
 use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
 
@@ -244,7 +244,10 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationNodeUpsert {
-                    node: selected_node_projection(&completed_assistant_node)?,
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: selected_node_projection(&completed_assistant_node)?,
+                    },
                 },
             ),
             EventEnvelope::new(
@@ -377,7 +380,10 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationNodeUpsert {
-                    node: selected_node_projection(&completed_assistant_node)?,
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: selected_node_projection(&completed_assistant_node)?,
+                    },
                 },
             ),
             EventEnvelope::new(
@@ -2351,7 +2357,7 @@ mod tests {
             .expect("send message");
 
         let upserted_parts = match &events[3].payload {
-            ChatEvent::ConversationNodeUpsert { node } => &node.selected_variant.parts,
+            ChatEvent::ConversationNodeUpsert { branch } => &branch.node.selected_variant.parts,
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
 
@@ -2703,12 +2709,16 @@ mod tests {
             .expect("send message");
 
         let upsert = match &events[3].payload {
-            ChatEvent::ConversationNodeUpsert { node } => node,
+            ChatEvent::ConversationNodeUpsert { branch } => branch,
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
 
-        assert_eq!(upsert.selected_variant.status, VariantStatus::Completed);
-        assert!(upsert.selected_variant.finished_at.is_some());
+        assert_eq!(upsert.cursor_node_id, Some(upsert.node.node_id));
+        assert_eq!(
+            upsert.node.selected_variant.status,
+            VariantStatus::Completed
+        );
+        assert!(upsert.node.selected_variant.finished_at.is_some());
 
         fs::remove_file(engine.store().path()).ok();
     }
