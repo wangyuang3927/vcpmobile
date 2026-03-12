@@ -147,6 +147,97 @@ pub struct AgentProfile {
     pub description: String,
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceholderCategory {
+    Agent,
+    Generic,
+    Plugin,
+    Static,
+    StickerMedia,
+}
+
+impl PlaceholderCategory {
+    pub fn resolution_rank(self) -> u8 {
+        match self {
+            Self::Agent => 0,
+            Self::Generic => 1,
+            Self::Plugin => 2,
+            Self::Static => 3,
+            Self::StickerMedia => 4,
+        }
+    }
+
+    pub fn participates_in_prompt_preview(self) -> bool {
+        !matches!(self, Self::StickerMedia)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PlaceholderSource {
+    AgentProfile,
+    AgentBinding,
+    Conversation,
+    Runtime,
+    ProviderPreset,
+    Plugin,
+    StaticRegistry,
+    StickerPack,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptPlaceholderValue {
+    pub key: String,
+    pub value: String,
+    pub category: PlaceholderCategory,
+    pub source: PlaceholderSource,
+}
+
+impl PromptPlaceholderValue {
+    pub fn new(
+        key: impl Into<String>,
+        value: impl Into<String>,
+        category: PlaceholderCategory,
+        source: PlaceholderSource,
+    ) -> Self {
+        Self {
+            key: key.into(),
+            value: value.into(),
+            category,
+            source,
+        }
+    }
+
+    pub fn canonical_token(&self) -> String {
+        format!("{{{{{}}}}}", self.key)
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PromptResolutionStatus {
+    Applied,
+    Deferred,
+    Shadowed,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptResolutionRecord {
+    pub key: String,
+    pub value: String,
+    pub category: PlaceholderCategory,
+    pub source: PlaceholderSource,
+    pub status: PromptResolutionStatus,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptResolutionPreview {
+    pub raw_prompt: String,
+    pub resolved_prompt: String,
+    pub records: Vec<PromptResolutionRecord>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Topic {
     pub id: TopicId,
@@ -957,6 +1048,24 @@ mod tests {
                 .local_id
                 .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
         );
+    }
+
+    #[test]
+    fn placeholder_category_resolution_rank_is_frozen() {
+        assert_eq!(PlaceholderCategory::Agent.resolution_rank(), 0);
+        assert_eq!(PlaceholderCategory::Generic.resolution_rank(), 1);
+        assert_eq!(PlaceholderCategory::Plugin.resolution_rank(), 2);
+        assert_eq!(PlaceholderCategory::Static.resolution_rank(), 3);
+        assert_eq!(PlaceholderCategory::StickerMedia.resolution_rank(), 4);
+    }
+
+    #[test]
+    fn sticker_media_placeholders_are_excluded_from_prompt_preview() {
+        assert!(PlaceholderCategory::Agent.participates_in_prompt_preview());
+        assert!(PlaceholderCategory::Generic.participates_in_prompt_preview());
+        assert!(PlaceholderCategory::Plugin.participates_in_prompt_preview());
+        assert!(PlaceholderCategory::Static.participates_in_prompt_preview());
+        assert!(!PlaceholderCategory::StickerMedia.participates_in_prompt_preview());
     }
 
     #[test]

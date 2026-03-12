@@ -746,6 +746,23 @@ Rust-owned agent truth should cover:
 
 Prompt handling should preserve `vcptoolbox` staged semantics, but the active resolved prompt should be produced in Rust and surfaced to clients as resolved truth + provenance metadata.
 
+Rust must expose one preview-friendly prompt resolution contract:
+
+- `raw_prompt`: the saved prompt before substitution
+- `resolved_prompt`: the text after prompt-stage placeholder resolution
+- ordered resolution records with:
+  - placeholder key
+  - resolved value
+  - category
+  - source/provenance
+  - status: `applied | shadowed | deferred`
+
+Preview rule:
+
+- preview applies only the text stages of the pipeline
+- sticker/media placeholders stay deferred because they resolve into typed media, not plain prompt text
+- if multiple sources claim the same placeholder key, the highest-priority category wins; within the same category, source declaration order wins
+
 The mobile agent editor must expose at least:
 
 - role/avatar/name
@@ -881,12 +898,34 @@ Unlike `hapi`, bootstrap credentials should be exchanged quickly for revocable m
 
 ### 12.1 Placeholder Compatibility
 
-Rust should preserve the staged placeholder concept:
+Rust should preserve the staged placeholder concept, but the categories and order must be frozen instead of inferred from backend convention.
 
-- agent placeholders first
-- generic prompt placeholders next
-- plugin/static placeholders next
-- sticker/media placeholders separately
+Frozen categories:
+
+- `agent`: agent-owned prompt bindings such as role/name/alias/invite target and other agent-specific variables
+- `generic`: runtime/environment values such as time/date/user/model/conversation-scoped context
+- `plugin`: adapter-supplied dynamic placeholders backed by plugin or backend capability calls
+- `static`: filesystem or registry-backed constants that do not depend on per-request runtime state
+- `sticker_media`: placeholders that resolve into typed sticker/media payloads rather than prompt text
+
+Frozen resolution order:
+
+1. `agent`
+2. `generic`
+3. `plugin`
+4. `static`
+5. `sticker_media` as a separate media expansion phase after text resolution
+
+Conflict rule:
+
+- higher-priority categories shadow lower-priority categories for the same placeholder key
+- ties inside the same category resolve by declaration order from Rust-owned inputs, not hash-map iteration or renderer timing
+
+Preview rule:
+
+- Android previews the Rust-produced `resolved_prompt` plus ordered resolution records
+- Android does not run final placeholder replacement on its own
+- `sticker_media` entries appear as deferred provenance in preview instead of being flattened into text
 
 ### 12.2 Sticker / Emoji Compatibility
 

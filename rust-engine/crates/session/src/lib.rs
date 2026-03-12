@@ -13,7 +13,8 @@ use vcpmobile_domain::{
     DocumentAttachmentInput, DocumentDescriptor, DocumentPromptTransformItem,
     DocumentPromptTransformOutput, DocumentPromptTransformStatus, GenerationSignal,
     GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
-    NodeId, TopicId, VariantStatus,
+    NodeId, PromptPlaceholderValue, PromptResolutionPreview, PromptResolutionRecord,
+    PromptResolutionStatus, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{
     ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
@@ -74,6 +75,53 @@ pub enum SessionError {
     },
     #[error("document transform error: {0}")]
     DocumentTransform(#[from] DocumentTransformError),
+}
+
+pub fn resolve_prompt_preview(
+    raw_prompt: impl AsRef<str>,
+    placeholders: &[PromptPlaceholderValue],
+) -> PromptResolutionPreview {
+    let raw_prompt = raw_prompt.as_ref().to_string();
+    let mut resolved_prompt = raw_prompt.clone();
+    let mut ordered = placeholders.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(index, placeholder)| (placeholder.category.resolution_rank(), *index));
+
+    let mut claimed_keys = BTreeSet::new();
+    let mut records = Vec::with_capacity(ordered.len());
+
+    for (_, placeholder) in ordered {
+        let status = if !placeholder.category.participates_in_prompt_preview() {
+            PromptResolutionStatus::Deferred
+        } else if !claimed_keys.insert(placeholder.key.clone()) {
+            PromptResolutionStatus::Shadowed
+        } else {
+            resolved_prompt = replace_placeholder_tokens(&resolved_prompt, placeholder);
+            PromptResolutionStatus::Applied
+        };
+
+        records.push(PromptResolutionRecord {
+            key: placeholder.key.clone(),
+            value: placeholder.value.clone(),
+            category: placeholder.category,
+            source: placeholder.source,
+            status,
+        });
+    }
+
+    PromptResolutionPreview {
+        raw_prompt,
+        resolved_prompt,
+        records,
+    }
+}
+
+fn replace_placeholder_tokens(prompt: &str, placeholder: &PromptPlaceholderValue) -> String {
+    let mut result = prompt.replace(&placeholder.canonical_token(), &placeholder.value);
+    let legacy_token = format!("{{{}}}", placeholder.key);
+    if legacy_token != placeholder.canonical_token() {
+        result = result.replace(&legacy_token, &placeholder.value);
+    }
+    result
 }
 
 impl SessionEngine {
@@ -1023,6 +1071,112 @@ mod tests {
         }
 
         writer.finish().expect("finish zip").into_inner()
+    }
+
+    #[test]
+    fn resolve_prompt_preview_applies_frozen_category_order_and_defers_sticker_media() {
+        let preview = resolve_prompt_preview(
+            "{{char}} meets {{cur_date}} via {{plugin_room}} under {{app_name}} and {{sticker_wave}}",
+            &[
+                PromptPlaceholderValue::new(
+                    "plugin_room",
+                    "plugin room",
+                    vcpmobile_domain::PlaceholderCategory::Plugin,
+                    vcpmobile_domain::PlaceholderSource::Plugin,
+                ),
+                PromptPlaceholderValue::new(
+                    "sticker_wave",
+                    ":wave:",
+                    vcpmobile_domain::PlaceholderCategory::StickerMedia,
+                    vcpmobile_domain::PlaceholderSource::StickerPack,
+                ),
+                PromptPlaceholderValue::new(
+                    "app_name",
+                    "vcpmobile",
+                    vcpmobile_domain::PlaceholderCategory::Static,
+                    vcpmobile_domain::PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "cur_date",
+                    "2026-03-13",
+                    vcpmobile_domain::PlaceholderCategory::Generic,
+                    vcpmobile_domain::PlaceholderSource::Runtime,
+                ),
+                PromptPlaceholderValue::new(
+                    "char",
+                    "Analyst",
+                    vcpmobile_domain::PlaceholderCategory::Agent,
+                    vcpmobile_domain::PlaceholderSource::AgentProfile,
+                ),
+            ],
+        );
+
+        assert_eq!(
+            preview.resolved_prompt,
+            "Analyst meets 2026-03-13 via plugin room under vcpmobile and {{sticker_wave}}"
+        );
+        assert_eq!(
+            preview
+                .records
+                .iter()
+                .map(|record| (record.category, record.status))
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    vcpmobile_domain::PlaceholderCategory::Agent,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    vcpmobile_domain::PlaceholderCategory::Generic,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    vcpmobile_domain::PlaceholderCategory::Plugin,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    vcpmobile_domain::PlaceholderCategory::Static,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    vcpmobile_domain::PlaceholderCategory::StickerMedia,
+                    PromptResolutionStatus::Deferred,
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn resolve_prompt_preview_shadows_lower_priority_duplicates() {
+        let preview = resolve_prompt_preview(
+            "{{user}} / {user}",
+            &[
+                PromptPlaceholderValue::new(
+                    "user",
+                    "generic user",
+                    vcpmobile_domain::PlaceholderCategory::Generic,
+                    vcpmobile_domain::PlaceholderSource::Runtime,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "agent user",
+                    vcpmobile_domain::PlaceholderCategory::Agent,
+                    vcpmobile_domain::PlaceholderSource::AgentBinding,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "static user",
+                    vcpmobile_domain::PlaceholderCategory::Static,
+                    vcpmobile_domain::PlaceholderSource::StaticRegistry,
+                ),
+            ],
+        );
+
+        assert_eq!(preview.resolved_prompt, "agent user / agent user");
+        assert_eq!(preview.records.len(), 3);
+        assert_eq!(preview.records[0].status, PromptResolutionStatus::Applied);
+        assert_eq!(preview.records[1].status, PromptResolutionStatus::Shadowed);
+        assert_eq!(preview.records[2].status, PromptResolutionStatus::Shadowed);
     }
 
     fn docx_bytes() -> Vec<u8> {
