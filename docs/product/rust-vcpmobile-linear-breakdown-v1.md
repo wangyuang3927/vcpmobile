@@ -63,7 +63,7 @@ Stories:
 
 3. A3 Typed event protocol freeze v1
    - Objective: 冻结第一版 HTTP/SSE app-facing 协议
-   - In scope: snapshot, node upsert, generation started/delta/completed/failed, tool state events
+   - In scope: snapshot, node upsert, generation started/delta/completed/failed/cancelled, tool state events, typed error semantics
    - Acceptance:
      - Android reducer 不依赖 ad-hoc event 猜测
      - rich-content streaming 可被稳定表达

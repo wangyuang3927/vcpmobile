@@ -241,7 +241,7 @@ store/domain node bundles:
       "title": "string",
       "summary": "string|null",
       "pinned": false,
-      "generation_state": "idle|streaming|waiting_tool|failed",
+      "generation_state": "idle|requesting|started|streaming|completed|failed|cancelled",
       "current_cursor": "node-uuid|null",
       "created_at": "RFC3339 timestamp",
       "updated_at": "RFC3339 timestamp"
@@ -322,6 +322,50 @@ Rules:
 - `parts` are ordered by `order_index` and carried inside the selected variant, so Android never
   needs to infer which branch/variant owns them.
 
+#### Generation and tool event set v1
+
+Generation lifecycle stays explicit and node/variant-scoped:
+
+- `generation_started`
+  - means upstream acknowledged one assistant generation attempt for `node_id + variant_id`
+  - advances reducer/runtime state only from `requesting -> started`
+- `generation_part_delta`
+  - carries `appended_parts[]` only; clients must append in-order and must not infer hidden parts
+  - is the only event that advances `requesting|started -> streaming`
+- `generation_completed`
+  - clean terminal for the active generation attempt
+  - means the selected variant truth should already be recoverable via snapshot/upsert
+- `generation_failed`
+  - terminal failure for the active generation attempt
+  - carries a typed `error` object instead of a free-form top-level message
+- `generation_cancelled`
+  - terminal user- or system-driven cancellation for the active generation attempt
+  - may include an optional human-readable `message`, but cancellation semantics come from the event name itself
+
+Tool lifecycle is separate from generation deltas so reducers do not need to infer tool state from
+parts or timing:
+
+- `tool_call_started`
+  - starts one opaque `tool_call_id` under the active `node_id + variant_id`
+  - includes `tool_name` and `arguments_json`
+- `tool_call_completed`
+  - marks that `tool_call_id` as completed
+  - typed `tool_result` parts still carry the durable content truth
+- `tool_call_failed`
+  - marks that `tool_call_id` as failed
+  - carries the same typed `error` object used by generation and engine failures
+- `tool_call_cancelled`
+  - marks that `tool_call_id` as cancelled
+  - may include an optional human-readable `message`
+
+Error semantics:
+
+- Every failure payload uses `error.kind + error.code? + error.message + error.retriable`.
+- `error.kind` is one of `provider|tool|transport|validation|internal`.
+- `error.code` is a stable machine-oriented classifier when the upstream/source exposes one.
+- `error.message` is for user/log presentation and must not be parsed as the primary programmatic signal.
+- `error.retriable` tells reducers whether retry affordances should stay available without reinterpreting provider-specific text.
+
 ### 6.3 `store`
 
 Moves from JSON file store to SQLite-backed durable truth.
@@ -364,6 +408,7 @@ Transition contract:
 - `requesting -> started` on `generation_started`
 - `requesting|started|streaming -> streaming` on first/subsequent delta
 - `requesting|started|streaming -> completed|failed|cancelled` only through explicit terminal events
+- `tool_call_*` events do not by themselves terminalize generation; they annotate the in-flight generation attempt for the same `node_id + variant_id`
 - recovery/resume eligibility is anchored to `requesting|started|streaming`, not inferred from elapsed time
 
 ### 6.5 `provider`
@@ -474,6 +519,7 @@ Streaming must be part-aware:
 - deltas append to ordered parts
 - reasoning may stream independently of final visible answer
 - tool calls/results must remain typed, not flattened
+- tool lifecycle state comes from `tool_call_*` events, not from guessing around part arrival timing
 - stream completion must finalize the selected variant truth
 - `<think>`-style reasoning fallback should normalize into `reasoning` parts inside Rust
 - media payload finalization should land on typed local-file-backed parts, not raw inline blobs

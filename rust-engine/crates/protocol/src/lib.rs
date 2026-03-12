@@ -32,6 +32,24 @@ pub trait NamedEvent {
     fn event_name(&self) -> &'static str;
 }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventErrorKind {
+    Provider,
+    Tool,
+    Transport,
+    Validation,
+    Internal,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct EventError {
+    pub kind: EventErrorKind,
+    pub code: Option<String>,
+    pub message: String,
+    pub retriable: bool,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EventEnvelope<T> {
     pub schema: EventSchema,
@@ -101,11 +119,38 @@ pub enum ChatEvent {
     GenerationFailed {
         node_id: NodeId,
         variant_id: Uuid,
-        message: String,
+        error: EventError,
     },
     GenerationCancelled {
         node_id: NodeId,
         variant_id: Uuid,
+        message: Option<String>,
+    },
+    ToolCallStarted {
+        node_id: NodeId,
+        variant_id: Uuid,
+        tool_call_id: String,
+        tool_name: String,
+        arguments_json: String,
+    },
+    ToolCallCompleted {
+        node_id: NodeId,
+        variant_id: Uuid,
+        tool_call_id: String,
+        tool_name: String,
+    },
+    ToolCallFailed {
+        node_id: NodeId,
+        variant_id: Uuid,
+        tool_call_id: String,
+        tool_name: String,
+        error: EventError,
+    },
+    ToolCallCancelled {
+        node_id: NodeId,
+        variant_id: Uuid,
+        tool_call_id: String,
+        tool_name: String,
         message: Option<String>,
     },
     DraftUpdated {
@@ -119,7 +164,7 @@ pub enum ChatEvent {
         status: String,
     },
     EngineError {
-        message: String,
+        error: EventError,
     },
 }
 
@@ -136,6 +181,10 @@ impl NamedEvent for ChatEvent {
             Self::GenerationCompleted { .. } => "generation_completed",
             Self::GenerationFailed { .. } => "generation_failed",
             Self::GenerationCancelled { .. } => "generation_cancelled",
+            Self::ToolCallStarted { .. } => "tool_call_started",
+            Self::ToolCallCompleted { .. } => "tool_call_completed",
+            Self::ToolCallFailed { .. } => "tool_call_failed",
+            Self::ToolCallCancelled { .. } => "tool_call_cancelled",
             Self::DraftUpdated { .. } => "draft_updated",
             Self::DraftCleared { .. } => "draft_cleared",
             Self::AuthQrPlaceholder { .. } => "auth_qr_placeholder",
@@ -267,8 +316,8 @@ mod tests {
     use vcpmobile_domain::{GenerationState, MessagePartPayload, MessageRole, VariantStatus};
 
     use super::{
-        ChatEvent, EventEnvelope, EventSchema, NamedEvent, SnapshotBranch, SnapshotConversation,
-        SnapshotNode, SnapshotPart, SnapshotVariant,
+        ChatEvent, EventEnvelope, EventError, EventErrorKind, EventSchema, NamedEvent,
+        SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
     };
 
     #[test]
@@ -296,6 +345,16 @@ mod tests {
                 "generation_part_delta",
             ),
             (
+                ChatEvent::ToolCallStarted {
+                    node_id: Uuid::nil(),
+                    variant_id: Uuid::nil(),
+                    tool_call_id: "tool-call-1".to_string(),
+                    tool_name: "search".to_string(),
+                    arguments_json: "{\"query\":\"rust\"}".to_string(),
+                },
+                "tool_call_started",
+            ),
+            (
                 ChatEvent::DraftCleared {
                     conversation_id: Uuid::nil(),
                 },
@@ -311,7 +370,12 @@ mod tests {
             ),
             (
                 ChatEvent::EngineError {
-                    message: "boom".to_string(),
+                    error: EventError {
+                        kind: EventErrorKind::Internal,
+                        code: Some("bridge_crash".to_string()),
+                        message: "boom".to_string(),
+                        retriable: false,
+                    },
                 },
                 "engine_error",
             ),
@@ -413,6 +477,75 @@ mod tests {
         assert_eq!(
             serialized["payload"]["data"]["branch"]["nodes"][0]["selected_variant"]["parts"][0]["part_id"],
             Value::String(Uuid::nil().to_string())
+        );
+    }
+
+    #[test]
+    fn generation_failed_payload_uses_typed_error_semantics() {
+        let envelope = EventEnvelope::new(
+            Some(Uuid::nil()),
+            ChatEvent::GenerationFailed {
+                node_id: Uuid::nil(),
+                variant_id: Uuid::nil(),
+                error: EventError {
+                    kind: EventErrorKind::Provider,
+                    code: Some("rate_limit".to_string()),
+                    message: "provider throttled the request".to_string(),
+                    retriable: true,
+                },
+            },
+        );
+
+        let serialized: Value = serde_json::to_value(&envelope).expect("serialize envelope");
+
+        assert_eq!(serialized["event_name"], Value::String("generation_failed".to_string()));
+        assert_eq!(
+            serialized["payload"]["data"]["error"]["kind"],
+            Value::String("provider".to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["error"]["code"],
+            Value::String("rate_limit".to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["error"]["message"],
+            Value::String("provider throttled the request".to_string())
+        );
+        assert_eq!(serialized["payload"]["data"]["error"]["retriable"], Value::Bool(true));
+    }
+
+    #[test]
+    fn tool_call_events_use_explicit_lifecycle_names_and_payload_fields() {
+        let envelope = EventEnvelope::new(
+            Some(Uuid::nil()),
+            ChatEvent::ToolCallFailed {
+                node_id: Uuid::nil(),
+                variant_id: Uuid::nil(),
+                tool_call_id: "tool-call-42".to_string(),
+                tool_name: "search".to_string(),
+                error: EventError {
+                    kind: EventErrorKind::Tool,
+                    code: Some("timeout".to_string()),
+                    message: "tool timed out".to_string(),
+                    retriable: false,
+                },
+            },
+        );
+
+        let serialized: Value = serde_json::to_value(&envelope).expect("serialize envelope");
+
+        assert_eq!(serialized["event_name"], Value::String("tool_call_failed".to_string()));
+        assert_eq!(
+            serialized["payload"]["data"]["tool_call_id"],
+            Value::String("tool-call-42".to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["tool_name"],
+            Value::String("search".to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["error"]["kind"],
+            Value::String("tool".to_string())
         );
     }
 }

@@ -119,6 +119,13 @@ External Upstream
   - `generation_part_delta`
   - `generation_completed`
   - `generation_failed`
+  - `generation_cancelled`
+  - `tool_call_started`
+  - `tool_call_completed`
+  - `tool_call_failed`
+  - `tool_call_cancelled`
+  - `engine_error`
+- failure payloads use typed `error.kind + error.code? + error.message + error.retriable` semantics instead of ad-hoc top-level message guessing
 
 ### FR-3 Recovery And Catalog
 
@@ -203,6 +210,7 @@ Single-chat lifecycle state machine baseline:
 - `generation_started` only advances `requesting -> started`
 - `generation_part_delta` advances `requesting|started -> streaming` and keeps later deltas in `streaming`
 - `generation_completed`, `generation_failed`, `generation_cancelled` are the only terminalizers
+- `tool_call_*` events annotate the active generation attempt and never implicitly terminalize it
 - resume/recovery should only auto-anchor to `requesting|started|streaming`
 
 ### Epic B: Android State Refactor
