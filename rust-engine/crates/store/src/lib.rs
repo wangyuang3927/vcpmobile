@@ -6,23 +6,106 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, Serializer, de::Deserializer};
 use thiserror::Error;
 use vcpmobile_domain::{
-    AgentConfig, Conversation, ConversationId, GenerationState, NodeId, ProviderAuthConfig,
-    ProviderConfig, ProviderModelCatalog,
+    AgentConfig, Conversation, ConversationId, GenerationState, MessageNode, NodeId,
+    ProviderAuthConfig, ProviderConfig, ProviderModelCatalog, VariantId,
 };
-use vcpmobile_protocol::NodeBundle;
+use vcpmobile_protocol::{NodeBundle, VariantBundle};
 
 pub use sqlite::{
     CURRENT_SCHEMA_VERSION, MigrationRecord, SqliteStore, SqliteStoreError, SqliteStoreResult,
     migrate_sqlite_schema,
 };
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone)]
 pub struct StoredConversation {
     pub conversation: Conversation,
     pub nodes: Vec<NodeBundle>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredConversationRecord {
+    conversation: Conversation,
+    nodes: Vec<StoredNodeBundleRecord>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct StoredNodeBundleRecord {
+    node: MessageNode,
+    variants: Vec<VariantBundle>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    selected_variant_id: Option<VariantId>,
+}
+
+impl Serialize for StoredConversation {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        StoredConversationRecord::from(self).serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for StoredConversation {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        StoredConversationRecord::deserialize(deserializer).map(StoredConversation::from)
+    }
+}
+
+impl From<&StoredConversation> for StoredConversationRecord {
+    fn from(value: &StoredConversation) -> Self {
+        Self {
+            conversation: value.conversation.clone(),
+            nodes: value
+                .nodes
+                .iter()
+                .map(StoredNodeBundleRecord::from)
+                .collect(),
+        }
+    }
+}
+
+impl From<StoredConversationRecord> for StoredConversation {
+    fn from(value: StoredConversationRecord) -> Self {
+        Self {
+            conversation: value.conversation,
+            nodes: value.nodes.into_iter().map(NodeBundle::from).collect(),
+        }
+    }
+}
+
+impl From<&NodeBundle> for StoredNodeBundleRecord {
+    fn from(value: &NodeBundle) -> Self {
+        Self {
+            node: value.node.clone(),
+            variants: value.variants.clone(),
+            selected_variant_id: value
+                .variants
+                .get(value.node.select_index)
+                .map(|variant| variant.variant.id),
+        }
+    }
+}
+
+impl From<StoredNodeBundleRecord> for NodeBundle {
+    fn from(value: StoredNodeBundleRecord) -> Self {
+        let mut node = value.node;
+        if let Some(selected_variant_id) = value.selected_variant_id {
+            node.select_index = value
+                .variants
+                .iter()
+                .position(|variant| variant.variant.id == selected_variant_id)
+                .unwrap_or(value.variants.len());
+        }
+        NodeBundle {
+            node,
+            variants: value.variants,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -304,6 +387,53 @@ impl FileStore {
         self.save(&data)
     }
 
+    pub fn read_selected_variant(
+        &self,
+        conversation_id: ConversationId,
+        node_id: NodeId,
+    ) -> StoreResult<Option<VariantId>> {
+        let data = self.load()?;
+        Ok(data
+            .conversations
+            .get(&conversation_id.to_string())
+            .and_then(|stored| stored.nodes.iter().find(|bundle| bundle.node.id == node_id))
+            .and_then(|bundle| bundle.variants.get(bundle.node.select_index))
+            .map(|variant| variant.variant.id))
+    }
+
+    pub fn write_selected_variant(
+        &self,
+        conversation_id: ConversationId,
+        node_id: NodeId,
+        variant_id: VariantId,
+    ) -> StoreResult<bool> {
+        let mut data = self.load()?;
+        let Some(stored) = data.conversations.get_mut(&conversation_id.to_string()) else {
+            return Ok(false);
+        };
+        let Some(bundle) = stored
+            .nodes
+            .iter_mut()
+            .find(|bundle| bundle.node.id == node_id)
+        else {
+            return Ok(false);
+        };
+        let Some(select_index) = bundle
+            .variants
+            .iter()
+            .position(|variant| variant.variant.id == variant_id)
+        else {
+            return Ok(false);
+        };
+
+        let now = chrono::Utc::now();
+        bundle.node.select_index = select_index;
+        bundle.node.updated_at = now;
+        stored.conversation.updated_at = now;
+        self.save(&data)?;
+        Ok(true)
+    }
+
     pub fn list_conversations(&self) -> StoreResult<Vec<StoredConversation>> {
         let data = self.load()?;
         Ok(data.conversations.into_values().collect())
@@ -537,6 +667,101 @@ mod tests {
         let mut agent = AgentConfig::new(name, "You are a focused helper.");
         agent.group.aliases = vec!["planner".to_string()];
         agent
+    }
+
+    fn sample_variant_switch_conversation(
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> (StoredConversation, ConversationId, NodeId, Uuid, Uuid) {
+        let conversation_id = ConversationId::new_v4();
+        let user_node_id = NodeId::new_v4();
+        let assistant_node_id = NodeId::new_v4();
+        let first_variant_id = Uuid::new_v4();
+        let second_variant_id = Uuid::new_v4();
+
+        let stored = StoredConversation {
+            conversation: Conversation {
+                id: conversation_id,
+                topic_id: TopicId::new_v4(),
+                agent_id: AgentId::new_v4(),
+                title: "variant persistence".to_string(),
+                summary: Some("selected variant survives restart".to_string()),
+                pinned: false,
+                generation_state: GenerationState::Completed,
+                current_cursor: Some(assistant_node_id),
+                created_at: now,
+                updated_at: now,
+            },
+            nodes: vec![
+                NodeBundle {
+                    node: MessageNode {
+                        id: user_node_id,
+                        conversation_id,
+                        parent_node_id: None,
+                        role: MessageRole::User,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: Uuid::new_v4(),
+                            node_id: user_node_id,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![],
+                    }],
+                },
+                NodeBundle {
+                    node: MessageNode {
+                        id: assistant_node_id,
+                        conversation_id,
+                        parent_node_id: Some(user_node_id),
+                        role: MessageRole::Assistant,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![
+                        VariantBundle {
+                            variant: MessageVariant {
+                                id: first_variant_id,
+                                node_id: assistant_node_id,
+                                status: VariantStatus::Completed,
+                                model_id: Some("rust-session-engine".to_string()),
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        },
+                        VariantBundle {
+                            variant: MessageVariant {
+                                id: second_variant_id,
+                                node_id: assistant_node_id,
+                                status: VariantStatus::Completed,
+                                model_id: Some("rust-session-engine".to_string()),
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![],
+                        },
+                    ],
+                },
+            ],
+        };
+
+        (
+            stored,
+            conversation_id,
+            assistant_node_id,
+            first_variant_id,
+            second_variant_id,
+        )
     }
 
     #[test]
@@ -781,6 +1006,80 @@ mod tests {
 
         assert_eq!(items.len(), 1);
         assert!(!items[0].is_recoverable);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn save_persists_selected_variant_id_as_store_truth() {
+        let path = temp_store_path("selected-variant-id");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let (mut stored, conversation_id, assistant_node_id, _first_variant_id, second_variant_id) =
+            sample_variant_switch_conversation(now);
+        stored.nodes[1].node.select_index = 1;
+
+        store
+            .upsert_conversation(stored)
+            .expect("persist selected variant");
+
+        let raw = fs::read_to_string(&path).expect("read persisted store");
+        let payload: serde_json::Value = serde_json::from_str(&raw).expect("parse store json");
+        let conversation_key = conversation_id.to_string();
+
+        assert_eq!(
+            payload["conversations"][&conversation_key]["nodes"][1]["selected_variant_id"],
+            serde_json::Value::String(second_variant_id.to_string())
+        );
+        assert_eq!(
+            store
+                .read_selected_variant(conversation_id, assistant_node_id)
+                .expect("read selected variant"),
+            Some(second_variant_id)
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn write_selected_variant_survives_reload() {
+        let path = temp_store_path("selected-variant-reload");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let (stored, conversation_id, assistant_node_id, first_variant_id, second_variant_id) =
+            sample_variant_switch_conversation(now);
+
+        store
+            .upsert_conversation(stored)
+            .expect("persist conversation");
+        assert_eq!(
+            store
+                .read_selected_variant(conversation_id, assistant_node_id)
+                .expect("read initial selected variant"),
+            Some(first_variant_id)
+        );
+        assert!(
+            store
+                .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
+                .expect("switch selected variant")
+        );
+
+        let reloaded = FileStore::new(&path);
+        let stored = reloaded
+            .get_conversation(conversation_id)
+            .expect("load reloaded conversation")
+            .expect("stored conversation");
+
+        assert_eq!(
+            stored.nodes[1].node.select_index, 1,
+            "selected variant should be restored from persisted variant id"
+        );
+        assert_eq!(
+            reloaded
+                .read_selected_variant(conversation_id, assistant_node_id)
+                .expect("read selected variant after reload"),
+            Some(second_variant_id)
+        );
 
         fs::remove_file(path).ok();
     }

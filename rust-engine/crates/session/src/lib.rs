@@ -2565,4 +2565,147 @@ mod tests {
 
         fs::remove_file(engine.store().path()).ok();
     }
+
+    #[test]
+    fn restart_recovery_keeps_selected_variant_from_store_truth() {
+        let path = env::temp_dir().join(format!(
+            "vcpmobile-session-variant-recovery-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = FileStore::new(&path);
+        let engine = SessionEngine::new(store.clone(), Uuid::new_v4(), Uuid::new_v4());
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let user_node_id = NodeId::new_v4();
+        let assistant_node_id = NodeId::new_v4();
+        let user_variant_id = Uuid::new_v4();
+        let first_variant_id = Uuid::new_v4();
+        let second_variant_id = Uuid::new_v4();
+
+        store
+            .upsert_conversation(StoredConversation {
+                conversation: Conversation {
+                    id: conversation_id,
+                    topic_id: TopicId::new_v4(),
+                    agent_id: Uuid::new_v4(),
+                    title: "restart recovery".to_string(),
+                    summary: Some("selected variant survives restart".to_string()),
+                    pinned: false,
+                    generation_state: GenerationState::Completed,
+                    current_cursor: Some(assistant_node_id),
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: vec![
+                    NodeBundle {
+                        node: MessageNode {
+                            id: user_node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::User,
+                            select_index: 0,
+                            created_at: now,
+                            updated_at: now,
+                        },
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: user_variant_id,
+                                node_id: user_node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![MessagePart {
+                                id: Uuid::new_v4(),
+                                variant_id: user_variant_id,
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "prompt".to_string(),
+                                },
+                            }],
+                        }],
+                    },
+                    NodeBundle {
+                        node: MessageNode {
+                            id: assistant_node_id,
+                            conversation_id,
+                            parent_node_id: Some(user_node_id),
+                            role: MessageRole::Assistant,
+                            select_index: 0,
+                            created_at: now,
+                            updated_at: now,
+                        },
+                        variants: vec![
+                            VariantBundle {
+                                variant: MessageVariant {
+                                    id: first_variant_id,
+                                    node_id: assistant_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: Some("rust-session-engine".to_string()),
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: first_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "old".to_string(),
+                                    },
+                                }],
+                            },
+                            VariantBundle {
+                                variant: MessageVariant {
+                                    id: second_variant_id,
+                                    node_id: assistant_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: Some("rust-session-engine".to_string()),
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: second_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "selected".to_string(),
+                                    },
+                                }],
+                            },
+                        ],
+                    },
+                ],
+            })
+            .expect("persist restart fixture");
+        assert!(
+            store
+                .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
+                .expect("select second variant")
+        );
+
+        let recovered = engine
+            .snapshot_for(conversation_id)
+            .expect("load recovered conversation")
+            .expect("stored conversation");
+        let snapshot_nodes =
+            selected_branch_snapshot_nodes(&recovered).expect("recover selected branch");
+
+        assert_eq!(snapshot_nodes.len(), 2);
+        assert_eq!(
+            snapshot_nodes[1].selected_variant.variant_id, second_variant_id,
+            "recovery should honor the persisted selected variant"
+        );
+        assert_eq!(
+            snapshot_nodes[1].selected_variant.parts[0].payload,
+            MessagePartPayload::Text {
+                text: "selected".to_string(),
+            }
+        );
+
+        fs::remove_file(path).ok();
+    }
 }
