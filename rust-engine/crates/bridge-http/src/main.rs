@@ -17,7 +17,9 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 use vcpmobile_domain::{ConversationId, GenerationState};
 use vcpmobile_protocol::{ChatEvent, EventEnvelope};
-use vcpmobile_session::{SessionEngine, SessionSendRequest, demo_conversation};
+use vcpmobile_session::{
+    SessionEngine, SessionSendRequest, demo_conversation, selected_branch_snapshot_nodes,
+};
 use vcpmobile_store::FileStore;
 
 #[derive(Clone)]
@@ -44,6 +46,9 @@ struct ConversationListItem {
     title: String,
     updated_at: chrono::DateTime<chrono::Utc>,
     generation_state: GenerationState,
+    /// Selected branch leaf in Rust truth.
+    ///
+    /// This mirrors `Conversation.current_cursor` and is always a node identity.
     current_cursor: Option<uuid::Uuid>,
 }
 
@@ -55,6 +60,9 @@ struct ConversationCatalogItem {
     updated_at: chrono::DateTime<chrono::Utc>,
     generation_state: GenerationState,
     pinned: bool,
+    /// Selected branch leaf in Rust truth.
+    ///
+    /// This mirrors `Conversation.current_cursor` and is always a node identity.
     current_cursor: Option<uuid::Uuid>,
     is_recoverable: bool,
     node_count: usize,
@@ -208,8 +216,13 @@ async fn chat_stream(
     let events = vec![EventEnvelope::new(
         Some(stored.conversation.id),
         ChatEvent::ConversationSnapshot {
-            conversation: stored.conversation,
-            nodes: stored.nodes,
+            conversation: stored.conversation.clone(),
+            nodes: selected_branch_snapshot_nodes(&stored).map_err(|error| {
+                (
+                    axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                    error.to_string(),
+                )
+            })?,
         },
     )];
 

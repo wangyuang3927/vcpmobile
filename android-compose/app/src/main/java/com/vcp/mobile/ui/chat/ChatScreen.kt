@@ -238,6 +238,7 @@ fun ChatScreen(
         Spacer(modifier = Modifier.height(10.dp))
         MessageInput(
             input = draftState.currentInput,
+            canSend = draftState.canSend && !detailState.isTyping,
             onInputChanged = viewModel::onInputChanged,
             onSendClicked = viewModel::sendMessage,
         )
@@ -829,6 +830,7 @@ private fun TypingIndicator() {
 @Composable
 private fun MessageInput(
     input: String,
+    canSend: Boolean,
     onInputChanged: (String) -> Unit,
     onSendClicked: () -> Unit,
 ) {
@@ -852,7 +854,7 @@ private fun MessageInput(
         Spacer(modifier = Modifier.width(8.dp))
         Button(
             onClick = onSendClicked,
-            enabled = input.isNotBlank(),
+            enabled = canSend,
         ) {
             Text(text = "发送")
         }

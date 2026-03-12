@@ -278,7 +278,42 @@ P0 parity floor from `rib` means:
 
 Android may render subsets differently, but Rust must own the full typed truth.
 
-### 7.3 Streaming Semantics
+### 7.3 Core Invariants
+
+- `Conversation`
+  - is the only owner of conversation-level metadata and the active branch cursor
+  - uses `current_cursor: NodeId?`, never `VariantId`, as the selected branch anchor
+  - must keep every referenced node/variant/part inside the same Rust-owned conversation truth
+- `MessageNode`
+  - is a stable turn slot in the conversation tree, not a transient UI row
+  - uses `parent_node_id` to encode ancestry; root nodes use `null`, non-root nodes point to a node in the same conversation
+  - keeps `role` fixed for the life of the node
+  - uses `select_index` as the single source of truth for the selected variant
+- `MessageVariant`
+  - is one concrete realization of a node, not a branch identity of its own
+  - may accumulate ordered parts while streaming
+  - becomes durable history once it reaches a terminal status
+- `MessagePart`
+  - belongs to exactly one variant and is ordered by stable `order_index`
+  - carries typed payload truth; markdown/text must not be used as a lossy fallback for tool, reasoning, or media semantics
+
+### 7.4 Selected Variant And Branch Identity
+
+- Branch identity is Rust-owned: reconstruct the active branch from `current_cursor` plus `parent_node_id` ancestry, then resolve each node's selected realization through `select_index`.
+- Variant selection is per-node truth: switching variants changes the chosen realization for one node but does not mint a new `NodeId`.
+- Child relationships attach to `NodeId`, not `VariantId`; variants never rewrite ancestry links.
+- Store/protocol projections may omit unselected variants for lightweight app-facing payloads, but Rust must retain enough truth to restore the selected variant without Android inferring it. Selected-only payloads should normalize `select_index = 0` so the emitted bundle remains self-consistent.
+- `conversation.node.select` is a selection-only mutation. It never rewrites parts, parent links, or node identity.
+
+### 7.5 Edit And Regenerate Mutation Rules
+
+- Streaming is the only phase allowed to append parts to an existing variant in place.
+- Persisted historical parts are immutable; later mutations must preserve old variants/parts as durable history.
+- Assistant regenerate/retry stays on the same `MessageNode`: create a new `MessageVariant`, mark it selected, and keep prior variants addressable.
+- Editing a persisted user turn creates a new `MessageNode` branch from the edited node's parent rather than mutating the old node's selected parts in place.
+- Any downstream assistant response after a user edit belongs to the new branch and must be regenerated from that new node lineage.
+
+### 7.6 Streaming Semantics
 
 Streaming must be part-aware:
 

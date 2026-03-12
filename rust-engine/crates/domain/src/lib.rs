@@ -2,6 +2,11 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+// Canonical chat truth is a Rust-owned graph:
+// `Conversation -> MessageNode -> MessageVariant -> ordered MessagePart`.
+//
+// The graph shape is the truth source. Android may project it for presentation, but
+// must not invent missing branch, selection, or typed-part semantics.
 pub type AgentId = Uuid;
 pub type TopicId = Uuid;
 pub type ConversationId = Uuid;
@@ -52,6 +57,15 @@ pub struct Topic {
     pub updated_at: DateTime<Utc>,
 }
 
+/// Rust-owned conversation truth.
+///
+/// Invariants:
+/// - A conversation owns one message graph; every referenced node/variant/part belongs to this
+///   conversation through the node lineage.
+/// - `current_cursor` is the leaf node of the active branch in Rust truth, or `None` only when the
+///   conversation has not materialized any nodes yet.
+/// - Active branch identity comes from Rust via the cursor plus each node's selected variant;
+///   Android may project that path but must not invent it.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Conversation {
     pub id: ConversationId,
@@ -61,22 +75,49 @@ pub struct Conversation {
     pub summary: Option<String>,
     pub pinned: bool,
     pub generation_state: GenerationState,
+    /// Points to the leaf `MessageNode` on the currently selected branch.
+    ///
+    /// This is always a node identity, never a variant identity. If set, it must resolve
+    /// inside the same conversation.
     pub current_cursor: Option<NodeId>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
+/// Stable structural slot for one logical turn in the conversation graph.
+///
+/// Invariants:
+/// - `conversation_id`, `parent_node_id`, and `role` define the node's position and stay stable
+///   once the node is created.
+/// - A new turn or a changed parent edge creates a new node ID rather than rewriting an existing
+///   node. Editing a persisted user turn therefore branches by creating a new node from the old
+///   parent.
+/// - `select_index` is the canonical selected-variant pointer for the node and must resolve to an
+///   existing variant in full Rust-owned node truth.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageNode {
     pub id: NodeId,
     pub conversation_id: ConversationId,
+    /// Root nodes use `None`. Non-root nodes must point to another node in the same
+    /// conversation, so the active branch can be reconstructed from parent links.
     pub parent_node_id: Option<NodeId>,
     pub role: MessageRole,
+    /// Single source of truth for the selected variant on this node.
+    ///
+    /// App-facing projections may omit unselected variants, but reducers must treat this
+    /// index as authoritative whenever multiple variants exist.
     pub select_index: usize,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
 
+/// One content revision or generation attempt for a node.
+///
+/// Invariants:
+/// - A variant belongs to exactly one node and never changes `node_id`.
+/// - Assistant regenerate/retry for the same logical turn appends a new variant and moves
+///   selection at the node; previously selected variants remain immutable history.
+/// - `Streaming` is the only non-terminal status. Terminal states should record `finished_at`.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MessageVariant {
     pub id: VariantId,
@@ -130,6 +171,12 @@ pub enum MessagePartPayload {
     },
 }
 
+/// Typed payload atom owned by one variant.
+///
+/// Invariants:
+/// - A part belongs to exactly one variant and is never re-parented.
+/// - `order_index` is unique within the variant and reflects append order.
+/// - Typed payloads remain Rust truth even if Android later renders a flattened presentation.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct MessagePart {
     pub id: PartId,
