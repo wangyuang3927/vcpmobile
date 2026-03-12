@@ -407,6 +407,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"generation_started",
                           "payload":{
                             "event":"generation_started",
                             "data":{"node_id":"node-tool","variant_id":"variant-tool"}
@@ -421,6 +422,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"tool_call_started",
                           "payload":{
                             "event":"tool_call_started",
                             "data":{
@@ -441,6 +443,7 @@ class ChatViewModelRecoveryTest {
                         data = """
                         {
                           "conversation_id":"conversation-stream",
+                          "event_name":"tool_call_completed",
                           "payload":{
                             "event":"tool_call_completed",
                             "data":{
