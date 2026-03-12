@@ -4,9 +4,10 @@
 
 本文件把以下文档压缩成可推到 Linear 的交付拆分：
 
-- [rust-vcpmobile-prd-v1.md](/home/eric/vcpmobile开发/vcpmobile/docs/product/rust-vcpmobile-prd-v1.md)
-- [rust-vcpmobile-capability-matrix-v1.md](/home/eric/vcpmobile开发/vcpmobile/docs/architecture/rust-vcpmobile-capability-matrix-v1.md)
-- [rust-vcpmobile-tech-spec-v1.md](/home/eric/vcpmobile开发/vcpmobile/docs/architecture/rust-vcpmobile-tech-spec-v1.md)
+- `docs/product/rust-vcpmobile-prd-v1.md`
+- `docs/architecture/rust-vcpmobile-capability-matrix-v1.md`
+- `docs/architecture/rust-vcpmobile-tech-spec-v1.md`
+- `docs/reference/external-baselines.md`
 
 目标不是一次把所有工单都写爆，而是先建立正确的 epic topology，让开发不会再被旧 `vcpmobile` 叙事带偏。
 

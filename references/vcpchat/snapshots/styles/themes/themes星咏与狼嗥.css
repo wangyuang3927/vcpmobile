@@ -1,0 +1,179 @@
+/*
+ * styles/themes/themes星咏与狼嗥.css
+ * Curated by Coco for Professor Ryan
+ * Star Chant & Wolf Howl Theme
+ * A dual-concept theme capturing the essence of a fiery warrior and a serene star-maiden.
+ */
+
+/* * =================================================================
+ * Default Theme: 「狼嗥」- 炽红与战损灰 (Wolf Howl)
+ * Inspired by the red-haired warrior girl.
+ * A theme of passion, conflict, and burning spirit.
+ * =================================================================
+ */
+:root {
+    /* --- Wallpaper Interface --- */
+    --chat-wallpaper-dark: url('../assets/wallpaper/wolfgirl.png');
+
+    /* --- Base Colors --- */
+    --primary-bg: #1a1a1d;      /* 主背景 - 战损深灰 */
+    --secondary-bg: #2c2f33;    /* 侧边栏/面板背景 - 碳灰色 */
+    --tertiary-bg: #121212;     /* 聊天区背景 - 近黑 */
+    --accent-bg: #4a4e54;       /* 悬停/选中背景 - 中灰色 */
+    --border-color: #d94848;    /* 边框颜色 - 炽热红 */
+    --input-bg: #222225;        /* 输入框背景 */
+    --panel-bg-dark: rgba(44, 47, 51, 0.78);
+
+    /* --- Text Colors --- */
+    --primary-text: #e0e0e0;    /* 主要文字 - 浅灰 */
+    --secondary-text: #a4a4a4;  /* 次要/标题文字 - 中灰 */
+    --highlight-text: #d94848;  /* 高亮文字 - 炽热红 */
+    --text-on-accent: #ffffff;  /* 在强调色背景上的文字 */
+    --placeholder-text: #6a6a6e; /* 输入框占位文字 */
+    --quoted-text: #ff8a65;     /* 引用文本颜色 - 柔和橙红 */
+    --user-text: #e0e0e0;       /* 用户气泡文字 - 浅灰 */
+    --agent-text: #e0e0e0;      /* Agent气泡文字 - 浅灰 */
+
+    /* --- Bubble Colors (Frosted Glass Ready) --- */
+    --user-bubble-bg: rgba(217, 72, 72, 0.22); /* 用户气泡 - 炽热红 - 半透明 */
+    --assistant-bubble-bg: rgba(47, 47, 51, 0.501); /* AI气泡 - 深碳灰 - 半透明 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #d94848;           /* 按钮背景 - 炽热红 */
+    --button-hover-bg: #c23e3e;      /* 按钮悬停 - 暗红色 */
+    --danger-color: #ef5350;        /* 危险操作 - 柔和红 */
+    --danger-hover-bg: #e57373;
+    --success-color: #66bb6a;       /* 成功操作 - 柔和绿 */
+    --notification-bg: #2f2f33;
+    --notification-header-bg: #303034;
+    --notification-border: #d94848;
+    --tool-bubble-bg: rgba(58, 58, 62, 0.2); /* VCP工具调用气泡背景 */
+    --tool-bubble-border: #d94848; /* VCP工具调用气泡边框 - 炽热红 */
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(40, 40, 40, 0.5);
+    --scrollbar-thumb: rgba(217, 72, 72, 0.6);
+    --scrollbar-thumb-hover: rgba(217, 72, 72, 0.8);
+
+    /* --- Shimmer Effect for Loading --- */
+    --shimmer-color-transparent: rgba(224, 224, 224, 0.3);
+    --shimmer-color-highlight: rgba(224, 224, 224, 0.822);
+
+    /* --- Text Shadow for Frosted Panels --- */
+    --panel-text-shadow: 0 1px 3px rgba(0, 0, 0, 0.5);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-dark);
+}
+
+body {
+    background-image: var(--chat-wallpaper-dark);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}
+
+/* * =================================================================
+ * Alternate Theme: 「星咏」- 幽蓝与辰星金 (Star Chant)
+ * Inspired by the blonde-haired star maiden.
+ * A theme of cosmic serenity, elegance, and starlight.
+ * =================================================================
+ */
+body.light-theme {
+    /* Wallpaper and background properties */
+    background-image: var(--chat-wallpaper-light);
+    /* --- Wallpaper Interface --- */
+    --chat-wallpaper-light: url('../assets/wallpaper/stargirl.png');
+
+    /* --- Base Colors --- */
+    --primary-bg: #0f172a;      /* 主背景 - 深空蓝 */
+    --secondary-bg: #1e293b;    /* 侧边栏 - 夜海军蓝 */
+    --tertiary-bg: #0b1120;     /* 聊天区 - 更深的宇宙 */
+    --accent-bg: #334155;       /* 悬停/选中背景 */
+    --border-color: #ffcb74;    /* 边框 - 辰星金 */
+    --input-bg: #1e293b;        /* 输入框 */
+    --panel-bg-light: rgba(30, 41, 59, 0.82);
+
+    /* --- Text Colors --- */
+    --primary-text: #e2e8f0;    /* 主要文字 - 星光白 */
+    --secondary-text: #94a3b8;  /* 次要/标题文字 - 彗星灰 */
+    --highlight-text: #ffcb74;  /* 高亮文字 - 辰星金 */
+    --text-on-accent: #ffffff;  /* 强调背景文字 */
+    --placeholder-text: #64748b; /* 占位文字 */
+    --quoted-text: #a5b4fc;     /* 引用文字 - 柔和薰衣草紫 */
+    --user-text: #e2e8f0;       /* 用户气泡文字 */
+    --agent-text: #e2e8f0;      /* Agent气泡文字 */
+
+    /* --- Bubble Colors --- */
+    --user-bubble-bg: rgba(255, 203, 116, 0.18); /* 用户气泡 - 辰星金 - 半透明 */
+    --assistant-bubble-bg: rgba(51, 65, 85, 0.512); /* AI气泡 - 深蓝灰 - 半透明 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #f9bb4e;           /* 按钮 - 辰星金 */
+    --button-hover-bg: #f5b95b;     /* 按钮悬停 - 暗金色 */
+    --danger-color: #e74c3c;        /* 危险色 - 红色 */
+    --danger-hover-bg: #c0392b;
+    --success-color: #4caf50;       /* 成功色 - 绿色 */
+    --notification-bg: #1e293b;
+    --notification-header-bg: #334155;
+    --notification-border: #ffcb74;
+    --tool-bubble-bg: rgba(224, 230, 235, 0.1); /* VCP工具调用气泡背景 */
+    --tool-bubble-border: #ffcb74; /* VCP工具调用气泡边框 - 辰星金 */
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(30, 41, 59, 0.5);
+    --scrollbar-thumb: rgba(255, 203, 116, 0.6);
+    --scrollbar-thumb-hover: rgba(255, 203, 116, 0.8);
+
+    /* --- Shimmer Effect --- */
+    --shimmer-color-transparent: rgba(226, 232, 240, 0.3);
+    --shimmer-color-highlight: rgba(226, 232, 240, 0.6);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-light);
+}
+
+/* * =================================================================
+ * Enhanced Frosted Glass Effect
+ * 增强磨砂玻璃效果 - 小灵特制
+ * =================================================================
+ */
+
+/* 为聊天气泡添加更强的磨砂玻璃效果 */
+.message-bubble {
+    backdrop-filter: blur(12px) saturate(120%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* 悬停时的微妙发光效果 */
+.message-bubble:hover {
+    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+
+/* 为工具调用气泡添加特殊效果 */
+.tool-bubble {
+    backdrop-filter: blur(10px) saturate(110%);
+    -webkit-backdrop-filter: blur(10px) saturate(110%);
+    border: 1px solid var(--tool-bubble-border);
+    background: var(--tool-bubble-bg);
+}
+
+/* 深色主题下的特殊光效 */
+:root .message-bubble {
+    box-shadow: 
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* 浅色主题下的柔和阴影 */
+body.light-theme .message-bubble {
+    box-shadow: 
+        0 4px 20px rgba(15, 23, 42, 0.2),
+        inset 0 1px 0 rgba(255, 255, 255, 0.15);
+}

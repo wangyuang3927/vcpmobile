@@ -1,0 +1,702 @@
+/* styles/components.css */
+
+/* --- Buttons --- */
+.title-bar-button {
+    background: transparent;
+    border: none;
+    color: var(--secondary-text);
+    padding: 0;
+    width: 30px; /* Standard width for window controls */
+    height: 30px; /* Match title-bar height explicitly */
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: background-color 0.2s ease;
+    box-sizing: border-box;
+    flex-shrink: 0; /* Buttons themselves should not shrink */
+}
+
+.title-bar-button svg {
+    width: 10px;
+    height: 10px;
+    fill: currentColor;
+}
+
+.title-bar-button:hover {
+    background-color: var(--accent-bg);
+    color: var(--highlight-text);
+}
+
+.title-bar-button.close-button:hover {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+.sidebar-button {
+    background-color: var(--button-bg);
+    color: var(--primary-text);
+    border: 1px solid transparent;
+    padding: 10px;
+    width: 100%;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.95em;
+    transition: background-color 0.2s ease;
+    text-align: center;
+    white-space: nowrap; /* 防止文字换行 */
+}
+
+/* 确保创建按钮始终相邻显示 */
+.sidebar-actions {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    margin-top: auto;
+}
+
+.sidebar-actions .sidebar-button {
+    flex: 1;
+    margin: 0;
+    min-width: 0; /* 允许缩小 */
+    max-width: none; /* 移除最大宽度限制 */
+}
+
+/* 确保创建按钮始终相邻显示 */
+.sidebar-actions {
+    display: flex;
+    gap: 10px;
+    width: 100%;
+    margin-top: auto;
+}
+
+.sidebar-actions .sidebar-button {
+    flex: 1;
+    margin: 0;
+    min-width: 0; /* 允许缩小 */
+    max-width: none; /* 移除最大宽度限制 */
+}
+.sidebar-button:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+}
+
+body.light-theme .sidebar-button {
+    color: #ffffff; 
+    border: 1px solid var(--button-bg);
+}
+
+body.light-theme .sidebar-button:hover {
+    color: #ffffff;
+    border-color: var(--button-hover-bg);
+}
+
+.chat-actions .header-button {
+    background: transparent;
+    border: 1px solid var(--button-bg);
+    color: var(--secondary-text);
+    padding: 0 8px;
+    height: 32px;
+    border-radius: 8px;
+    cursor: pointer;
+    margin-left: 4px;
+    font-size: 0.9em;
+    transition: background-color 0.2s, border-color 0.2s;
+    display: inline-flex; 
+    align-items: center; 
+    justify-content: center; 
+    box-sizing: border-box; 
+}
+.chat-actions .header-button svg {
+    stroke: currentColor; 
+    width: 18px; 
+    height: 18px;
+}
+.chat-actions .header-button#themeToggleBtn {
+    padding: 0 10px; 
+    position: relative;
+    top: 3.4px; 
+}
+
+.chat-actions .header-button#toggleNotificationsBtn {
+    padding: 0 10px; 
+    position: relative;
+    top: 3.4px; 
+}
+
+.chat-actions .header-button#toggleAssistantBtn {
+    padding: 0 10px;
+    position: relative;
+    top: 3.4px;
+}
+
+.chat-actions .header-button#voiceChatBtn {
+    padding: 0 10px;
+}
+
+.chat-actions .header-button#voiceChatBtn svg {
+    position: relative;
+    top: 1.8px; /* Adjust the icon itself */
+}
+
+.chat-actions .header-button:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+    color: var(--primary-text);
+}
+
+button#devButton.header-button {
+    background-color: var(--button-bg); 
+    color: var(--secondary-text); 
+    border: 1px solid var(--button-bg); 
+    padding: 0 10px; 
+    height: 32px; 
+    border-radius: 8px; 
+    cursor: pointer;
+    font-size: 0.9em; 
+    transition: background-color 0.2s, border-color 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    margin-left: 8px; 
+    width: auto;
+}
+
+button#devButton.header-button:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+    color: var(--primary-text); 
+}
+
+body.light-theme button#devButton.header-button {
+    color: #ffffff; 
+    border: 1px solid var(--button-bg-light); 
+}
+
+body.light-theme button#devButton.header-button:hover {
+    color: #ffffff; 
+    border-color: var(--button-hover-bg-light); 
+}
+
+body.light-theme .chat-actions .header-button {
+    color: var(--button-bg);
+}
+body.light-theme .chat-actions .header-button:hover {
+    color: #ffffff;
+}
+
+#sendMessageBtn, #attachFileBtn {
+    background-color: var(--button-bg); 
+    border: none;
+    border-radius: 50%; 
+    width: 40px;
+    height: 40px;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    cursor: pointer;
+    transition: background-color 0.2s ease;
+    padding: 0;
+    margin-left: 8px;
+}
+#sendMessageBtn svg, #attachFileBtn svg {
+    width: 24px; 
+    height: 24px; 
+    stroke: var(--primary-text);
+    fill: var(--primary-text);
+}
+body.light-theme #sendMessageBtn svg, body.light-theme #attachFileBtn svg {
+    stroke: #ffffff; 
+    fill: #ffffff; 
+}
+
+#sendMessageBtn:hover, #attachFileBtn:hover {
+    background-color: var(--button-hover-bg);
+}
+
+/* --- Modals --- */
+.modal {
+    display: none; 
+    position: fixed;
+    z-index: 1000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    overflow: auto;
+    background-color: rgba(0,0,0,0.6);
+    align-items: center;
+    justify-content: center;
+}
+.modal.active {
+    display: flex;
+}
+
+.modal-content {
+    background-color: var(--secondary-bg) !important; /* Ensure this overrides for cropper */
+    margin: auto;
+    padding: 25px 30px;
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    width: 90%;
+    max-width: 550px;
+    box-shadow: 0 5px 15px rgba(0,0,0,0.3);
+    position: relative;
+    color: var(--primary-text);
+    max-height: 85vh;
+    overflow-y: hidden; /* Hide scrollbar by default */
+}
+
+.modal-content:hover {
+    overflow-y: auto; /* Show scrollbar on hover */
+}
+
+#avatarCropperModal .modal-content { /* Specific styles for cropper modal if needed */
+    color: var(--primary-text);
+}
+
+#modelSelectModal, #avatarCropperModal, #forwardMessageModal, #regexRuleModal, #filterRulesModal, #filterRuleEditorModal, #createGroupModal {
+    z-index: 1100; /* 确保子模态框在全局设置模态框之上 */
+}
+.modal-content h2 {
+    margin-top: 0;
+    color: var(--highlight-text);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin-bottom: 20px;
+}
+.modal-content label {
+    display: block;
+    margin-bottom: 6px;
+    font-weight: 500;
+    color: var(--secondary-text);
+}
+.modal-content input[type="text"],
+.modal-content input[type="url"],
+.modal-content input[type="password"],
+.modal-content input[type="number"],
+.modal-content textarea,
+.modal-content select {
+    width: calc(100% - 20px);
+    padding: 10px;
+    margin-bottom: 15px;
+    border-radius: 8px; 
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 1em;
+}
+.modal-content input[type="file"] {
+    margin-bottom: 15px;
+}
+.modal-content textarea {
+    min-height: 80px;
+    resize: vertical;
+}
+.modal-content button[type="submit"], .modal-content .danger-button {
+    background-color: var(--user-bubble-bg);
+    color: #ffffff;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1em;
+    transition: background-color 0.2s;
+}
+.modal-content button[type="submit"]:hover {
+    background-color: var(--button-hover-bg);
+}
+
+.button-primary {
+    background-color: var(--user-bubble-bg);
+    color: #ffffff;
+    padding: 10px 18px;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 1em;
+    transition: background-color 0.2s;
+}
+
+.button-primary:hover {
+    background-color: var(--button-hover-bg);
+}
+
+body.light-theme .button-primary {
+    background-color: var(--user-bubble-bg-light);
+    color: #ffffff;
+}
+
+body.light-theme .button-primary:hover {
+    background-color: var(--button-hover-bg-light);
+}
+
+.button-secondary {
+    background-color: var(--user-bubble-bg); /* Same as primary */
+    color: #ffffff; /* Same as primary */
+    padding: 10px 18px;
+    border: none; /* Same as primary */
+    border-radius: 8px; /* Same as primary */
+    cursor: pointer; /* Same as primary */
+    font-size: 1em; /* Same as primary */
+    transition: background-color 0.2s; /* Same as primary */
+}
+
+.button-secondary:hover {
+    background-color: var(--button-hover-bg); /* Same as primary */
+}
+
+body.light-theme .button-secondary {
+    background-color: var(--user-bubble-bg-light); /* Same as primary */
+    color: #ffffff; /* Same as primary */
+}
+
+body.light-theme .button-secondary:hover {
+    background-color: var(--button-hover-bg-light); /* Same as primary */
+}
+body.light-theme .modal-content button[type="submit"] {
+    color: #ffffff;
+}
+
+.modal-content .danger-button {
+    background-color: var(--danger-color);
+    color: #ffffff; 
+}
+.modal-content .danger-button:hover {
+    background-color: var(--danger-hover-bg);
+}
+body.light-theme .modal-content .danger-button {
+    color: #ffffff;
+}
+.form-actions {
+    margin-top: 20px;
+    display: flex;
+    justify-content: flex-end;
+    gap: 10px; /* 为按钮之间添加间距 */
+}
+
+.close-button {
+    color: #aaa;
+    position: absolute;
+    top: 0px;
+    right: 8px;
+    font-size: 28px;
+    font-weight: bold;
+    cursor: pointer;
+}
+.close-button:hover,
+.close-button:focus {
+    color: var(--highlight-text);
+    text-decoration: none;
+}
+
+@media (max-width: 768px) {
+    .modal-content {
+        width: 95%;
+        padding: 20px;
+    }
+}
+
+/* --- Scrollbar styling --- */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+::-webkit-scrollbar-track {
+    background: var(--scrollbar-track);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb {
+    background: var(--scrollbar-thumb);
+    border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: var(--scrollbar-thumb-hover);
+}
+
+.sidebar .agent-list::-webkit-scrollbar,
+.sidebar .topic-list::-webkit-scrollbar {
+    width: 12px; /* 固定宽度，避免布局变化 */
+    height: 8px;
+}
+
+.sidebar .agent-list::-webkit-scrollbar-thumb,
+.sidebar .topic-list::-webkit-scrollbar-thumb {
+    background-color: transparent;
+    border-radius: 6px;
+    /* 使用 inset box-shadow 来控制颜色，并对其应用过渡 */
+    box-shadow: inset 0 0 6px 6px transparent;
+    transition: box-shadow 0.3s ease-in-out;
+}
+
+.sidebar .agent-list::-webkit-scrollbar-track,
+.sidebar .topic-list::-webkit-scrollbar-track {
+    background-color: transparent;
+    border-radius: 6px;
+    transition: background-color 0.3s ease-in-out;
+}
+
+.sidebar .agent-list:hover::-webkit-scrollbar-thumb,
+.sidebar .topic-list:hover::-webkit-scrollbar-thumb {
+    box-shadow: inset 0 0 6px 6px var(--scrollbar-thumb);
+}
+
+.sidebar .agent-list:hover::-webkit-scrollbar-track,
+.sidebar .topic-list:hover::-webkit-scrollbar-track {
+    background-color: var(--scrollbar-track);
+}
+
+.sidebar .agent-list:hover::-webkit-scrollbar-thumb:hover,
+.sidebar .topic-list:hover::-webkit-scrollbar-thumb:hover {
+    box-shadow: inset 0 0 6px 6px var(--scrollbar-thumb-hover);
+}
+
+/* --- Context Menu --- */
+.context-menu {
+    position: fixed;
+    /* 磨砂透明效果 */
+    background-color: rgba(var(--rgb-secondary-bg, 40, 40, 44), 0.75);
+    backdrop-filter: blur(12px) saturate(180%);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 8px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.35),
+                0 2px 8px rgba(0, 0, 0, 0.2);
+    padding: 5px 0;
+    z-index: 1001;
+    min-width: 150px;
+}
+
+/* 亮色主题下的右键菜单 */
+body.light-theme .context-menu {
+    background-color: rgba(255, 255, 255, 0.75);
+    border: 1px solid rgba(0, 0, 0, 0.1);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15),
+                0 2px 8px rgba(0, 0, 0, 0.1);
+}
+.context-menu-item {
+    padding: 8px 15px;
+    color: var(--primary-text);
+    cursor: pointer;
+    font-size: 0.9em;
+}
+.context-menu-item:hover {
+    background-color: var(--accent-bg);
+    color: var(--highlight-text);
+}
+.context-menu-item.danger-text {
+    color: var(--danger-color);
+}
+.context-menu-item.danger-text:hover {
+    background-color: var(--danger-hover-bg);
+    color: white; 
+}
+.context-menu-item.regenerate-text {
+    color: #28a745;
+}
+
+.context-menu-item.regenerate-text:hover {
+    color: #1e7e34;
+    background-color: var(--accent-bg);
+}
+
+.context-menu-item-speak {
+    color: #DAA520; /* Dark Goldenrod */
+    font-weight: 500;
+}
+
+.context-menu-item-speak:hover {
+    color: #F0B840 !important; /* A slightly lighter gold for hover */
+}
+
+
+/* --- Switch Toggle Styles --- */
+.switch {
+  position: relative;
+  display: inline-block;
+  width: 50px;
+  height: 28px;
+  flex-shrink: 0; /* 防止在flex布局中被压缩 */
+}
+
+.switch input {
+  opacity: 0;
+  width: 0;
+  height: 0;
+}
+
+.slider {
+  position: absolute;
+  cursor: pointer;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  background-color: var(--accent-bg);
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+.slider:before {
+  position: absolute;
+  content: "";
+  height: 20px;
+  width: 20px;
+  left: 4px;
+  bottom: 4px;
+  background-color: white;
+  -webkit-transition: .4s;
+  transition: .4s;
+}
+
+input:checked + .slider {
+  background-color: var(--user-bubble-bg);
+}
+
+input:focus + .slider {
+  box-shadow: 0 0 1px var(--user-bubble-bg);
+}
+
+input:checked + .slider:before {
+  -webkit-transform: translateX(22px);
+  -ms-transform: translateX(22px);
+  transform: translateX(22px);
+}
+
+/* Rounded sliders */
+.slider.round {
+  border-radius: 28px;
+}
+
+.slider.round:before {
+  border-radius: 50%;
+}
+/* --- Toggle Assistant Button --- */
+#toggleAssistantBtn.active {
+    background-color: var(--highlight-text);
+    color: var(--text-on-accent);
+    border-color: var(--highlight-text);
+}
+
+#toggleAssistantBtn.active svg {
+    stroke: var(--text-on-accent);
+}
+
+.topics-header-container {
+    margin-bottom: 10px;
+}
+
+.agents-header {
+    margin-bottom: 10px;
+}
+
+/*
+  Reduce the default margin of h2 elements within the sidebar tabs
+  to create a more compact layout.
+*/
+aside.sidebar .sidebar-tab-content h2 {
+    margin-bottom: 2px;
+}
+
+/* --- Middle Click Grid --- */
+.middle-click-grid {
+    user-select: none;
+    -webkit-user-select: none;
+    -moz-user-select: none;
+    -ms-user-select: none;
+}
+
+/* Ensure persistent background for middle click grid */
+.middle-click-grid.persistent-background {
+    background-color: var(--modal-bg) !important;
+}
+
+.middle-click-grid.persistent-background .grid-cell {
+    background-color: var(--button-bg) !important;
+}
+
+.grid-cell {
+    border: 1px solid var(--border-color);
+    font-weight: bold;
+    text-align: center;
+    transition: all 0.1s ease;
+}
+
+.grid-cell:hover {
+    transform: scale(1.05);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+.grid-cell[data-function="none"] {
+    background-color: var(--accent-bg) !important;
+    color: var(--text-on-accent);
+    font-size: 14px;
+    font-weight: bold;
+}
+
+.grid-cell[data-function="none"]:hover {
+    background-color: var(--accent-color) !important;
+    color: white !important;
+}
+
+/* Light theme adjustments for middle click grid */
+body.light-theme .middle-click-grid {
+    background-color: #ffffff;
+    border-color: #cccccc;
+}
+
+body.light-theme .grid-cell {
+    border-color: #dddddd;
+    background-color: #f8f9fa;
+    color: #333333;
+}
+
+body.light-theme .grid-cell:hover {
+    background-color: #007bff;
+    color: white;
+}
+
+body.light-theme .grid-cell[data-function="none"] {
+    background-color: #6c757d !important;
+    color: white !important;
+}
+
+body.light-theme .grid-cell[data-function="none"]:hover {
+    background-color: #5a6268 !important;
+    color: white !important;
+}
+
+
+/* Unread Topic Badge */
+/* 为头像创建一个定位包装器 */
+.agent-list li {
+    position: relative;
+}
+
+/* 头像包装器，用于定位未读徽章 */
+.avatar-wrapper {
+    position: relative;
+    display: inline-block;
+    flex-shrink: 0;
+}
+
+.unread-badge {
+    position: absolute;
+    top: -2px; /* 相对于头像顶部，略微向上偏移以贴近边缘 */
+    left: -2px; /* 相对于头像左边，略微向左偏移以贴近边缘 */
+    background-color: var(--highlight-text); /* Use theme highlight color */
+    color: var(--text-on-accent); /* Use theme text color for accents */
+    border-radius: 50%;
+    min-width: 16px; /* 使用 min-width 以适应更大的数字 */
+    height: 16px; /* 徽章高度 */
+    padding: 0 4px; /* 为数字较大时添加水平内边距 */
+    font-size: 10px; /* 字体大小 */
+    font-weight: bold;
+    line-height: 16px; /* Vertically center the number */
+    text-align: center;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.4); /* 增强阴影以突出显示 */
+    z-index: 10;
+    border: 2px solid var(--secondary-bg); /* 添加背景色边框，使其与背景分离 */
+    box-sizing: border-box; /* 确保边框和内边距包含在尺寸内 */
+}

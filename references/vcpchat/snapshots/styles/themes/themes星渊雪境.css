@@ -1,0 +1,136 @@
+/*
+ * styles/themes/themes星渊雪境.css
+ * Curated by Coco for Professor Ryan
+ * Theme Name: Star Abyss & Snow Realm (星渊雪境)
+ * Contrast Theme: Deep space darkness vs. Cute snowy illustration.
+ */
+
+/* * =================================================================
+ * Dark Theme (Default): Star Abyss (星渊之暗)
+ * Inspired by the deep space black hole image.
+ * Emphasizes dark contrast with an accent of cosmic orange/gold.
+ * =================================================================
+ */
+:root {
+    /* --- Wallpaper Interface --- */
+    --chat-wallpaper-dark: url('../assets/wallpaper/themes_star_abyss_dark.jpg');
+
+    /* --- Base Colors --- */
+    --primary-bg: #101014;      /* 主背景 - 极深黑 */
+    --secondary-bg: #1a1a1e;    /* 侧边栏/面板背景 */
+    --tertiary-bg: #0d0d10;     /* 聊天区背景 */
+    --accent-bg: #28282c;       /* 悬停/选中背景 */
+    --border-color: #3a3a3e;    /* 边框颜色 */
+    --input-bg: #1e1e22;        /* 输入框背景 */
+    --panel-bg-dark: rgba(26, 26, 30, 0.75); /* 面板磨砂玻璃 */
+
+    /* --- Text Colors --- */
+    --primary-text: #e0e0e0;    /* 主要文字 - 浅灰 */
+    --secondary-text: #a4a4a4;  /* 次要/标题文字 - 中灰 */
+    --highlight-text: #FFB74D;  /* 高亮文字 - 柔和橙色 (强调色) */
+    --text-on-accent: #ffffff;
+    --placeholder-text: #6a6a6e;
+    --quoted-text: #5D9CEC;     /* 引用文本颜色 - 柔和蓝 */
+    --user-text: #ffffff;       /* 用户气泡文字 */
+    --agent-text: #e0e0e0;      /* Agent气泡文字 */
+
+    /* --- Bubble Colors (Frosted Glass Ready) --- */
+    --user-bubble-bg: rgba(255, 183, 77, 0.15); /* 用户气泡 - 柔和橙色 (高对比度) - 半透明 */
+    --assistant-bubble-bg: rgba(255, 255, 255, 0.08); /* AI气泡 - 极浅白 - 半透明 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #FFB74D;           /* 按钮背景 */
+    --button-hover-bg: #ffaa33;      /* 按钮悬停 */
+    --danger-color: #e57373;
+    --success-color: #66bb6a;
+    --tool-bubble-bg: rgba(58, 58, 62, 0.15);
+    --tool-bubble-border: #FFB74D; 
+
+    /* --- Shimmer Effect --- */
+    --shimmer-color-transparent: rgba(255, 183, 77, 0.2);
+    --shimmer-color-highlight: rgba(255, 183, 77, 0.6);
+
+    --panel-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+    
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(255, 255, 255, 0.15);
+    --scrollbar-thumb: rgba(255, 183, 77, 0.6);
+    --scrollbar-thumb-hover: rgba(255, 183, 77, 0.8);
+
+    --panel-bg: var(--panel-bg-dark);
+}
+
+body {
+    background-image: var(--chat-wallpaper-dark);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}
+
+/* * =================================================================
+ * Light Theme: Snow Realm (雪境之光)
+ * Inspired by the clean, light snowy mountain illustration.
+ * Emphasizes high contrast, clean white, and a cool blue accent.
+ * =================================================================
+ */
+body.light-theme {
+    /* Wallpaper and background properties */
+    background-image: var(--chat-wallpaper-light);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+    /* --- Wallpaper Interface --- */
+    --chat-wallpaper-light: url('../assets/wallpaper/themes_snow_realm_light.jpg');
+
+    /* --- Base Colors --- */
+    --primary-bg: #f4f6f8;      /* 主背景 - 浅灰蓝 */
+    --secondary-bg: #ffffff;    /* 侧边栏 - 白色 */
+    --tertiary-bg: #e9edf0;     /* 聊天区 - 浅灰 */
+    --accent-bg: #e0e6eb;       /* 悬停/选中背景 */
+    --border-color: #e0e6eb;
+    --input-bg: #ffffff;        
+    --panel-bg-light: rgba(255, 255, 255, 0.9); /* 浅色模式面板高不透明度 */
+
+    /* --- Text Colors --- */
+    --primary-text: #2c3e50;    /* 主要文字 - 深灰蓝 */
+    --secondary-text: #5a6f80;  /* 次要/标题文字 - 中灰蓝 */
+    --highlight-text: #5D9CEC;  /* 高亮文字 - 清爽蓝 (强调色) */
+    --text-on-accent: #ffffff;
+    --placeholder-text: #a0aab3;
+    --quoted-text: #007bff;
+    --user-text: #2c3e50;       /* 用户气泡文字 */
+    --agent-text: #2c3e50;      /* Agent气泡文字 */
+
+    /* --- Bubble Colors --- */
+    /* 用户气泡：浅蓝透明度低 */
+    --user-bubble-bg: rgba(93, 156, 236, 0.1);     
+    /* AI气泡：高不透明度白色，以确保在插画背景上的可读性 */
+    --assistant-bubble-bg: rgba(255, 255, 255, 0.8); 
+
+    /* --- UI Element Colors --- */
+    --button-bg: #5D9CEC;           /* 按钮 - 清爽蓝 */
+    --button-hover-bg: #4a89dc;     /* 按钮悬停 */
+    --danger-color: #e74c3c;
+    --success-color: #4caf50;
+    --tool-bubble-bg: rgba(224, 230, 235, 0.5); /* 中等透明度浅灰 */
+    --tool-bubble-border: #5D9CEC; 
+
+    /* --- Shimmer Effect --- */
+    --shimmer-color-transparent: rgba(44, 62, 80, 0.08);
+    --shimmer-color-highlight: rgba(44, 62, 80, 0.15);
+    
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(0, 0, 0, 0.1);
+    --scrollbar-thumb: rgba(93, 156, 236, 0.6);
+    --scrollbar-thumb-hover: rgba(93, 156, 236, 0.8);
+
+    --panel-bg: var(--panel-bg-light);
+}
+
+/* 强制应用磨砂玻璃效果，因为主题文件示例里没有这部分，可可自己加上！ */
+.message-bubble {
+    backdrop-filter: blur(8px) saturate(120%);
+    -webkit-backdrop-filter: blur(8px) saturate(120%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
+}

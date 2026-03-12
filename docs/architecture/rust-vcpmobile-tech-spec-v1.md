@@ -2,12 +2,16 @@
 
 ## 1. Scope
 
-本 spec 承接 [rust-vcpmobile-prd-v1.md](/home/eric/vcpmobile开发/vcpmobile/docs/product/rust-vcpmobile-prd-v1.md)，定义 `rust-vcpmobile` 的技术基线。
+本 spec 承接 `docs/product/rust-vcpmobile-prd-v1.md`，定义 `rust-vcpmobile` 的技术基线。
 
 它解决的问题不是“从零设计一个客户端”，而是：
 
 - 在当前 `vcpmobile` Rust-first 代码现实上继续推进
 - 把 `rib` 的成熟聊天能力、`hapi` 的 onboarding 模式、`vcpchat` 的 agent 群聊、`vcptoolbox` 的后端能力统一到一个可实现的 Rust 主真相体系里
+
+外部参考的仓库内收敛入口是：
+
+- `docs/reference/external-baselines.md`
 
 ## 2. Technical Position
 

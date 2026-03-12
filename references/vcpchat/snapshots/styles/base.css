@@ -1,0 +1,47 @@
+/* styles/base.css */
+
+@font-face {
+    font-family: 'Maven Pro ExtraBold'; /* Corrected font name with space */
+    src: url('../assets/font/MavenPro-ExtraBold.ttf') format('truetype'); /* Adjusted path for styles directory */
+    font-weight: 800;
+    font-style: normal;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol";
+    margin: 0;
+    padding: 0;
+    color: var(--primary-text);
+    display: flex;
+    flex-direction: column; /* Changed to column to stack title-bar and container */
+    height: 100vh;
+    overflow: hidden;
+    font-size: 15px;
+    -webkit-font-smoothing: antialiased; /* 提升字体渲染清晰度 */
+    -moz-osx-font-smoothing: grayscale; /* 提升字体渲染清晰度 (Firefox) */
+    text-rendering: optimizeLegibility; /* 优化文本渲染 */
+
+    /* ADD a new block for background */
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    background-attachment: fixed; /* 让背景图固定，滚动时不移动 */
+    background-image: var(--chat-wallpaper-dark); /* 直接使用主题变量 */
+}
+
+body.light-theme .main-content {
+    /* background-image: var(--chat-wallpaper-light); */ /* <-- 移除或注释掉这一行 */
+}
+
+/* =======================================================
+ * 全局主题切换平滑过渡
+ * ======================================================= */
+*,
+*::before,
+*::after {
+    transition: background-color 0.3s ease-in-out,
+                color 0.3s ease-in-out,
+                border-color 0.3s ease-in-out,
+                fill 0.3s ease-in-out, /* For SVG icons */
+                stroke 0.3s ease-in-out; /* For SVG icons */
+}

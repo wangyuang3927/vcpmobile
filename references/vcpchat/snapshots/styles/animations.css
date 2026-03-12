@@ -1,0 +1,265 @@
+/* styles/animations.css */
+
+@keyframes vcp-shimmer-bg {
+    0% { background-position: 150% 0; }
+    100% { background-position: -150% 0; }
+}
+
+@keyframes blinkColon {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+}
+
+.digital-clock .colon {
+    /* 移除每秒触发重绘的冒号闪烁动画 */
+    /* animation: blinkColon 2s infinite; */
+    position: relative;
+    opacity: 0.8;
+}
+
+@keyframes st-colon-blink {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.2; }
+}
+
+@keyframes st-soft-circular-ripple-effect {
+    0% {
+        transform: translate(-50%, -50%) scale(0);
+        opacity: 0.7;
+    }
+    80% {
+        transform: translate(-50%, -50%) scale(18);
+        opacity: 0;
+    }
+    100% {
+        transform: translate(-50%, -50%) scale(0);
+        opacity: 0;
+    }
+}
+
+.topic-item.active-topic-glowing {
+    position: relative;
+    overflow: hidden;
+    /* 替代动画的高亮效果：使用静态的背景色和边框 */
+    background-color: var(--accent-bg) !important;
+    border-left: 4px solid var(--highlight-text) !important;
+}
+
+.topic-item.active-topic-glowing::before {
+    content: '';
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    width: 10px;
+    height: 10px;
+    background-image: radial-gradient(
+        circle,
+        rgba(190, 210, 240, 0.45) 0%,
+        rgba(190, 210, 240, 0.3) 40%,
+        rgba(190, 210, 240, 0) 70%
+    );
+    border-radius: 50%;
+    transform: translate(-50%, -50%) scale(0);
+    opacity: 0;
+    /* 移除话题列表激活项的持续波纹动画，减少空闲时的重绘 */
+    /* animation: st-soft-circular-ripple-effect 3.8s ease-out infinite; */
+    will-change: transform, opacity;
+    z-index: 0;
+    pointer-events: none;
+}
+body.light-theme .topic-item.active-topic-glowing::before {
+    background-image: radial-gradient(
+        circle,
+        rgba(65, 144, 213, 0.041) 0%,
+        rgba(56, 131, 196, 0.358) 40%,
+        rgba(14, 78, 134, 0) 70%
+    ) !important;
+}
+
+
+/*
+ * =======================================================
+ * 小吉的魔法时间：气泡边框流光动画 (Bubble Border Flow)
+ * 替代原有的文字流光，以保证流式输出时的阅读体验
+ * =======================================================
+ */
+
+@keyframes vcp-border-flow {
+  0% {
+    background-position: 0% 50%;
+  }
+  100% {
+    background-position: 200% 50%;
+  }
+}
+
+.message-item.streaming .md-content::after {
+  content: "";
+  position: absolute;
+  /* 扩展出 2px 作为边框区域 */
+  inset: -2px;
+  padding: 2px;
+  border-radius: 12px; /* 略大于气泡的 10px，确保圆角契合 */
+  
+  /* 使用高亮色定义的流光渐变，移除深色背景干扰 */
+  background: linear-gradient(90deg,
+    transparent 0%,
+    var(--highlight-text) 50%,
+    transparent 100%
+  );
+  background-size: 200% 100%;
+  
+  /* 核心：使用 mask 技巧只显示边框部分，不遮挡气泡内容 */
+  -webkit-mask:
+    linear-gradient(#fff 0 0) content-box,
+    linear-gradient(#fff 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  
+  animation: vcp-border-flow 3s linear infinite;
+  pointer-events: none;
+  z-index: 1;
+  opacity: 0.8;
+}
+
+/* 针对用户侧气泡的适配 */
+.message-item.streaming.user .md-content::after {
+  border-bottom-right-radius: 6px; /* 匹配用户气泡的 4px 圆角 + 2px 偏移 */
+}
+
+/* 针对 AI 侧气泡的适配 */
+.message-item.streaming.assistant .md-content::after {
+  border-bottom-left-radius: 6px; /* 匹配 AI 气泡的 4px 圆角 + 2px 偏移 */
+}
+
+/*
+ * =======================================================
+ * TTS 朗读中：头像呼吸发光效果
+ * =======================================================
+ */
+@keyframes speaking-glow {
+  0%, 100% {
+    transform: scale(1);
+    box-shadow: 0 0 5px rgba(0, 150, 255, 0.5), 0 0 10px rgba(0, 150, 255, 0.3);
+  }
+  50% {
+    transform: scale(1.05);
+    box-shadow: 0 0 15px rgba(0, 150, 255, 0.8), 0 0 25px rgba(0, 150, 255, 0.6);
+  }
+}
+
+.chat-avatar.speaking {
+  animation: speaking-glow 2s ease-in-out infinite;
+  cursor: pointer; /* Indicate it's clickable */
+  transition: transform 0.3s ease, box-shadow 0.3s ease;
+  will-change: transform, box-shadow;
+}
+
+/* =======================================================
+ * VCPChat Title: Animated Gradient Text (Removed for performance)
+ * ======================================================= */
+
+/* =======================================================
+ * Part C: Topic Locking System - Avatar and Badge Animations
+ * ======================================================= */
+
+/* 头像缩放动画 - Juicy 效果 */
+@keyframes avatar-bounce {
+  0% {
+    transform: scale(1);
+  }
+  25% {
+    transform: scale(1.15);
+  }
+  50% {
+    transform: scale(0.95);
+  }
+  75% {
+    transform: scale(1.08);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+.avatar-animate {
+  animation: avatar-bounce 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* 徽章出现动画 */
+@keyframes badge-appear {
+  0% {
+    transform: scale(0);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.2);
+  }
+  100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+.badge-appear {
+  animation: badge-appear 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* 未读徽章样式 */
+.unread-badge {
+  position: absolute;
+  top: -5px;
+  left: -5px;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+  color: white;
+  border-radius: 50%;
+  min-width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  font-weight: bold;
+  padding: 2px;
+  box-shadow: 0 2px 8px rgba(238, 90, 111, 0.4);
+  z-index: 10;
+  border: 2px solid var(--bg-primary);
+}
+
+.unread-badge-dot-only {
+  min-width: 12px;
+  height: 12px;
+  padding: 0;
+}
+
+/* 话题列表中的未锁定指示器 */
+.unlocked-indicator {
+  display: inline-block;
+  padding: 2px 6px;
+  background: rgba(76, 175, 80, 0.2);
+  color: #4caf50;
+  border-radius: 4px;
+  font-size: 10px;
+  font-weight: bold;
+  margin-right: 8px;
+  border: 1px solid rgba(76, 175, 80, 0.3);
+}
+
+/* 消息计数样式 */
+.message-count.has-unread {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ee5a6f 100%);
+  color: white;
+  font-weight: bold;
+  padding: 2px 8px;
+  border-radius: 12px;
+}
+
+.message-count.unread-marker-only::before {
+  content: '';
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  background: #ff6b6b;
+  border-radius: 50%;
+  margin-right: 4px;
+}

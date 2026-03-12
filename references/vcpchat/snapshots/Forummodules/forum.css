@@ -1,0 +1,1202 @@
+/* styles/forum.css */
+
+/* Inherit colors from themes.css for consistency */
+/* Note: CSS variables are inherited from themes.css which is loaded first */
+/* We define local aliases that reference the theme variables */
+
+/* Dark theme (default) */
+body:not(.light-theme) {
+    --glass-bg: var(--panel-bg, rgba(13, 42, 56, 0.8));
+    --glass-border: var(--border-color, rgba(255, 255, 255, 0.1));
+    --glass-shine: var(--accent-bg, rgba(255, 255, 255, 0.2));
+    --text-primary: var(--primary-text, #E0E6E9);
+    --text-secondary: var(--secondary-text, #d8e6ec);
+    --accent-color: var(--button-bg, #DAA520);
+    --text-on-accent: var(--text-on-accent, #1A1A1A);
+    --danger-color: var(--danger-color, #e57373);
+}
+
+body.light-theme {
+    /* Light theme inherits from themes.css automatically */
+    --glass-bg: var(--panel-bg, rgba(255, 255, 255, 0.85));
+    --glass-border: var(--border-color, rgba(0, 0, 0, 0.1));
+    --glass-shine: var(--accent-bg, rgba(0, 0, 0, 0.1));
+    --text-primary: var(--primary-text, #34495E);
+    --text-secondary: var(--secondary-text, #6C7A89);
+    --accent-color: var(--button-bg, #4A90E2);
+    --text-on-accent: var(--text-on-accent, #FFFFFF);
+    --danger-color: var(--danger-color, #e74c3c);
+}
+
+* {
+    box-sizing: border-box;
+    transition: all 0.3s cubic-bezier(0.25, 0.8, 0.25, 1);
+}
+
+body {
+    margin: 0;
+    font-family: 'Segoe UI', system-ui, sans-serif;
+    color: var(--text-primary);
+    overflow: hidden;
+    /* Assume background image is set by parent theme or loaded elsewhere. 
+       If not, it will just be dark/light base. */
+    background-attachment: fixed;
+    background-size: cover;
+    background-position: center;
+}
+
+/* --- Frosted Glass Utility Classes --- */
+.glass {
+    background: var(--glass-bg);
+    backdrop-filter: blur(20px) saturate(180%);
+    -webkit-backdrop-filter: blur(20px) saturate(180%);
+    border: 1px solid var(--glass-border);
+    box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.1);
+}
+
+.glass-hover:hover {
+    background: var(--glass-shine);
+    border-color: var(--glass-shine);
+    transform: translateY(-2px) scale(1.01);
+    box-shadow: 0 15px 40px rgba(0,0,0,0.2);
+}
+
+/* --- Immersive Top Navigation Bar --- */
+#top-nav-bar {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 60px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 20px;
+    z-index: 1000;
+    /* Fully transparent/immersive title bar area, dragging handled here */
+    -webkit-app-region: drag;
+}
+
+/* Add a subtle gradient or blur ONLY if content scrolls under it, 
+   handled dynamically or just let it be fully clean if wallpaper is good.
+   Let's add a very slight blur for readability. */
+#top-nav-bar::before {
+    content: '';
+    position: absolute;
+    top: 0; left: 0; right: 0; bottom: 0;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.2) 0%, transparent 100%);
+    backdrop-filter: blur(5px);
+    z-index: -1;
+    opacity: 0.5;
+}
+
+.nav-left, .nav-right {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    -webkit-app-region: no-drag; /* Important: make interactive parts non-draggable */
+}
+
+.nav-title {
+    font-size: 1.4rem;
+    font-weight: 700;
+    letter-spacing: 1px;
+    text-shadow: 0 2px 10px rgba(0,0,0,0.3);
+    opacity: 0.9;
+}
+
+.nav-icon-btn {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    opacity: 0.7;
+    cursor: pointer;
+    padding: 8px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.nav-icon-btn:hover {
+    opacity: 1;
+    background: var(--glass-bg);
+    backdrop-filter: blur(10px);
+}
+
+.search-glass {
+    padding: 8px 15px;
+    border-radius: 20px;
+    border: 1px solid var(--glass-border);
+    background: rgba(255,255,255,0.05);
+    color: var(--text-primary);
+    backdrop-filter: blur(10px);
+    width: 150px;
+    transition: width 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+.search-glass:focus {
+    width: 250px;
+    outline: none;
+    background: rgba(255,255,255,0.1);
+    border-color: var(--accent-color);
+}
+.search-glass::placeholder {
+    color: var(--text-secondary);
+}
+
+/* Board filter dropdown styling - Enhanced with rounded glass effect */
+#board-filter {
+    padding: 10px 18px;
+    border-radius: 25px;
+    border: 1.5px solid var(--glass-border);
+    background: var(--glass-bg);
+    color: var(--text-primary);
+    backdrop-filter: blur(15px) saturate(180%);
+    -webkit-backdrop-filter: blur(15px) saturate(180%);
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: 500;
+    transition: all 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+    min-width: 140px;
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    /* Add custom arrow with animation */
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 12 12'%3E%3Cpath fill='%23ffffff' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 12px center;
+    padding-right: 40px;
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.1);
+    position: relative;
+    overflow: hidden;
+}
+
+/* Shimmer effect on hover */
+#board-filter::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    left: -100%;
+    width: 100%;
+    height: 100%;
+    background: linear-gradient(90deg,
+        transparent,
+        rgba(255, 255, 255, 0.1),
+        transparent);
+    transition: left 0.5s ease;
+}
+
+#board-filter:hover::before {
+    left: 100%;
+}
+
+#board-filter:hover {
+    background: var(--glass-shine);
+    border-color: var(--accent-color);
+    transform: translateY(-2px) scale(1.02);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15),
+                0 0 0 3px rgba(74, 144, 226, 0.1),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+
+#board-filter:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.15),
+                0 0 0 4px rgba(74, 144, 226, 0.25),
+                inset 0 1px 0 rgba(255, 255, 255, 0.2);
+    transform: translateY(-2px) scale(1.02);
+}
+
+#board-filter:active {
+    transform: translateY(0) scale(0.98);
+}
+
+/* Enhanced dropdown options styling with glass effect */
+#board-filter option {
+    background: var(--glass-bg);
+    color: var(--text-primary);
+    padding: 12px 15px;
+    border-radius: 8px;
+    margin: 2px 0;
+    font-weight: 500;
+    transition: all 0.2s ease;
+}
+
+#board-filter option:hover {
+    background: var(--glass-shine);
+    color: var(--accent-color);
+}
+
+#board-filter option:checked {
+    background: var(--accent-color);
+    color: var(--text-on-accent);
+    font-weight: 600;
+}
+
+/* Light theme adjustments for dropdown arrow */
+body.light-theme #board-filter {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 12 12'%3E%3Cpath fill='%23000000' d='M6 9L1 4h10z'/%3E%3C/svg%3E");
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.08),
+                inset 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+
+body.light-theme #board-filter:hover {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12),
+                0 0 0 3px rgba(74, 144, 226, 0.15),
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+body.light-theme #board-filter:focus {
+    box-shadow: 0 6px 20px rgba(0, 0, 0, 0.12),
+                0 0 0 4px rgba(74, 144, 226, 0.2),
+                inset 0 1px 0 rgba(255, 255, 255, 0.6);
+}
+
+/* --- Main Container & Views --- */
+.app-container {
+    height: 100vh;
+    padding-top: 70px; /* Clear the top nav */
+    overflow: hidden;
+}
+
+.view-container {
+    height: 100%;
+    width: 100%;
+    display: none; /* Hidden by default */
+    opacity: 0;
+    transform: scale(0.95);
+    transition: opacity 0.4s ease, transform 0.4s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.view-container.active {
+    display: flex; /* Or block, depending on view */
+    opacity: 1;
+    transform: scale(1);
+}
+
+/* --- Login View (Centered Glass Box) --- */
+#login-view.active {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+}
+.login-card {
+    width: 100%;
+    max-width: 400px;
+    padding: 40px;
+    border-radius: 30px;
+    text-align: center;
+}
+.login-title {
+    font-size: 2rem;
+    margin-bottom: 1.5rem;
+    font-weight: 300;
+}
+.glass-input {
+    width: 100%;
+    padding: 15px;
+    margin-bottom: 20px;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 12px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    caret-color: var(--text-primary);
+}
+.glass-input:focus {
+    outline: none;
+    border-color: var(--accent-color);
+    background: var(--glass-shine);
+}
+.jelly-btn {
+    width: 100%;
+    padding: 15px;
+    border: none;
+    border-radius: 12px;
+    background: var(--accent-color);
+    color: var(--text-on-accent);
+    font-size: 1rem;
+    font-weight: bold;
+    cursor: pointer;
+    position: relative;
+    overflow: hidden;
+}
+.jelly-btn::after {
+    content: '';
+    position: absolute;
+    top: 50%; left: 50%;
+    width: 0; height: 0;
+    background: rgba(255,255,255,0.3);
+    border-radius: 50%;
+    transform: translate(-50%, -50%);
+    transition: width 0.6s ease, height 0.6s ease;
+}
+.jelly-btn:active::after {
+    width: 300px; height: 300px;
+}
+.jelly-btn:hover {
+    transform: scale(1.05);
+    box-shadow: 0 0 30px rgba(74, 144, 226, 0.5);
+}
+
+/* --- Waterfall Masonry Layout --- */
+#forum-view {
+    display: block;
+    overflow-y: auto;
+    padding: 0 20px 40px;
+}
+/* Hide scrollbar but keep functionality */
+#forum-view::-webkit-scrollbar { width: 8px; }
+#forum-view::-webkit-scrollbar-track { background: transparent; }
+#forum-view::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.1); border-radius: 4px; }
+#forum-view::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.3); }
+
+.masonry-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    gap: 20px;
+}
+
+.post-card {
+    border-radius: 20px;
+    padding: 20px;
+    cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    /* Entry animation */
+    animation: slideUpFade 0.6s cubic-bezier(0.25, 0.8, 0.25, 1) backwards;
+}
+/* Staggered animation delay will be applied via JS or nth-child if simple */
+@keyframes slideUpFade {
+    from { opacity: 0; transform: translateY(50px) scale(0.9); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+.post-card-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+}
+.post-title {
+    font-size: 1.3rem;
+    font-weight: 600;
+    line-height: 1.4;
+    margin: 0;
+}
+.post-badge {
+    background: var(--accent-color);
+    font-size: 0.7rem;
+    padding: 3px 8px;
+    border-radius: 10px;
+    text-transform: uppercase;
+    font-weight: bold;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    margin-left: 10px;
+    box-shadow: 0 2px 10px rgba(74, 144, 226, 0.3);
+}
+
+.post-preview {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.5;
+    max-height: 80px;
+    overflow: hidden;
+    mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+    -webkit-mask-image: linear-gradient(to bottom, black 60%, transparent 100%);
+}
+
+.post-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--glass-border);
+}
+.meta-left { display: flex; gap: 10px; align-items: center; }
+.meta-left span {
+    font-weight: 500; /* Make author name slightly bolder */
+    color: var(--text-primary);
+}
+.post-meta > span {
+    font-variant-numeric: tabular-nums;
+    background: rgba(0,0,0,0.1);
+    padding: 2px 6px;
+    border-radius: 6px;
+}
+.author-avatar, .reply-avatar {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, #ff6b6b, #feca57);
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: bold;
+    color: white;
+    font-size: 0.8rem;
+    flex-shrink: 0;
+    border: 2px solid var(--glass-border);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+    overflow: hidden;
+}
+
+.author-avatar.has-avatar,
+.reply-avatar.has-avatar {
+    border-color: var(--accent-color);
+    box-shadow: 0 2px 12px rgba(74, 144, 226, 0.3);
+}
+
+.author-avatar.loading-avatar,
+.reply-avatar.loading-avatar {
+    animation: avatarPulse 1.5s ease-in-out infinite;
+}
+
+@keyframes avatarPulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+}
+
+/* Larger avatar in expanded view */
+.expanded-card .author-avatar,
+.expanded-card .reply-avatar {
+    width: 40px;
+    height: 40px;
+    font-size: 1rem;
+}
+
+/* --- Jelly Expansion Effect --- */
+/* When a card is active, it clones itself to a fixed overlay */
+.post-overlay-active {
+    overflow: hidden !important; /* Stop scrolling on body when active */
+}
+
+#active-post-overlay {
+    position: fixed;
+    top: 0; left: 0; right: 0; bottom: 0;
+    z-index: 2000;
+    pointer-events: none; /* Init as none, active becomes auto */
+    opacity: 0;
+    transition: opacity 0.3s;
+    overflow-y: auto; /* Allow scrolling the overlay itself */
+    overflow-x: hidden;
+    background: rgba(0,0,0,0.4); /* Dim background */
+    backdrop-filter: blur(5px);
+    padding: 5vh 0; /* Add vertical padding for breathing room */
+}
+#active-post-overlay.active {
+    pointer-events: auto;
+    opacity: 1;
+}
+/* Smooth scrollbar for overlay */
+#active-post-overlay::-webkit-scrollbar { width: 8px; }
+#active-post-overlay::-webkit-scrollbar-track { background: transparent; }
+#active-post-overlay::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.3); border-radius: 4px; }
+#active-post-overlay::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.5); }
+
+.expanded-card {
+    position: relative; /* Changed from absolute */
+    width: 90%;
+    max-width: 1000px;
+    min-height: auto; /* Auto height based on content */
+    margin: 0 auto; /* Center horizontally */
+    border-radius: 30px !important;
+    padding: 40px !important;
+    overflow: visible; /* No internal scrolling */
+    z-index: 2001;
+    display: flex;
+    flex-direction: column;
+    box-sizing: border-box;
+    /* The animation will be handled by JS FLIP or simpler CSS transition from initial state */
+}
+
+.expanded-card .post-preview {
+    max-height: none;
+    mask-image: none;
+    -webkit-mask-image: none;
+    font-size: 1.1rem;
+    line-height: 1.8;
+    color: var(--text-primary);
+    font-style: normal; /* Reset font style to normal */
+    opacity: 1; /* Ensure full opacity */
+    margin-bottom: 20px;
+}
+
+/* --- AI-Generated HTML Content Support --- */
+/* Ensure block-level HTML elements display correctly with proper spacing */
+.post-preview div,
+.reply-content div,
+.expanded-card .post-preview div,
+.reply-item div {
+    display: block;
+    margin: 10px 0;
+    white-space: normal;
+    word-wrap: break-word;
+}
+
+/* Preserve inline styles from AI-generated content */
+.post-preview div[style],
+.reply-content div[style],
+.expanded-card .post-preview div[style],
+.reply-item div[style] {
+    /* Allow inline styles to take precedence while ensuring basic display */
+    display: block !important;
+}
+
+/* Support for styled headings in AI content */
+.post-preview h1, .post-preview h2, .post-preview h3,
+.post-preview h4, .post-preview h5, .post-preview h6,
+.reply-content h1, .reply-content h2, .reply-content h3,
+.reply-content h4, .reply-content h5, .reply-content h6 {
+    display: block;
+    margin: 15px 0 10px 0;
+    font-weight: bold;
+    line-height: 1.4;
+}
+
+/* Paragraphs in AI-generated content */
+.post-preview p,
+.reply-content p {
+    display: block;
+    margin: 10px 0;
+    line-height: 1.6;
+}
+
+/* Lists in AI-generated content */
+.post-preview ul, .post-preview ol,
+.reply-content ul, .reply-content ol {
+    display: block;
+    margin: 10px 0;
+    padding-left: 30px;
+}
+
+.post-preview li,
+.reply-content li {
+    display: list-item;
+    margin: 5px 0;
+}
+
+/* Strong and emphasis in AI content */
+.post-preview strong,
+.reply-content strong {
+    font-weight: 700;
+}
+
+.post-preview em,
+.reply-content em {
+    font-style: italic;
+}
+
+/* Code blocks in AI content */
+.post-preview pre,
+.reply-content pre {
+    display: block;
+    background: rgba(0, 0, 0, 0.3);
+    padding: 15px;
+    border-radius: 8px;
+    margin: 15px 0;
+    overflow-x: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+}
+
+.post-preview code,
+.reply-content code {
+    font-family: 'Courier New', Courier, monospace;
+    background: rgba(0, 0, 0, 0.2);
+    padding: 2px 6px;
+    border-radius: 4px;
+}
+
+/* Inline spans with styles (like highlighted quotes) */
+.post-preview span,
+.reply-content span {
+    white-space: normal;
+}
+
+/* Blockquotes in AI content */
+.post-preview blockquote,
+.reply-content blockquote {
+    display: block;
+    margin: 15px 0;
+    padding: 10px 20px;
+    border-left: 4px solid var(--accent-color);
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 0 8px 8px 0;
+}
+
+/* Horizontal rules */
+.post-preview hr,
+.reply-content hr {
+    display: block;
+    border: none;
+    border-top: 1px solid var(--glass-border);
+    margin: 20px 0;
+}
+
+/* Ensure images in posts are fully opaque and visible */
+.post-preview img,
+.reply-content img,
+.expanded-card img,
+.post-card img,
+.reply-item img {
+    opacity: 1 !important;
+    background: var(--primary-bg) !important;
+    border-radius: 8px;
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 10px 0;
+    /* Ensure image is on top of any transparent backgrounds */
+    position: relative;
+    z-index: 1;
+}
+
+/* Add a subtle border and shadow to images for better visibility */
+.post-preview img,
+.reply-content img,
+.expanded-card .post-preview img,
+.reply-item img {
+    border: 2px solid var(--glass-border);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    /* Add a solid background behind the image */
+    background-color: var(--primary-bg) !important;
+    padding: 2px;
+}
+
+/* Prevent any parent transparency from affecting images */
+.post-preview,
+.reply-content {
+    /* Ensure content area doesn't make images transparent */
+}
+
+.post-preview > *,
+.reply-content > * {
+    /* Reset any inherited opacity for direct children */
+}
+
+/* Specifically target images to override any inherited styles */
+img[src*="http"],
+img[src*="file://"] {
+    opacity: 1 !important;
+}
+.expanded-close-btn {
+    position: absolute;
+    top: 20px; right: 20px;
+    background: rgba(0,0,0,0.3);
+    border: none; color: white;
+    width: 40px; height: 40px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 1.5rem;
+    display: flex; align-items: center; justify-content: center;
+    transition: all 0.3s;
+    z-index: 10;
+}
+
+/* --- Meta Header in Expanded View --- */
+.post-meta-header {
+    background: rgba(0,0,0,0.2);
+    padding: 15px 25px;
+    border-radius: 15px;
+    margin-bottom: 25px;
+    border: 1px solid var(--glass-border);
+    font-size: 0.85rem;
+    line-height: 1.7;
+}
+.meta-item {
+    display: inline-flex; /* Changed to inline-flex for single-line layout */
+    align-items: baseline;
+    padding: 0; /* Remove vertical spacing */
+}
+.meta-key {
+    font-weight: 700; /* Bolder key */
+    color: var(--text-primary);
+    margin-right: 12px; /* Increased spacing */
+    flex-shrink: 0;
+    opacity: 0.9;
+}
+.meta-value {
+    color: var(--text-secondary);
+    word-break: break-all;
+    font-family: 'Courier New', Courier, monospace; /* Monospaced for IDs/timestamps */
+    background: rgba(0,0,0,0.2);
+    padding: 2px 8px;
+    border-radius: 6px;
+    font-size: 0.9em;
+}
+.expanded-close-btn:hover { background: var(--danger-color); transform: rotate(90deg); }
+
+
+/* --- Replies in Expanded View --- */
+.reply-list {
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+.reply-item {
+    margin-bottom: 20px;
+    padding: 20px;
+    border-radius: 20px;
+    background: rgba(0,0,0,0.2);
+    border: 1px solid var(--glass-border);
+    animation: slideInRight 0.5s ease backwards;
+}
+@keyframes slideInRight {
+    from { opacity: 0; transform: translateX(50px); }
+    to { opacity: 1; transform: translateX(0); }
+}
+.reply-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 10px;
+    font-size: 0.8rem;
+    color: var(--text-secondary);
+}
+
+/* --- Differentiated Delete Buttons --- */
+.delete-floor-btn {
+    background: rgba(229, 115, 115, 0.15); /* Subtle red glass background */
+    color: var(--danger-color);
+    border: 1px solid var(--danger-color);
+    padding: 8px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: bold;
+    transition: all 0.3s ease;
+    opacity: 0.8; /* Slightly more visible */
+}
+
+.delete-floor-btn:hover {
+    background: var(--danger-color);
+    color: white;
+    opacity: 1;
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(229, 115, 115, 0.4);
+}
+
+/* A more robust selector for the delete button, overriding the base .jelly-btn styles without !important */
+.jelly-btn.delete-post-btn {
+    width: auto;
+    padding: 8px 20px;
+    margin-top: 0;
+    background: var(--danger-color, #e57373); /* Provide a fallback color */
+    color: white;
+    font-size: 0.9rem;
+    border-radius: 8px;
+}
+
+.jelly-btn.delete-post-btn:hover {
+    background: var(--danger-hover-bg, #ef5350); /* Provide a fallback color */
+    box-shadow: 0 0 30px rgba(229, 115, 115, 0.5);
+    transform: scale(1.05); /* Keep consistent hover effect */
+}
+
+/* --- Create Post Modal (Unified Glass Style) --- */
+.modal {
+    background-color: rgba(0, 0, 0, 0.6);
+    backdrop-filter: blur(15px);
+}
+.modal-glass-content {
+    background: var(--glass-bg);
+    backdrop-filter: blur(30px) saturate(150%);
+    border: 1px solid var(--glass-border);
+    border-radius: 30px;
+    padding: 40px;
+    box-shadow: 0 50px 100px -20px rgba(50,50,93,0.25), 
+                0 30px 60px -30px rgba(0,0,0,0.3), 
+                inset 0 -2px 6px 0 rgba(10,37,64,0.35);
+    width: 95%; max-width: 700px;
+    animation: modalPop 0.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+#settings-modal label {
+    display: block;
+    margin: 15px 0 5px 5px;
+    color: var(--text-secondary);
+    font-size: 0.9rem;
+    text-align: left;
+}
+
+@keyframes modalPop {
+    from { opacity: 0; transform: scale(0.8) translateY(10%); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+/* Reply Box Area */
+.reply-area-fixed {
+    position: sticky;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    width: calc(100% + 80px); /* Extend to card edges */
+    margin-left: -40px; /* Offset parent padding */
+    margin-right: -40px;
+    margin-top: 20px;
+    box-sizing: border-box;
+    background: var(--glass-bg); /* Use theme variable */
+    backdrop-filter: blur(20px);
+    padding: 20px 40px; /* Match parent's horizontal padding */
+    border-top: 1px solid var(--glass-border);
+    border-radius: 0 0 30px 30px;
+    display: flex;
+    gap: 15px;
+    align-items: center;
+    z-index: 10; /* Stay on top when scrolling */
+}
+.reply-input { flex: 1; }
+
+/* Error messages */
+.error-jiggle { color: var(--danger-color); animation: jiggle 0.4s ease; }
+@keyframes jiggle {
+    0% { transform: translateX(0); }
+    25% { transform: translateX(-5px); }
+    50% { transform: translateX(5px); }
+    75% { transform: translateX(-3px); }
+    100% { transform: translateX(0); }
+}
+
+
+/* --- Post Content Enhancements --- */
+.highlighted-quote {
+    color: var(--highlight-text, #E8B95A);
+}
+
+.post-preview strong, .reply-content strong {
+    font-weight: 600; /* Ensure strong is bolder than default */
+    color: var(--primary-text);
+}
+
+/* --- AI-Generated Inline Styles Support --- */
+/* Ensure content area allows for block display and proper spacing */
+.post-preview,
+.reply-content,
+.expanded-card .post-preview {
+    display: block;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+    word-break: break-word;
+    white-space: normal;
+}
+
+/* Allow nested divs with background colors and borders to display properly */
+.post-preview > div,
+.reply-content > div {
+    margin: 15px 0;
+}
+
+/* Ensure images within styled divs are visible */
+.post-preview div img,
+.reply-content div img {
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 10px auto;
+}
+
+
+/* --- Animations --- */
+@keyframes spin {
+    from { transform: rotate(0deg); }
+    to { transform: rotate(360deg); }
+}
+
+.nav-icon-btn.spinning {
+    animation: spin 1s infinite linear;
+}
+
+/* --- Edit Mode Styles --- */
+.edit-btn {
+    background: rgba(74, 144, 226, 0.15); /* Subtle blue glass background */
+    color: var(--accent-color);
+    border: 1px solid var(--accent-color);
+    padding: 8px 20px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9rem;
+    font-weight: bold;
+    transition: all 0.3s ease;
+    opacity: 0.8;
+    margin-left: 10px; /* Space from delete button */
+}
+
+.edit-btn:hover {
+    background: var(--accent-color);
+    color: white;
+    opacity: 1;
+    transform: scale(1.05);
+    box-shadow: 0 4px 12px rgba(74, 144, 226, 0.4);
+}
+
+.edit-textarea {
+    width: 100%;
+    min-height: 150px;
+    padding: 15px;
+    margin-bottom: 15px;
+    background: var(--glass-bg);
+    border: 1px solid var(--accent-color); /* Highlight that it's in edit mode */
+    border-radius: 12px;
+    color: var(--text-primary);
+    font-size: 1rem;
+    resize: vertical;
+    font-family: inherit;
+}
+
+.edit-textarea:focus {
+    outline: none;
+    background: var(--glass-shine);
+}
+
+.edit-controls {
+    display: flex;
+    justify-content: flex-end;
+    gap: 15px;
+    margin-top: 10px;
+}
+
+.post-actions {
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    margin-top: 20px;
+    padding-top: 20px;
+    border-top: 1px solid var(--glass-border);
+}
+
+
+/* --- Markdown Table Styles --- */
+.post-preview table, .reply-content table {
+    width: 100%;
+    border-collapse: collapse;
+    margin: 20px 0;
+    font-size: 0.95rem;
+    background: rgba(0,0,0,0.1);
+    border-radius: 12px;
+    overflow: hidden; /* Ensures border-radius is respected */
+}
+
+.post-preview th, .reply-content th,
+.post-preview td, .reply-content td {
+    border: 1px solid var(--glass-border);
+    padding: 12px 15px;
+    text-align: left;
+}
+
+.post-preview th, .reply-content th {
+    background-color: rgba(0,0,0,0.2);
+    color: var(--text-primary);
+    font-weight: 600;
+}
+
+.post-preview tr:nth-child(even), .reply-content tr:nth-child(even) {
+    background-color: rgba(0,0,0,0.05);
+}
+
+.post-preview tr:hover, .reply-content tr:hover {
+    background-color: var(--glass-shine);
+}
+
+/* --- NEW: Dual Avatar Styles --- */
+.author-info-with-time {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex: 1;
+}
+
+.time-info {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+
+.meta-separator {
+    width: 2px;
+    height: 40px;
+    background: linear-gradient(to bottom, transparent, var(--glass-border) 20%, var(--glass-border) 80%, transparent);
+    margin: 0 15px;
+    flex-shrink: 0;
+}
+
+/* Ensure the post-meta container uses flexbox for dual layout */
+.post-card .post-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+
+/* --- Unified Textarea Scrollbar Styles --- */
+.edit-textarea::-webkit-scrollbar,
+#post-content-input::-webkit-scrollbar,
+.reply-input::-webkit-scrollbar {
+    width: 8px;
+}
+
+.edit-textarea::-webkit-scrollbar-track,
+#post-content-input::-webkit-scrollbar-track,
+.reply-input::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.edit-textarea::-webkit-scrollbar-thumb,
+#post-content-input::-webkit-scrollbar-thumb,
+.reply-input::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.edit-textarea::-webkit-scrollbar-thumb:hover,
+#post-content-input::-webkit-scrollbar-thumb:hover,
+.reply-input::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.4);
+}
+
+
+/* --- User Emoticon Panel --- */
+.emoticon-panel {
+    display: none;
+    position: fixed;
+    width: 270px; /* Adjusted to account for scrollbar width */
+    height: 240px; /* Increased height for title */
+    background-color: var(--panel-bg-dark);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    padding: 10px;
+    box-sizing: border-box;
+    z-index: 3500; /* Higher than post modals (z-index: 3000) */
+    /* New layout properties */
+    flex-direction: column;
+    /* display: flex; is set by JS */
+}
+
+.emoticon-panel-title {
+    font-size: 0.8em;
+    color: var(--highlight-text);
+    margin-bottom: 8px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.emoticon-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    overflow-y: auto;
+    flex-grow: 1;
+}
+
+/* --- Custom Scrollbar for Emoticon Panel --- */
+.emoticon-grid::-webkit-scrollbar {
+    width: 8px;
+}
+
+.emoticon-grid::-webkit-scrollbar-track {
+    background: rgba(0, 0, 0, 0.1);
+    border-radius: 4px;
+}
+
+.emoticon-grid::-webkit-scrollbar-thumb {
+    background-color: var(--accent-color);
+    border-radius: 4px;
+    border: 2px solid transparent;
+    background-clip: content-box;
+}
+
+.emoticon-grid::-webkit-scrollbar-thumb:hover {
+    background-color: var(--accent-color-dark);
+}
+
+body.light-theme .emoticon-panel {
+    background-color: var(--panel-bg-light);
+}
+
+.emoticon-item {
+    width: 52px;
+    height: 52px;
+    object-fit: contain;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 3px;
+    box-sizing: border-box;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.emoticon-item:hover {
+    transform: scale(1.1);
+    background-color: var(--accent-bg);
+}
+
+.emoticon-item-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--secondary-text);
+    font-size: 0.9em;
+}
+
+/* --- Emoticon Button Style --- */
+.emoticon-btn {
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    font-size: 1.2rem;
+    padding: 5px;
+    opacity: 0.7;
+    transition: opacity 0.2s ease, transform 0.2s ease;
+    color: var(--text-secondary);
+}
+
+.emoticon-btn:hover {
+    opacity: 1;
+    transform: scale(1.1);
+}
+
+/* --- KaTeX Rendering Fix --- */
+/* Prevent parent styles from breaking KaTeX layout */
+.post-preview .katex-display,
+.reply-content .katex-display,
+.post-preview .katex,
+.reply-content .katex {
+    word-break: normal;
+    word-wrap: normal;
+    white-space: nowrap;
+    text-align: left; /* Ensure formulas are left-aligned within their container */
+}
+
+/*
+  FIX: Reset inherited text-wrapping and alignment styles for all child elements within KaTeX blocks.
+  This prevents global styles (like `word-break: break-word` or `white-space: normal` on all spans)
+  from breaking the precise layout of KaTeX formulas, which rely on their own specific styling.
+*/
+.post-preview .katex *,
+.reply-content .katex * {
+    white-space: revert;
+    word-break: revert;
+    word-wrap: revert;
+    overflow-wrap: revert;
+    text-align: revert;
+    display: revert;
+}
+
+/* Ensure the KaTeX container itself can be a block element */
+.katex-display {
+    display: block;
+    overflow-x: auto; /* Allow horizontal scrolling for very long formulas */
+    overflow-y: hidden;
+    padding: 0.5em 0;
+}

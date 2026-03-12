@@ -1,0 +1,321 @@
+/* styles/layout.css */
+
+/* --- Custom Title Bar --- */
+.title-bar {
+    height: 30px;
+    background-color: var(--panel-bg-dark); /* 使用半透明变量 */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    color: var(--primary-text);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 0 5px 0 10px; /* Reduced right padding slightly */
+    -webkit-app-region: drag;
+    flex-shrink: 0;
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1001;
+    box-sizing: border-box; /* Added */
+}
+body.light-theme .title-bar {
+    background-color: var(--panel-bg-light);
+}
+
+.title-bar-text {
+    font-size: 0.9em;
+    font-weight: bold;
+    margin-left: 0;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    flex-grow: 1;
+    min-width: 0; /* Allow shrinking */
+    margin-right: 10px; /* Add some space between text and controls */
+    
+    /* Animated gradient removed for performance. */
+    color: var(--primary-text);
+    text-shadow: none;
+}
+
+.title-bar-logo {
+   height: 20px; /* Adjust based on title bar height */
+   margin-right: 4px;
+   vertical-align: middle; /* Align with text */
+}
+
+.title-bar-controls {
+    display: flex;
+    align-items: center;
+    -webkit-app-region: no-drag;
+    flex-shrink: 0; /* Crucial: Do not allow this container to shrink */
+    height: 100%; /* Ensure controls container fills title bar height */
+    min-width: 150px; /* Ensure enough space for 5 buttons (5 * 30px) */
+    flex-wrap: nowrap; /* Force buttons to stay on one line */
+}
+
+.container {
+    display: flex;
+    width: 100%;
+    height: calc(100vh - 30px); /* Adjust based on title-bar height */
+    margin-top: 30px; /* Offset for the fixed title bar */
+    overflow: hidden; /* Prevent scrollbars on body due to resizers */
+}
+
+/* --- Resizers --- */
+.resizer {
+    /* 默认状态：与侧边栏一样的磨砂透明效果 */
+    background-color: var(--panel-bg-dark);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    width: 3px;
+    cursor: col-resize;
+    flex-shrink: 0;
+    z-index: 100;
+    transition: background-color 0.2s ease;
+    pointer-events: auto;
+}
+
+/* 悬停或拖拽时：显示高亮颜色 */
+.resizer:hover,
+.resizer:active {
+    background-color: var(--accent-bg); /* 使用主题强调色 */
+}
+
+/* 浅色主题下的 Resizer 背景 */
+body.light-theme .resizer {
+    background-color: var(--panel-bg-light);
+}
+
+/* --- Sidebar (Agent List) --- */
+.sidebar {
+    width: 260px;
+    background-color: var(--panel-bg-dark); /* 使用半透明变量 */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    min-width: 180px;
+    max-width: 600px;
+    padding: 15px 15px 15px 17px;
+    box-sizing: border-box;
+    display: flex;
+    flex-direction: column;
+    transition: width 0.3s ease, min-width 0.3s ease, padding 0.3s ease, opacity 0.3s ease;
+    overflow-x: hidden;
+    flex-shrink: 0;
+    text-shadow: var(--panel-text-shadow);
+}
+body.light-theme .sidebar {
+    background-color: var(--panel-bg-light);
+}
+
+/* --- Main Content (Chat Area) --- */
+.main-content {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    /* 关键修改：确保主内容区完全透明，让body的背景透出来 */
+    background-color: transparent;
+    overflow: hidden;
+    transition: none; /* 移除 margin-left 动画，让 Flexbox 自动处理 */
+}
+
+/* --- Notifications Sidebar --- */
+.notifications-sidebar {
+    width: 310px;
+    background-color: var(--panel-bg-dark); /* 使用半透明变量 */
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    min-width: 220px; /* Adjusted min-width */
+    max-width: 600px; /* Added max-width */
+    /* REMOVE border-left */
+    display: flex;
+    flex-direction: column;
+    padding: 0;
+    transition: width 0.3s ease-out,
+                min-width 0.3s ease-out,
+                padding 0.3s ease-out,
+                border-left-width 0.3s ease-out,
+                opacity 0.3s ease-out;
+    overflow: hidden;
+    flex-shrink: 0; /* Prevent shrinking */
+}
+body.light-theme .notifications-sidebar {
+    background-color: var(--panel-bg-light);
+}
+
+.notifications-sidebar:not(.active) {
+    width: 0 !important; 
+    min-width: 0 !important; 
+    padding-left: 0 !important; 
+    padding-right: 0 !important; 
+    border-left-width: 0 !important; 
+    opacity: 0;
+    /* transform: translateX(100%); */ /* Removed to prevent animation gap */
+}
+
+@media (max-width: 768px) {
+    .sidebar {
+        width: 100%;
+        height: auto;
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+        position: absolute; 
+        z-index: 100;
+        transform: translateX(-100%); 
+        transition: transform 0.3s ease-in-out;
+    }
+    .sidebar.open {
+        transform: translateX(0);
+    }
+    .main-content {
+        width: 100%;
+    }
+    .notifications-sidebar {
+        display: none; 
+    }
+}
+/* --- Seam Fixer for Title Bar --- */
+/*
+   这是我们根据你的“PS污点修复画笔”思路创建的元素。
+   它是一个覆盖在接缝上的、带有二次模糊和羽化效果的“魔法条”。
+*/
+.seam-fixer {
+    /* 1. 定位与尺寸 */
+    position: fixed; /* 使用fixed定位，因为它要覆盖的title-bar也是fixed */
+    left: 0;
+    /* right: 0; */ /* 宽度由JS动态控制 */
+    height: 16px; /* 羽化条的高度，这个值可以微调以达到最佳效果 */
+    z-index: 1002; /* 必须比 title-bar (1001) 的 z-index 更高 */
+
+    /* 2. 关键效果：二次模糊 */
+    /* 这个模糊值可以比主模糊(12px)小一些，专注于“融合”而不是“模糊” */
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+
+    /* 3. 关键效果：羽化遮罩 (上下两侧透明，中间实心) */
+    -webkit-mask-image: linear-gradient(
+        to bottom,
+        transparent 0%,
+        black 30%, /* 从30%处开始变得不透明 */
+        black 70%, /* 到70%处保持不透明 */
+        transparent 100% /* 之后再渐变到透明 */
+    );
+    mask-image: linear-gradient(
+        to bottom,
+        transparent 0%,
+        black 30%,
+        black 70%,
+        transparent 100%
+    );
+
+    /* 4. 自身特性 */
+    pointer-events: none; /* 让鼠标可以“穿透”它，不会影响下方的点击 */
+    background: transparent; /* 自身必须是透明的 */
+}
+
+/* 专门为标题栏下方的接缝进行定位 */
+#title-bar-seam-fixer {
+    /* 
+       标题栏高度是 30px，接缝就在 30px 的位置。
+       我们的羽化条高度是 16px。
+       所以 top 值设为 30px - (16px / 2) = 22px，
+       这样羽化条的中心就精准地对齐了接缝。
+    */
+    top: 22px; 
+}
+
+/* --- Sidebar Hide/Show Logic --- */
+.sidebar:not(.active) {
+    width: 0 !important;
+    min-width: 0 !important;
+    padding-left: 0 !important;
+    padding-right: 0 !important;
+    opacity: 0;
+    overflow-x: hidden; /* Hide content while shrinking */
+}
+
+.main-content:not(.sidebar-active) {
+    /* Flexbox should handle this automatically */
+}
+
+.main-content.sidebar-active {
+    /* Flexbox should handle this automatically */
+}
+
+/* 隐藏侧边栏时，同时隐藏分隔条 */
+.sidebar:not(.active) + #resizerLeft {
+    width: 0 !important;
+    min-width: 0 !important;
+    pointer-events: none;
+}
+
+/* --- User Emoticon Panel --- */
+.emoticon-panel {
+    display: none;
+    position: fixed;
+    width: 270px; /* Adjusted to account for scrollbar width */
+    height: 240px; /* Increased height for title */
+    background-color: var(--panel-bg-dark);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    padding: 10px;
+    box-sizing: border-box;
+    z-index: 1002; /* Higher than title bar */
+    /* New layout properties */
+    flex-direction: column;
+    /* display: flex; is set by JS */
+}
+
+.emoticon-panel-title {
+    font-size: 0.8em;
+    color: var(--highlight-text);
+    margin-bottom: 8px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.emoticon-grid {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    overflow-y: auto;
+    flex-grow: 1;
+}
+
+body.light-theme .emoticon-panel {
+    background-color: var(--panel-bg-light);
+}
+
+.emoticon-item {
+    width: 52px;
+    height: 52px;
+    object-fit: contain;
+    cursor: pointer;
+    border-radius: 6px;
+    padding: 3px;
+    box-sizing: border-box;
+    transition: transform 0.2s ease, background-color 0.2s ease;
+}
+
+.emoticon-item:hover {
+    transform: scale(1.1);
+    background-color: var(--accent-bg);
+}
+
+.emoticon-item-placeholder {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--secondary-text);
+    font-size: 0.9em;
+}
