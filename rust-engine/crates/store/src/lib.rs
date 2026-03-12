@@ -1,12 +1,15 @@
 use std::{
-    collections::{BTreeMap, btree_map::Entry},
+    collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fs,
     path::{Path, PathBuf},
 };
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
-use vcpmobile_domain::{Conversation, ConversationId, GenerationState, NodeId, ProviderConfig};
+use vcpmobile_domain::{
+    Conversation, ConversationId, GenerationState, NodeId, ProviderAuthConfig, ProviderConfig,
+    ProviderModelCatalog,
+};
 use vcpmobile_protocol::NodeBundle;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -90,12 +93,106 @@ impl ProviderNormalizationOrigin {
 }
 
 fn merge_duplicate_provider_metadata(primary: &mut ProviderConfig, duplicate: ProviderConfig) {
+    let duplicate_is_newer = duplicate.updated_at > primary.updated_at;
+    let should_replace_headers = !duplicate.custom_headers.is_empty()
+        && (duplicate_is_newer || primary.custom_headers.is_empty());
+    let should_replace_body_fragments = !duplicate.custom_body_fragments.is_empty()
+        && (duplicate_is_newer || primary.custom_body_fragments.is_empty());
+    let should_replace_presets =
+        !duplicate.presets.is_empty() && (duplicate_is_newer || primary.presets.is_empty());
+    let should_replace_model_catalog =
+        provider_model_catalog_is_meaningful(&duplicate.model_catalog)
+            && (duplicate_is_newer
+                || !provider_model_catalog_is_meaningful(&primary.model_catalog));
+    let should_replace_auth = duplicate.auth != ProviderAuthConfig::None
+        && (duplicate_is_newer || primary.auth == ProviderAuthConfig::None);
+
+    let primary_base_url = primary.base_url.clone();
+    primary.register_reference_alias(primary_base_url);
     primary.created_at = primary.created_at.min(duplicate.created_at);
     primary.updated_at = primary.updated_at.max(duplicate.updated_at);
+
+    if duplicate_is_newer {
+        if !duplicate.display_name.trim().is_empty() {
+            primary.display_name = duplicate.display_name.clone();
+        }
+        if !duplicate.base_url.trim().is_empty() {
+            primary.base_url = duplicate.base_url.clone();
+        }
+        primary.adapter_kind = duplicate.adapter_kind;
+    } else {
+        if primary.display_name.trim().is_empty() {
+            primary.display_name = duplicate.display_name.clone();
+        }
+        if primary.base_url.trim().is_empty() {
+            primary.base_url = duplicate.base_url.clone();
+        }
+    }
+
+    if duplicate.avatar_uri.is_some() || primary.avatar_uri.is_none() {
+        primary.avatar_uri = duplicate.avatar_uri.clone().or(primary.avatar_uri.clone());
+    }
+    if should_replace_auth {
+        primary.auth = duplicate.auth.clone();
+    }
+    if should_replace_model_catalog {
+        primary.model_catalog = duplicate.model_catalog.clone();
+    }
+    if should_replace_headers {
+        primary.custom_headers = duplicate.custom_headers.clone();
+    }
+    if should_replace_body_fragments {
+        primary.custom_body_fragments = duplicate.custom_body_fragments.clone();
+    }
+    if should_replace_presets {
+        primary.presets = duplicate.presets.clone();
+    }
+    if duplicate.default_preset_local_id.is_some()
+        && (duplicate_is_newer || primary.default_preset_local_id.is_none())
+    {
+        primary.default_preset_local_id = duplicate.default_preset_local_id.clone();
+    }
+
     primary.register_reference_alias(duplicate.base_url.as_str());
     for alias in duplicate.reference_aliases {
         primary.register_reference_alias(alias);
     }
+}
+
+fn provider_model_catalog_is_meaningful(catalog: &ProviderModelCatalog) -> bool {
+    catalog.default_model.is_some() || !catalog.entries.is_empty()
+}
+
+fn resolve_provider_for_upsert(
+    provider_configs: &BTreeMap<String, ProviderConfig>,
+    provider: &ProviderConfig,
+) -> Option<ProviderConfig> {
+    let mut references = BTreeSet::new();
+    for reference in std::iter::once(provider.local_id.as_str())
+        .chain(std::iter::once(provider.base_url.as_str()))
+        .chain(provider.reference_aliases.iter().map(String::as_str))
+    {
+        let trimmed = reference.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        references.insert(trimmed.to_string());
+    }
+
+    for reference in references {
+        if let Some(existing) = provider_configs.get(&reference).cloned() {
+            return Some(existing);
+        }
+        if let Some(existing) = provider_configs
+            .values()
+            .find(|candidate| candidate.matches_reference(&reference))
+            .cloned()
+        {
+            return Some(existing);
+        }
+    }
+
+    None
 }
 
 impl StoreData {
@@ -245,15 +342,24 @@ impl FileStore {
 
     pub fn upsert_provider(&self, mut provider: ProviderConfig) -> StoreResult<ProviderConfig> {
         let mut data = self.load()?;
-        let reference_seed = if provider.local_id.trim().is_empty() {
-            provider.base_url.clone()
-        } else {
-            provider.local_id.clone()
-        };
+        let existing_provider = resolve_provider_for_upsert(&data.provider_configs, &provider);
+        let reference_seed = existing_provider
+            .as_ref()
+            .map(|existing| existing.local_id.clone())
+            .filter(|local_id| !local_id.trim().is_empty())
+            .unwrap_or_else(|| {
+                if provider.local_id.trim().is_empty() {
+                    provider.base_url.clone()
+                } else {
+                    provider.local_id.clone()
+                }
+            });
         provider.ensure_stable_ids(&reference_seed);
 
         let now = chrono::Utc::now();
-        if let Some(existing) = data.provider_configs.get(&provider.local_id).cloned() {
+        if let Some(existing) =
+            existing_provider.or_else(|| data.provider_configs.get(&provider.local_id).cloned())
+        {
             provider.created_at = existing.created_at;
             // Preserve prior endpoint references so chat history survives later endpoint edits.
             provider.register_reference_alias(existing.base_url.as_str());
@@ -766,7 +872,7 @@ mod tests {
     }
 
     #[test]
-    fn load_prefers_canonical_provider_record_when_legacy_duplicate_collides() {
+    fn load_merges_newer_duplicate_provider_fields_when_legacy_duplicate_collides() {
         let canonical_local_id = "provider_local_canonical123";
         let fixture = serde_json::json!({
             "provider_configs": {
@@ -788,8 +894,20 @@ mod tests {
                 "https://legacy.example.com/v1": {
                     "local_id": canonical_local_id,
                     "adapter_kind": "openai_compatible",
-                    "display_name": "Legacy Duplicate",
-                    "base_url": "https://legacy.example.com/v1",
+                    "display_name": "Merged Provider",
+                    "base_url": "https://newer.example.com/v1",
+                    "auth": {
+                        "type": "bearer_token",
+                        "token": "secret"
+                    },
+                    "model_catalog": {
+                        "default_model": "gpt-4.1",
+                        "entries": [
+                            {
+                                "model_id": "gpt-4.1"
+                            }
+                        ]
+                    },
                     "reference_aliases": ["imported-provider-id"],
                     "created_at": "2026-03-10T00:00:00Z",
                     "updated_at": "2026-03-12T00:00:00Z"
@@ -809,8 +927,18 @@ mod tests {
             .expect("load provider")
             .expect("provider exists");
 
-        assert_eq!(provider.display_name, "Canonical Provider");
-        assert_eq!(provider.base_url, "https://current.example.com/v1");
+        assert_eq!(provider.display_name, "Merged Provider");
+        assert_eq!(provider.base_url, "https://newer.example.com/v1");
+        assert_eq!(
+            provider.auth,
+            ProviderAuthConfig::BearerToken {
+                token: "secret".to_string()
+            }
+        );
+        assert_eq!(
+            provider.model_catalog.default_model.as_deref(),
+            Some("gpt-4.1")
+        );
         assert_eq!(
             provider.default_preset_local_id,
             Some("provider_preset_local_balanced123".to_string())
@@ -823,6 +951,11 @@ mod tests {
         assert_eq!(
             provider.updated_at.to_rfc3339(),
             "2026-03-12T00:00:00+00:00"
+        );
+        assert!(
+            provider
+                .reference_aliases
+                .contains(&"https://current.example.com/v1".to_string())
         );
         assert!(
             provider
@@ -854,6 +987,50 @@ mod tests {
                 .expect("provider via imported alias")
                 .local_id,
             canonical_local_id
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn provider_upsert_via_alias_updates_existing_provider_instead_of_forking() {
+        let path = temp_store_path("provider-alias-upsert");
+        let store = FileStore::new(&path);
+
+        let initial = store
+            .upsert_provider(sample_provider("OpenAI", "https://old.example.com/v1"))
+            .expect("persist initial provider");
+        let original_local_id = initial.local_id.clone();
+        let old_base_url = initial.base_url.clone();
+
+        let mut edited = initial.clone();
+        edited.local_id = old_base_url.clone();
+        edited.display_name = "OpenAI Renamed".to_string();
+        edited.base_url = "https://new.example.com/v1".to_string();
+
+        let saved = store
+            .upsert_provider(edited)
+            .expect("persist alias-based edit");
+
+        assert_eq!(saved.local_id, original_local_id);
+        assert_eq!(saved.display_name, "OpenAI Renamed");
+        assert_eq!(saved.base_url, "https://new.example.com/v1");
+        assert_eq!(store.list_providers().expect("list providers").len(), 1);
+        assert_eq!(
+            store
+                .resolve_provider_reference(&old_base_url)
+                .expect("resolve old alias")
+                .expect("provider via old alias")
+                .local_id,
+            original_local_id
+        );
+        assert_eq!(
+            store
+                .resolve_provider_reference("https://new.example.com/v1")
+                .expect("resolve new base url")
+                .expect("provider via new base url")
+                .local_id,
+            original_local_id
         );
 
         fs::remove_file(path).ok();
