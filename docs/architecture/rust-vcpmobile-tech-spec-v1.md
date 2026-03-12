@@ -742,6 +742,39 @@ Rust-owned agent truth should cover:
 - local tool toggles
 - group participation metadata
 
+The first mobile editor contract should be frozen as one Rust-owned `AgentConfig`
+truth document plus one app-facing `AgentEditorSchema.mobile_v1` layout contract.
+
+Frozen field groups for `mobile_v1`:
+
+1. `identity`
+   - required persisted fields: `identity.name`
+   - optional persisted fields: `identity.avatar_uri`, `identity.description`
+2. `prompt`
+   - required persisted fields: `prompt.system_prompt`
+   - optional persisted fields: `prompt.prompt_mode`, `prompt.message_template`, `prompt.placeholders`
+   - derived read-only fields: `prompt_preview` (resolved prompt preview + provenance records)
+3. `model`
+   - optional persisted fields: `model.provider_local_id`, `model.preset_local_id`, `model.model_id`
+4. `request`
+   - optional persisted fields: `request.temperature`, `request.top_p`, `request.max_output_tokens`, `request.reasoning_effort`
+5. `memory`
+   - optional persisted fields: `memory.use_conversation_memory`, `memory.pin_top_level_facts`
+6. `tools`
+   - optional persisted fields: `tools.enable_local_tools`, `tools.overrides`
+7. `group`
+   - optional persisted fields: `group.role_label`, `group.aliases`, `group.mention_tags`, `group.respond_to_mentions`, `group.allow_auto_relay`
+
+Validation rules for `mobile_v1`:
+
+- `identity.name` must be non-empty
+- `prompt.system_prompt` must be non-empty
+- `prompt.placeholders[*].key` must be non-empty
+- `tools.overrides[*].tool_id` must be non-empty
+- `group.aliases[*]` and `group.mention_tags[*]` must not contain blank items
+- `request.temperature` range is `0.0..=2.0`
+- `request.top_p` range is `0.0..=1.0`
+
 ### 8.3 Prompt Resolution
 
 Prompt handling should preserve `vcptoolbox` staged semantics, but the active resolved prompt should be produced in Rust and surfaced to clients as resolved truth + provenance metadata.
@@ -772,6 +805,21 @@ The mobile agent editor must expose at least:
 - request-level overrides
 - local tool permissions
 - group participation settings
+
+### 8.4 Local Persistence Boundary
+
+Local-first persistence for the agent editor should be explicit:
+
+- Rust store persists the full editable `AgentConfig` document
+- Android may keep unsaved form state, focus state, expansion state, and draft preview UI locally, but those are not truth
+- resolved prompt preview and ordered placeholder provenance are derived in Rust and are not stored as editable agent truth
+- provider catalogs, tool catalogs, and runtime environment placeholders are referenced by stable IDs and loaded separately from the agent document
+
+This keeps CRUD simple:
+
+- create/update/delete acts on one persisted `AgentConfig`
+- UI section order comes from the frozen `AgentEditorSchema.mobile_v1` groups
+- any client-side preview must consume Rust-produced derived fields rather than recomputing prompt resolution rules
 
 ## 9. Group Chat System
 

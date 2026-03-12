@@ -7,8 +7,8 @@ use std::{
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use vcpmobile_domain::{
-    Conversation, ConversationId, GenerationState, NodeId, ProviderAuthConfig, ProviderConfig,
-    ProviderModelCatalog,
+    AgentConfig, Conversation, ConversationId, GenerationState, NodeId, ProviderAuthConfig,
+    ProviderConfig, ProviderModelCatalog,
 };
 use vcpmobile_protocol::NodeBundle;
 
@@ -35,6 +35,8 @@ pub struct StoredConversationCatalogItem {
 pub struct StoreData {
     #[serde(default)]
     pub conversations: BTreeMap<String, StoredConversation>,
+    #[serde(default, alias = "agents")]
+    pub agent_configs: BTreeMap<String, AgentConfig>,
     #[serde(default, alias = "providers")]
     pub provider_configs: BTreeMap<String, ProviderConfig>,
 }
@@ -235,6 +237,8 @@ pub enum StoreError {
     Io(#[from] std::io::Error),
     #[error("json error: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("validation error: {0}")]
+    Validation(String),
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
@@ -328,6 +332,42 @@ impl FileStore {
     pub fn get_provider(&self, local_id: &str) -> StoreResult<Option<ProviderConfig>> {
         let data = self.load()?;
         Ok(data.provider_configs.get(local_id).cloned())
+    }
+
+    pub fn get_agent(&self, agent_id: &str) -> StoreResult<Option<AgentConfig>> {
+        let data = self.load()?;
+        Ok(data.agent_configs.get(agent_id).cloned())
+    }
+
+    pub fn upsert_agent(&self, mut agent: AgentConfig) -> StoreResult<AgentConfig> {
+        agent
+            .validate()
+            .map_err(|error| StoreError::Validation(error.to_string()))?;
+
+        let mut data = self.load()?;
+        let now = chrono::Utc::now();
+        if let Some(existing) = data.agent_configs.get(&agent.id.to_string()) {
+            agent.created_at = existing.created_at;
+        }
+        agent.updated_at = now;
+
+        data.agent_configs
+            .insert(agent.id.to_string(), agent.clone());
+        self.save(&data)?;
+        Ok(agent)
+    }
+
+    pub fn list_agents(&self) -> StoreResult<Vec<AgentConfig>> {
+        let mut agents = self.load()?.agent_configs.into_values().collect::<Vec<_>>();
+        agents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
+        Ok(agents)
+    }
+
+    pub fn delete_agent(&self, agent_id: &str) -> StoreResult<Option<AgentConfig>> {
+        let mut data = self.load()?;
+        let removed = data.agent_configs.remove(agent_id);
+        self.save(&data)?;
+        Ok(removed)
     }
 
     pub fn resolve_provider_reference(
@@ -449,7 +489,7 @@ mod tests {
     use std::{env, fs};
     use uuid::Uuid;
     use vcpmobile_domain::{
-        AgentId, MessageNode, MessageRole, MessageVariant, PROVIDER_LOCAL_ID_PREFIX,
+        AgentConfig, AgentId, MessageNode, MessageRole, MessageVariant, PROVIDER_LOCAL_ID_PREFIX,
         PROVIDER_PRESET_LOCAL_ID_PREFIX, ProviderAdapterKind, ProviderBodyFragment,
         ProviderModelCatalogEntry, ProviderPreset, TopicId, VariantStatus,
     };
@@ -486,6 +526,12 @@ mod tests {
         provider
     }
 
+    fn sample_agent(name: &str) -> AgentConfig {
+        let mut agent = AgentConfig::new(name, "You are a focused helper.");
+        agent.group.aliases = vec!["planner".to_string()];
+        agent
+    }
+
     #[test]
     fn list_conversation_catalog_sorts_by_updated_at_desc() {
         let source = fs::read_to_string(
@@ -513,6 +559,44 @@ mod tests {
                 .all(|item| !item.conversation_id.to_string().is_empty() && !item.title.is_empty())
         );
         assert!(items.iter().all(|item| item.node_count > 0));
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn upsert_agent_persists_and_lists_local_agent_configs() {
+        let path = temp_store_path("agents");
+        let store = FileStore::new(&path);
+
+        let agent = store
+            .upsert_agent(sample_agent("Planner"))
+            .expect("upsert agent");
+        let listed = store.list_agents().expect("list agents");
+
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, agent.id);
+        assert_eq!(
+            store
+                .get_agent(&agent.id.to_string())
+                .expect("get agent")
+                .expect("stored agent")
+                .identity
+                .name,
+            "Planner"
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn upsert_agent_rejects_invalid_required_fields() {
+        let path = temp_store_path("agents-invalid");
+        let store = FileStore::new(&path);
+        let mut agent = sample_agent("Planner");
+        agent.prompt.system_prompt = " ".to_string();
+
+        let error = store.upsert_agent(agent).expect_err("validation failure");
+        assert!(matches!(error, StoreError::Validation(_)));
 
         fs::remove_file(path).ok();
     }
