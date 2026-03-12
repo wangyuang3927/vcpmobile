@@ -1,4 +1,8 @@
-use std::{collections::BTreeSet, error::Error, fmt};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    error::Error,
+    fmt,
+};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -236,6 +240,208 @@ pub struct PromptResolutionPreview {
     pub raw_prompt: String,
     pub resolved_prompt: String,
     pub records: Vec<PromptResolutionRecord>,
+    #[serde(default)]
+    pub unresolved_tokens: Vec<String>,
+    #[serde(default)]
+    pub partial_tokens: Vec<String>,
+}
+
+pub fn resolve_prompt_preview(
+    raw_prompt: impl AsRef<str>,
+    placeholders: &[PromptPlaceholderValue],
+) -> PromptResolutionPreview {
+    let raw_prompt = raw_prompt.as_ref().to_string();
+    let mut ordered = placeholders.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(index, placeholder)| (placeholder.category.resolution_rank(), *index));
+
+    let mut claimed_keys = BTreeSet::new();
+    let mut resolved_values = BTreeMap::new();
+    let mut deferred_keys = BTreeSet::new();
+    let mut records = Vec::with_capacity(ordered.len());
+
+    for (_, placeholder) in ordered {
+        let status = if !claimed_keys.insert(placeholder.key.clone()) {
+            PromptResolutionStatus::Shadowed
+        } else if !placeholder.category.participates_in_prompt_preview() {
+            deferred_keys.insert(placeholder.key.clone());
+            PromptResolutionStatus::Deferred
+        } else {
+            resolved_values.insert(placeholder.key.clone(), placeholder.value.clone());
+            PromptResolutionStatus::Applied
+        };
+
+        records.push(PromptResolutionRecord {
+            key: placeholder.key.clone(),
+            value: placeholder.value.clone(),
+            category: placeholder.category,
+            source: placeholder.source,
+            status,
+        });
+    }
+
+    let (resolved_prompt, unresolved_tokens, partial_tokens) =
+        replace_prompt_placeholders(&raw_prompt, &resolved_values, &deferred_keys);
+
+    PromptResolutionPreview {
+        raw_prompt,
+        resolved_prompt,
+        records,
+        unresolved_tokens,
+        partial_tokens,
+    }
+}
+
+fn replace_prompt_placeholders(
+    raw_prompt: &str,
+    resolved_values: &BTreeMap<String, String>,
+    deferred_keys: &BTreeSet<String>,
+) -> (String, Vec<String>, Vec<String>) {
+    let mut resolved_prompt = String::with_capacity(raw_prompt.len());
+    let mut unresolved_tokens = Vec::new();
+    let mut seen_unresolved = BTreeSet::new();
+    let mut partial_tokens = Vec::new();
+    let mut seen_partial = BTreeSet::new();
+    let mut cursor = 0;
+
+    while cursor < raw_prompt.len() {
+        if let Some(parsed) = parse_placeholder_token(raw_prompt, cursor) {
+            match parsed {
+                ParsedPlaceholder::Token(token) => {
+                    if let Some(value) = resolved_values.get(token.key) {
+                        resolved_prompt.push_str(value);
+                    } else {
+                        resolved_prompt.push_str(token.raw);
+                        if !deferred_keys.contains(token.key)
+                            && seen_unresolved.insert(token.key.to_string())
+                        {
+                            unresolved_tokens.push(token.key.to_string());
+                        }
+                    }
+                    cursor = token.end;
+                }
+                ParsedPlaceholder::Partial(partial) => {
+                    resolved_prompt.push_str(partial.raw);
+                    if seen_partial.insert(partial.raw.to_string()) {
+                        partial_tokens.push(partial.raw.to_string());
+                    }
+                    cursor = partial.end;
+                }
+            }
+            continue;
+        }
+
+        let ch = raw_prompt[cursor..]
+            .chars()
+            .next()
+            .expect("cursor always points at a valid char boundary");
+        resolved_prompt.push(ch);
+        cursor += ch.len_utf8();
+    }
+
+    (resolved_prompt, unresolved_tokens, partial_tokens)
+}
+
+struct PlaceholderToken<'a> {
+    raw: &'a str,
+    key: &'a str,
+    end: usize,
+}
+
+struct PartialPlaceholder<'a> {
+    raw: &'a str,
+    end: usize,
+}
+
+enum ParsedPlaceholder<'a> {
+    Token(PlaceholderToken<'a>),
+    Partial(PartialPlaceholder<'a>),
+}
+
+fn parse_placeholder_token(raw_prompt: &str, start: usize) -> Option<ParsedPlaceholder<'_>> {
+    if !raw_prompt[start..].starts_with('{') {
+        return None;
+    }
+
+    if raw_prompt[start..].starts_with("{{") {
+        let key_start = start + 2;
+        if let Some(key_end) = raw_prompt[key_start..]
+            .find("}}")
+            .map(|offset| offset + key_start)
+        {
+            let key = &raw_prompt[key_start..key_end];
+            if is_valid_placeholder_key(key) {
+                return Some(ParsedPlaceholder::Token(PlaceholderToken {
+                    raw: &raw_prompt[start..key_end + 2],
+                    key,
+                    end: key_end + 2,
+                }));
+            }
+
+            return Some(ParsedPlaceholder::Partial(PartialPlaceholder {
+                raw: &raw_prompt[start..key_end + 2],
+                end: key_end + 2,
+            }));
+        }
+
+        let partial_end = partial_key_end(raw_prompt, key_start);
+        if partial_end == key_start {
+            return None;
+        }
+
+        return Some(ParsedPlaceholder::Partial(PartialPlaceholder {
+            raw: &raw_prompt[start..partial_end],
+            end: partial_end,
+        }));
+    }
+
+    let key_start = start + 1;
+    if let Some(key_end) = raw_prompt[key_start..]
+        .find('}')
+        .map(|offset| offset + key_start)
+    {
+        let key = &raw_prompt[key_start..key_end];
+        if is_valid_placeholder_key(key) {
+            return Some(ParsedPlaceholder::Token(PlaceholderToken {
+                raw: &raw_prompt[start..key_end + 1],
+                key,
+                end: key_end + 1,
+            }));
+        }
+
+        return Some(ParsedPlaceholder::Partial(PartialPlaceholder {
+            raw: &raw_prompt[start..key_end + 1],
+            end: key_end + 1,
+        }));
+    }
+
+    let partial_end = partial_key_end(raw_prompt, key_start);
+    if partial_end == key_start {
+        return None;
+    }
+
+    Some(ParsedPlaceholder::Partial(PartialPlaceholder {
+        raw: &raw_prompt[start..partial_end],
+        end: partial_end,
+    }))
+}
+
+fn is_valid_placeholder_key(key: &str) -> bool {
+    !key.is_empty() && key.chars().all(is_placeholder_key_char)
+}
+
+fn partial_key_end(raw_prompt: &str, start: usize) -> usize {
+    let mut end = start;
+    for (offset, ch) in raw_prompt[start..].char_indices() {
+        if !is_placeholder_key_char(ch) {
+            break;
+        }
+        end = start + offset + ch.len_utf8();
+    }
+    end
+}
+
+fn is_placeholder_key_char(ch: char) -> bool {
+    !ch.is_whitespace() && !matches!(ch, '{' | '}')
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1066,6 +1272,113 @@ mod tests {
         assert!(PlaceholderCategory::Plugin.participates_in_prompt_preview());
         assert!(PlaceholderCategory::Static.participates_in_prompt_preview());
         assert!(!PlaceholderCategory::StickerMedia.participates_in_prompt_preview());
+    }
+
+    #[test]
+    fn resolve_prompt_preview_tracks_unresolved_tokens_without_touching_partial_markers() {
+        let preview = resolve_prompt_preview(
+            "hello {{known}} {{missing}} {{missing}} {{broken {legacy} {broken",
+            &[PromptPlaceholderValue::new(
+                "known",
+                "world",
+                PlaceholderCategory::Agent,
+                PlaceholderSource::AgentProfile,
+            )],
+        );
+
+        assert_eq!(
+            preview.resolved_prompt,
+            "hello world {{missing}} {{missing}} {{broken {legacy} {broken"
+        );
+        assert_eq!(
+            preview.unresolved_tokens,
+            vec!["missing".to_string(), "legacy".to_string()]
+        );
+        assert_eq!(
+            preview.partial_tokens,
+            vec!["{{broken".to_string(), "{broken".to_string()]
+        );
+    }
+
+    #[test]
+    fn resolve_prompt_preview_does_not_recurse_into_replacement_values() {
+        let preview = resolve_prompt_preview(
+            "{{agent}} {{generic}}",
+            &[
+                PromptPlaceholderValue::new(
+                    "generic",
+                    "runtime",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Runtime,
+                ),
+                PromptPlaceholderValue::new(
+                    "agent",
+                    "{{generic}}",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
+                ),
+            ],
+        );
+
+        assert_eq!(preview.resolved_prompt, "{{generic}} runtime");
+        assert!(preview.unresolved_tokens.is_empty());
+        assert!(preview.partial_tokens.is_empty());
+    }
+
+    #[test]
+    fn resolve_prompt_preview_shadows_sticker_media_when_text_stage_claims_the_same_key() {
+        let preview = resolve_prompt_preview(
+            "{{wave}}",
+            &[
+                PromptPlaceholderValue::new(
+                    "wave",
+                    ":wave:",
+                    PlaceholderCategory::StickerMedia,
+                    PlaceholderSource::StickerPack,
+                ),
+                PromptPlaceholderValue::new(
+                    "wave",
+                    "hello",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
+                ),
+            ],
+        );
+
+        assert_eq!(preview.resolved_prompt, "hello");
+        assert_eq!(
+            preview
+                .records
+                .iter()
+                .map(|record| record.status)
+                .collect::<Vec<_>>(),
+            vec![
+                PromptResolutionStatus::Applied,
+                PromptResolutionStatus::Shadowed,
+            ]
+        );
+        assert!(preview.unresolved_tokens.is_empty());
+        assert!(preview.partial_tokens.is_empty());
+    }
+
+    #[test]
+    fn resolve_prompt_preview_tracks_closed_malformed_tokens_as_partial() {
+        let preview = resolve_prompt_preview(
+            "{{bad key}} {also bad}",
+            &[PromptPlaceholderValue::new(
+                "good",
+                "value",
+                PlaceholderCategory::Agent,
+                PlaceholderSource::AgentBinding,
+            )],
+        );
+
+        assert_eq!(preview.resolved_prompt, "{{bad key}} {also bad}");
+        assert!(preview.unresolved_tokens.is_empty());
+        assert_eq!(
+            preview.partial_tokens,
+            vec!["{{bad key}}".to_string(), "{also bad}".to_string()]
+        );
     }
 
     #[test]
