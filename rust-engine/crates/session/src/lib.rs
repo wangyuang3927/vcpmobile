@@ -121,7 +121,7 @@ impl SessionEngine {
         self.store.upsert_conversation(stored.clone())?;
 
         let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
-        let assistant_delta_parts = streaming_delta_parts(&assistant_node);
+        let assistant_delta_parts = streaming_delta_parts(&assistant_node)?;
 
         Ok(vec![
             EventEnvelope::new(
@@ -304,7 +304,7 @@ pub fn selected_branch_snapshot_nodes(
                 ),
             });
         }
-        ordered_branch.push(selected_variant_snapshot_projection(bundle));
+        ordered_branch.push(selected_variant_snapshot_projection(bundle)?);
 
         match bundle.node.parent_node_id {
             Some(parent_node_id) => current_cursor = parent_node_id,
@@ -357,38 +357,39 @@ fn stored_node_index(stored: &StoredConversation) -> BTreeMap<NodeId, &NodeBundl
         .collect()
 }
 
-fn selected_variant(bundle: &NodeBundle) -> &VariantBundle {
+fn selected_variant(bundle: &NodeBundle) -> Result<&VariantBundle, SessionError> {
     bundle
         .variants
         .get(bundle.node.select_index)
-        .unwrap_or_else(|| {
-            panic!(
+        .ok_or_else(|| SessionError::InvalidConversationState {
+            conversation_id: bundle.node.conversation_id,
+            reason: format!(
                 "node {} select_index {} out of range for {} variants",
                 bundle.node.id,
                 bundle.node.select_index,
                 bundle.variants.len()
-            )
+            ),
         })
 }
 
-fn selected_variant_snapshot_projection(bundle: &NodeBundle) -> NodeBundle {
-    let selected_variant = selected_variant(bundle).clone();
+fn selected_variant_snapshot_projection(bundle: &NodeBundle) -> Result<NodeBundle, SessionError> {
+    let selected_variant = selected_variant(bundle)?.clone();
     let mut node = bundle.node.clone();
     node.select_index = 0;
 
-    NodeBundle {
+    Ok(NodeBundle {
         node,
         variants: vec![selected_variant],
-    }
+    })
 }
 
-fn streaming_delta_parts(bundle: &NodeBundle) -> Vec<MessagePart> {
-    selected_variant(bundle)
+fn streaming_delta_parts(bundle: &NodeBundle) -> Result<Vec<MessagePart>, SessionError> {
+    Ok(selected_variant(bundle)?
         .parts
         .iter()
         .filter(|part| should_emit_in_streaming_delta(&part.payload))
         .cloned()
-        .collect()
+        .collect())
 }
 
 fn should_emit_in_streaming_delta(payload: &MessagePartPayload) -> bool {
@@ -620,7 +621,7 @@ mod tests {
         let now = Utc::now();
         let bundle = build_assistant_node(ConversationId::new_v4(), None, "projection", now);
 
-        let projected = selected_variant_snapshot_projection(&bundle);
+        let projected = selected_variant_snapshot_projection(&bundle).expect("projection");
         let parts = &projected.variants[0].parts;
 
         assert_eq!(projected.variants.len(), 1);
@@ -694,7 +695,7 @@ mod tests {
             ],
         };
 
-        let projected = selected_variant_snapshot_projection(&bundle);
+        let projected = selected_variant_snapshot_projection(&bundle).expect("projection");
 
         assert_eq!(projected.node.select_index, 0);
         assert_eq!(projected.variants.len(), 1);
@@ -706,7 +707,7 @@ mod tests {
         let now = Utc::now();
         let bundle = build_assistant_node(ConversationId::new_v4(), None, "projection", now);
 
-        let parts = streaming_delta_parts(&bundle);
+        let parts = streaming_delta_parts(&bundle).expect("streaming delta");
 
         assert_eq!(parts.len(), 1);
         assert!(matches!(
@@ -1045,8 +1046,7 @@ mod tests {
     }
 
     #[test]
-    #[should_panic(expected = "select_index")]
-    fn selected_variant_snapshot_projection_panics_on_invalid_select_index() {
+    fn selected_variant_snapshot_projection_rejects_invalid_select_index() {
         let now = Utc::now();
         let conversation_id = ConversationId::new_v4();
         let node_id = NodeId::new_v4();
@@ -1082,7 +1082,73 @@ mod tests {
             }],
         };
 
-        let _ = selected_variant_snapshot_projection(&bundle);
+        let error = selected_variant_snapshot_projection(&bundle)
+            .expect_err("invalid select_index must degrade to invalid state");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState { conversation_id: id, .. } if id == conversation_id
+        ));
+    }
+
+    #[test]
+    fn selected_branch_snapshot_nodes_reject_invalid_select_index_on_selected_branch() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let current_cursor = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+        let stored = StoredConversation {
+            conversation: Conversation {
+                id: conversation_id,
+                topic_id: Uuid::new_v4(),
+                agent_id: Uuid::new_v4(),
+                title: "broken select index".to_string(),
+                summary: None,
+                pinned: false,
+                generation_state: GenerationState::Idle,
+                current_cursor: Some(current_cursor),
+                created_at: now,
+                updated_at: now,
+            },
+            nodes: vec![NodeBundle {
+                node: MessageNode {
+                    id: current_cursor,
+                    conversation_id,
+                    parent_node_id: None,
+                    role: MessageRole::Assistant,
+                    select_index: 1,
+                    created_at: now,
+                    updated_at: now,
+                },
+                variants: vec![VariantBundle {
+                    variant: MessageVariant {
+                        id: variant_id,
+                        node_id: current_cursor,
+                        status: VariantStatus::Completed,
+                        model_id: None,
+                        usage_json: None,
+                        created_at: now,
+                        finished_at: Some(now),
+                    },
+                    parts: vec![MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Text {
+                            text: "only".to_string(),
+                        },
+                    }],
+                }],
+            }],
+        };
+
+        let error = selected_branch_snapshot_nodes(&stored)
+            .expect_err("invalid select_index on selected branch must fail cleanly");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState { conversation_id: id, .. } if id == conversation_id
+        ));
     }
 
     #[test]

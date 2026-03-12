@@ -463,6 +463,137 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
+    fun `stream completion without explicit completed event still exits typing state`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"conversation_snapshot",
+                            "data":{
+                              "nodes":[
+                                {
+                                  "node":{"id":"node-user","role":"user","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-user"},
+                                      "parts":[
+                                        {"payload":{"type":"text","text":"stream me"}}
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+
+        viewModel.onInputChanged("stream me")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.detailState.value
+        assertEquals(ChatGenerationPhase.IDLE, state.generation.phase)
+        assertFalse(state.isTyping)
+    }
+
+    @Test
+    fun `non empty snapshot only reconciles optimistic placeholder against matching latest user turn`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            snapshotEnvelope = snapshotEnvelope(
+                conversationId = "conversation-stream",
+                nodeId = "node-user-old",
+                role = "user",
+                text = "older prompt",
+            ),
+            streamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "payload":{
+                            "event":"conversation_snapshot",
+                            "data":{
+                              "nodes":[
+                                {
+                                  "node":{"id":"node-user-old","role":"user","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-user-old"},
+                                      "parts":[
+                                        {"payload":{"type":"text","text":"older prompt"}}
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "node":{"id":"node-assistant-old","role":"assistant","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-assistant-old"},
+                                      "parts":[
+                                        {"payload":{"type":"markdown_block","markdown":"older reply"}}
+                                      ]
+                                    }
+                                  ]
+                                },
+                                {
+                                  "node":{"id":"node-user-new","role":"user","select_index":0},
+                                  "variants":[
+                                    {
+                                      "variant":{"id":"variant-user-new"},
+                                      "parts":[
+                                        {"payload":{"type":"text","text":"latest prompt"}}
+                                      ]
+                                    }
+                                  ]
+                                }
+                              ]
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.recoverConversation("conversation-stream")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.onInputChanged("latest prompt")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val userMessages = viewModel.detailState.value.messages.filter { it.sender == MessageSender.USER }
+        assertEquals(listOf("older prompt", "latest prompt"), userMessages.map { it.content })
+        assertEquals(
+            listOf("node-user-old:variant-user-old", "node-user-new:variant-user-new"),
+            userMessages.map { it.id }
+        )
+        assertTrue(userMessages.none { it.nodeId == null })
+    }
+
+    @Test
     fun `send message ignores second submit while first request is active`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(streamEvents = emptyFlow())
         val recoveryStore = FakeConversationRecoveryStore(null)

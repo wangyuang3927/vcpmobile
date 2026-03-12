@@ -74,9 +74,11 @@ class ChatViewModel @Inject constructor(
             var assistantMessageKey: String? = _detailState.value.generation.activeMessageKey
             val renderBuffer = StreamingRenderBuffer()
             renderBuffer.onMessageKeyChanged(assistantMessageKey)
+            var sawStreamEvent = false
 
             try {
                 repository.observeStream(request).collect { event ->
+                    sawStreamEvent = true
                     when (event) {
                         HubStreamEvent.Opened -> {
                             val activeKey = _detailState.value.generation.activeMessageKey
@@ -146,6 +148,14 @@ class ChatViewModel @Inject constructor(
                             }
                         }
                     }
+                }
+                if (sawStreamEvent && _detailState.value.generation.phase in setOf(
+                        ChatGenerationPhase.REQUESTING,
+                        ChatGenerationPhase.STREAMING,
+                    )
+                ) {
+                    renderBuffer.clear()
+                    dispatchGeneration(ChatGenerationPhase.IDLE, null)
                 }
             } catch (error: Throwable) {
                 renderBuffer.clear()
@@ -336,11 +346,13 @@ class ChatViewModel @Inject constructor(
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
-        val fallbackMessageId = if (sender == MessageSender.USER) {
-            pendingOptimisticUserMessageId
-        } else {
-            null
-        }
+        val fallbackMessageId = resolveSnapshotFallbackMessageId(
+            sender = sender,
+            content = content,
+            reasoning = reasoning,
+            parts = parts,
+            partTypes = partTypes,
+        )
         val result = ChatDetailReducer.replaceOrUpsertSnapshot(
             state = _detailState.value,
             messageId = messageId,
@@ -356,7 +368,11 @@ class ChatViewModel @Inject constructor(
             fallbackNodeId = nodeId,
         )
         _detailState.value = result.state
-        if (sender == MessageSender.USER && fallbackMessageId != null) {
+        if (
+            sender == MessageSender.USER &&
+            fallbackMessageId != null &&
+            result.state.messages.none { it.id == fallbackMessageId }
+        ) {
             pendingOptimisticUserMessageId = null
         }
         return result.messageId
@@ -365,6 +381,41 @@ class ChatViewModel @Inject constructor(
     private fun currentMessage(messageId: String?): ChatMessage? {
         if (messageId == null) return null
         return _detailState.value.messages.firstOrNull { it.id == messageId }
+    }
+
+    private fun resolveSnapshotFallbackMessageId(
+        sender: MessageSender,
+        content: String,
+        reasoning: String,
+        parts: List<UiMessagePart>,
+        partTypes: List<String>,
+    ): String? {
+        if (sender != MessageSender.USER) {
+            return null
+        }
+        val pendingId = pendingOptimisticUserMessageId ?: return null
+        val pendingMessage = currentMessage(pendingId) ?: return null
+        if (
+            pendingMessage.sender != MessageSender.USER ||
+            pendingMessage.nodeId != null ||
+            pendingMessage.variantId != null
+        ) {
+            return null
+        }
+
+        val compatibilityProjection = parts.toCompatibilityProjection()
+        val snapshotContent = compatibilityProjection.content.ifBlank { content }
+        val snapshotReasoning = compatibilityProjection.reasoning ?: reasoning.ifBlank { null }
+        val snapshotPartTypes = compatibilityProjection.partTypes.ifEmpty { partTypes }
+
+        val sameContent = pendingMessage.content == snapshotContent
+        val sameReasoning = pendingMessage.reasoning == snapshotReasoning
+        val samePartTypes = snapshotPartTypes.isEmpty() ||
+            (pendingMessage.parts.isEmpty() && pendingMessage.partTypes.isEmpty()) ||
+            pendingMessage.partTypes == snapshotPartTypes ||
+            pendingMessage.parts.map { it.type.trim().lowercase() } == snapshotPartTypes
+
+        return pendingId.takeIf { sameContent && sameReasoning && samePartTypes }
     }
 
     private fun discardPendingOptimisticUserMessage() {

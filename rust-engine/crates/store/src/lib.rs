@@ -167,6 +167,9 @@ fn cursor_resolves_to_leaf(stored: &StoredConversation) -> bool {
         if bundle.node.conversation_id != stored.conversation.id {
             return false;
         }
+        if bundle.variants.get(bundle.node.select_index).is_none() {
+            return false;
+        }
         current_cursor = match bundle.node.parent_node_id {
             Some(parent_node_id) => parent_node_id,
             None => break,
@@ -310,6 +313,65 @@ mod tests {
                         parent_node_id: Some(NodeId::new_v4()),
                         role: MessageRole::Assistant,
                         select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: variant_id,
+                            node_id,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![],
+                    }],
+                }],
+            })
+            .expect("write stored conversation");
+
+        let items = store
+            .list_conversation_catalog()
+            .expect("load catalog projection");
+
+        assert_eq!(items.len(), 1);
+        assert!(!items[0].is_recoverable);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn catalog_marks_invalid_selected_variant_index_not_recoverable() {
+        let path = temp_store_path("invalid-select-index");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+
+        store
+            .upsert_conversation(StoredConversation {
+                conversation: Conversation {
+                    id: conversation_id,
+                    topic_id: TopicId::new_v4(),
+                    agent_id: AgentId::new_v4(),
+                    title: "broken select index".to_string(),
+                    summary: None,
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: Some(node_id),
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: vec![NodeBundle {
+                    node: MessageNode {
+                        id: node_id,
+                        conversation_id,
+                        parent_node_id: None,
+                        role: MessageRole::Assistant,
+                        select_index: 1,
                         created_at: now,
                         updated_at: now,
                     },
