@@ -205,6 +205,7 @@ Android 主要负责：
 - issue 分支对 `symphony-local-base` 开 PR
 - 不要默认直接对旧 `main` 开 PR
 - GitHub 交付探针与最短提交流程以 `docs/process/gh-delivery.md` 为准
+- issue 引用写法以 `docs/process/symphony-issue-authoring.md` 为准
 
 ## 9. Validation Rules
 
