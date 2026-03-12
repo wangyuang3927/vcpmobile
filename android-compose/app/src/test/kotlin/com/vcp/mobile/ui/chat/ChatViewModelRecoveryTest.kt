@@ -505,7 +505,7 @@ class ChatViewModelRecoveryTest {
         dispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.detailState.value
-        assertEquals(ChatGenerationPhase.IDLE, state.generation.phase)
+        assertEquals(ChatGenerationPhase.COMPLETED, state.generation.phase)
         assertFalse(state.isTyping)
     }
 
@@ -712,7 +712,7 @@ class ChatViewModelRecoveryTest {
 
         val state = viewModel.detailState.value
         val errorMessages = state.messages.filter { it.content.contains("upstream exploded") }
-        assertEquals(ChatGenerationPhase.IDLE, state.generation.phase)
+        assertEquals(ChatGenerationPhase.FAILED, state.generation.phase)
         assertEquals(1, errorMessages.size)
         assertTrue(state.messages.last().content.contains("upstream exploded"))
     }
@@ -740,7 +740,7 @@ class ChatViewModelRecoveryTest {
 
         val state = viewModel.detailState.value
         val errorMessages = state.messages.filter { it.content.contains("no auto retry") }
-        assertEquals(ChatGenerationPhase.IDLE, state.generation.phase)
+        assertEquals(ChatGenerationPhase.FAILED, state.generation.phase)
         assertEquals(1, errorMessages.size)
         assertTrue(state.messages.last().content.contains("no auto retry"))
     }

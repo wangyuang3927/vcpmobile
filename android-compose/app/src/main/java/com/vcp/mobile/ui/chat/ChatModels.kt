@@ -11,8 +11,11 @@ enum class MessageSender {
 enum class ChatGenerationPhase {
     IDLE,
     REQUESTING,
+    STARTED,
     STREAMING,
+    COMPLETED,
     FAILED,
+    CANCELLED,
 }
 
 enum class ChatBodyMode {
@@ -24,7 +27,12 @@ enum class ChatBodyMode {
 data class ChatGenerationState(
     val phase: ChatGenerationPhase = ChatGenerationPhase.IDLE,
     val activeMessageKey: String? = null,
-)
+) {
+    val canResume: Boolean
+        get() = phase == ChatGenerationPhase.REQUESTING ||
+            phase == ChatGenerationPhase.STARTED ||
+            phase == ChatGenerationPhase.STREAMING
+}
 
 data class UiMessagePart(
     val type: String,
@@ -202,6 +210,7 @@ data class ChatDetailState(
 ) {
     val isTyping: Boolean
         get() = generation.phase == ChatGenerationPhase.REQUESTING ||
+            generation.phase == ChatGenerationPhase.STARTED ||
             generation.phase == ChatGenerationPhase.STREAMING
 }
 

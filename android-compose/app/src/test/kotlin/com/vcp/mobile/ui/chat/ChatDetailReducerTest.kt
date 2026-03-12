@@ -8,7 +8,7 @@ import org.junit.Test
 class ChatDetailReducerTest {
 
     @Test
-    fun `user submit enters requesting and completed clears typing`() {
+    fun `user submit enters requesting and completed remains terminal without typing`() {
         val submitted = ChatDetailReducer.reduce(
             ChatDetailReducer.initialState(),
             ChatDetailAction.UserMessageSubmitted("hi")
@@ -20,13 +20,33 @@ class ChatDetailReducerTest {
         val completed = ChatDetailReducer.reduce(
             submitted,
             ChatDetailAction.GenerationLifecycleChanged(
-                phase = ChatGenerationPhase.IDLE,
+                phase = ChatGenerationPhase.COMPLETED,
                 messageKey = null,
             )
         )
 
-        assertEquals(ChatGenerationPhase.IDLE, completed.generation.phase)
+        assertEquals(ChatGenerationPhase.COMPLETED, completed.generation.phase)
         assertFalse(completed.isTyping)
+    }
+
+    @Test
+    fun `system error message does not erase failed lifecycle state`() {
+        val failed = ChatDetailReducer.reduce(
+            ChatDetailReducer.initialState(),
+            ChatDetailAction.GenerationLifecycleChanged(
+                phase = ChatGenerationPhase.FAILED,
+                messageKey = "node-1:variant-1",
+            )
+        )
+
+        val updated = ChatDetailReducer.reduce(
+            failed,
+            ChatDetailAction.SystemMessageAppended("生成失败")
+        )
+
+        assertEquals(ChatGenerationPhase.FAILED, updated.generation.phase)
+        assertEquals("node-1:variant-1", updated.generation.activeMessageKey)
+        assertEquals("生成失败", updated.messages.last().content)
     }
 
     @Test

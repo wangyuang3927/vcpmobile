@@ -216,6 +216,24 @@ Owns runtime orchestration:
 - interrupt/cancel state
 - current generation state
 
+Single-chat send lifecycle must use named Rust states instead of timing guesses:
+
+- `idle`: no active generation for the selected branch
+- `requesting`: user send accepted locally, upstream start not confirmed yet
+- `started`: upstream generation acknowledged, no visible delta applied yet
+- `streaming`: at least one assistant delta has been applied
+- `completed`: generation finished cleanly and selected variant truth is finalized
+- `failed`: generation terminated with an error
+- `cancelled`: generation terminated by explicit interrupt/cancel
+
+Transition contract:
+
+- `idle|completed|failed|cancelled -> requesting` on new send
+- `requesting -> started` on `generation_started`
+- `requesting|started|streaming -> streaming` on first/subsequent delta
+- `requesting|started|streaming -> completed|failed|cancelled` only through explicit terminal events
+- recovery/resume eligibility is anchored to `requesting|started|streaming`, not inferred from elapsed time
+
 ### 6.5 `provider`
 
 Owns upstream adaptation:

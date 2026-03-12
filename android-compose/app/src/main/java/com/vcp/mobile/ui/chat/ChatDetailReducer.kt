@@ -89,7 +89,7 @@ object ChatDetailReducer {
                 ),
                 generation = ChatGenerationState(
                     phase = ChatGenerationPhase.REQUESTING,
-                    activeMessageKey = state.generation.activeMessageKey,
+                    activeMessageKey = null,
                 )
             )
 
@@ -154,10 +154,6 @@ object ChatDetailReducer {
             )
 
             is ChatDetailAction.SystemMessageAppended -> state.copy(
-                generation = ChatGenerationState(
-                    phase = ChatGenerationPhase.IDLE,
-                    activeMessageKey = null,
-                ),
                 messages = state.messages + ChatMessage(
                     sender = action.sender,
                     content = action.text,
@@ -230,17 +226,11 @@ object ChatDetailReducer {
             }
         }
 
-        val nextPhase = when (state.generation.phase) {
-            ChatGenerationPhase.IDLE -> ChatGenerationPhase.STREAMING
-            ChatGenerationPhase.FAILED -> ChatGenerationPhase.STREAMING
-            else -> state.generation.phase
-        }
-
         return AssistantDeltaResult(
             state = state.copy(
                 messages = updatedMessages,
                 generation = state.generation.copy(
-                    phase = nextPhase,
+                    phase = streamingPhase(state.generation.phase),
                     activeMessageKey = targetId,
                 ),
                 contentVersion = state.contentVersion + 1,
@@ -296,22 +286,23 @@ object ChatDetailReducer {
             }
         }
 
-        val nextPhase = when (state.generation.phase) {
-            ChatGenerationPhase.IDLE -> ChatGenerationPhase.STREAMING
-            ChatGenerationPhase.FAILED -> ChatGenerationPhase.STREAMING
-            else -> state.generation.phase
-        }
-
         return AssistantDeltaResult(
             state = state.copy(
                 messages = updatedMessages,
                 generation = state.generation.copy(
-                    phase = nextPhase,
+                    phase = streamingPhase(state.generation.phase),
                     activeMessageKey = messageId,
                 ),
                 contentVersion = state.contentVersion + 1,
             ),
             messageId = messageId,
         )
+    }
+
+    private fun streamingPhase(currentPhase: ChatGenerationPhase): ChatGenerationPhase {
+        return when (currentPhase) {
+            ChatGenerationPhase.STREAMING -> ChatGenerationPhase.STREAMING
+            else -> ChatGenerationPhase.STREAMING
+        }
     }
 }
