@@ -342,7 +342,9 @@ object RustChatEventParser {
                 "error" -> {
                     val message = payload.optString("message")
                     orderedParts += RustMessagePart(type = type, text = message)
-                    textBuilder.append(message)
+                    if (textBuilder.isNotEmpty()) {
+                        textBuilder.append(message)
+                    }
                 }
             }
         }
