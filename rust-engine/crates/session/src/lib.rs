@@ -1,5 +1,5 @@
-use base64::{engine::general_purpose::STANDARD, Engine as _};
-use chrono::Utc;
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{DateTime, Duration, Utc};
 use sha2::{Digest, Sha256};
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
@@ -8,15 +8,19 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
-    Conversation, ConversationId, DocumentAttachmentInput, DocumentDescriptor,
-    DocumentPromptTransformItem, DocumentPromptTransformOutput, DocumentPromptTransformStatus,
-    GenerationSignal, GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole,
-    MessageVariant, NodeId, TopicId, VariantStatus, DOCUMENT_MIME_APPLICATION_PDF,
-    DOCUMENT_MIME_DOCX, DOCUMENT_MIME_PPTX, DOCUMENT_MIME_TEXT_MARKDOWN, DOCUMENT_MIME_TEXT_PLAIN,
+    Conversation, ConversationId, DOCUMENT_MIME_APPLICATION_PDF, DOCUMENT_MIME_DOCX,
+    DOCUMENT_MIME_PPTX, DOCUMENT_MIME_TEXT_MARKDOWN, DOCUMENT_MIME_TEXT_PLAIN,
+    DocumentAttachmentInput, DocumentDescriptor, DocumentPromptTransformItem,
+    DocumentPromptTransformOutput, DocumentPromptTransformStatus, GenerationSignal,
+    GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
+    NodeId, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{
-    ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
-    SnapshotPart, SnapshotVariant, UpsertBranch, VariantBundle,
+    ChatEvent, EventEnvelope, NodeBundle, PairingExchangeError, PairingExchangeFailureResponse,
+    PairingExchangeFailureStatus, PairingExchangeRequest, PairingExchangeSuccessResponse,
+    PairingExchangeSuccessStatus, PairingMobileToken, PairingResumeAnchor, PairingTrustedDevice,
+    SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
+    UpsertBranch, VariantBundle,
 };
 use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
 
@@ -33,6 +37,8 @@ pub struct SessionEngine {
     default_topic_id: TopicId,
     default_agent_id: Uuid,
     active_streams: BTreeMap<ConversationId, ActiveStreamSession>,
+    pairing_sessions: BTreeMap<String, BootstrapPairingSession>,
+    mobile_sessions: BTreeMap<String, MobileSessionRecord>,
 }
 
 #[derive(Debug, Clone)]
@@ -98,10 +104,54 @@ pub struct SessionSelectVariantRequest {
 }
 
 #[derive(Debug, Clone)]
+pub struct PairingBootstrapSeed {
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub bootstrap_token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
 struct PreparedDocumentAttachment {
     descriptor: DocumentDescriptor,
     bytes: Vec<u8>,
 }
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct BootstrapPairingSession {
+    namespace: String,
+    bootstrap_token: String,
+    expires_at: DateTime<Utc>,
+    state: BootstrapPairingState,
+    trusted_device_id: Option<String>,
+    completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BootstrapPairingState {
+    Pending,
+    Paired,
+    Expired,
+}
+
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+struct MobileSessionRecord {
+    pairing_session_id: String,
+    namespace: String,
+    trusted_device_id: String,
+    device_name: String,
+    device_public_key: String,
+    issued_at: DateTime<Utc>,
+    expires_at: DateTime<Utc>,
+    revoked_at: Option<DateTime<Utc>>,
+    resume_anchor: String,
+    resume_anchor_expires_at: DateTime<Utc>,
+}
+
+const MOBILE_TOKEN_TTL_MINUTES: i64 = 15;
+const RESUME_ANCHOR_TTL_DAYS: i64 = 7;
 
 #[derive(Debug, Error)]
 pub enum DocumentTransformError {
@@ -160,6 +210,8 @@ impl SessionEngine {
             default_topic_id,
             default_agent_id,
             active_streams: BTreeMap::new(),
+            pairing_sessions: BTreeMap::new(),
+            mobile_sessions: BTreeMap::new(),
         }
     }
 
@@ -194,6 +246,141 @@ impl SessionEngine {
         attachments: Vec<DocumentAttachmentInput>,
     ) -> Result<DocumentPromptTransformOutput, SessionError> {
         transform_document_prompt_output(&attachments).map_err(SessionError::from)
+    }
+
+    pub fn seed_pairing_session(&mut self, seed: PairingBootstrapSeed) {
+        self.pairing_sessions.insert(
+            seed.pairing_session_id,
+            BootstrapPairingSession {
+                namespace: seed.namespace,
+                bootstrap_token: seed.bootstrap_token,
+                expires_at: seed.expires_at,
+                state: BootstrapPairingState::Pending,
+                trusted_device_id: None,
+                completed_at: None,
+            },
+        );
+    }
+
+    pub fn exchange_pairing(
+        &mut self,
+        request: PairingExchangeRequest,
+    ) -> Result<PairingExchangeSuccessResponse, PairingExchangeFailureResponse> {
+        let now = Utc::now();
+        let Some(session) = self.pairing_sessions.get_mut(&request.pairing_session_id) else {
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Rejected,
+                "pairing_session_not_found",
+                "pairing session not found",
+                false,
+            ));
+        };
+
+        if session.namespace != request.namespace {
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Rejected,
+                "pairing_namespace_mismatch",
+                "pairing namespace does not match bootstrap session",
+                false,
+            ));
+        }
+
+        match session.state {
+            BootstrapPairingState::Paired => {
+                return Err(pairing_exchange_failure(
+                    Some(request.pairing_session_id),
+                    Some(request.namespace),
+                    PairingExchangeFailureStatus::Revoked,
+                    "bootstrap_token_replayed",
+                    "bootstrap token already exchanged",
+                    false,
+                ));
+            }
+            BootstrapPairingState::Expired => {
+                return Err(pairing_exchange_failure(
+                    Some(request.pairing_session_id),
+                    Some(request.namespace),
+                    PairingExchangeFailureStatus::Expired,
+                    "bootstrap_token_expired",
+                    "bootstrap token expired",
+                    false,
+                ));
+            }
+            BootstrapPairingState::Pending => {}
+        }
+
+        if session.expires_at <= now {
+            session.state = BootstrapPairingState::Expired;
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Expired,
+                "bootstrap_token_expired",
+                "bootstrap token expired",
+                false,
+            ));
+        }
+
+        if session.bootstrap_token != request.bootstrap_token {
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Rejected,
+                "bootstrap_token_invalid",
+                "bootstrap token invalid",
+                false,
+            ));
+        }
+
+        let trusted_device_id = format!("trusted-device-{}", Uuid::new_v4().simple());
+        let access_token = format!("mobile-token-{}", Uuid::new_v4().simple());
+        let resume_anchor = format!("resume-anchor-{}", Uuid::new_v4().simple());
+        let mobile_expires_at = now + Duration::minutes(MOBILE_TOKEN_TTL_MINUTES);
+        let resume_expires_at = now + Duration::days(RESUME_ANCHOR_TTL_DAYS);
+
+        session.state = BootstrapPairingState::Paired;
+        session.trusted_device_id = Some(trusted_device_id.clone());
+        session.completed_at = Some(now);
+
+        self.mobile_sessions.insert(
+            access_token.clone(),
+            MobileSessionRecord {
+                pairing_session_id: request.pairing_session_id.clone(),
+                namespace: request.namespace.clone(),
+                trusted_device_id: trusted_device_id.clone(),
+                device_name: request.device_name.clone(),
+                device_public_key: request.device_public_key.clone(),
+                issued_at: now,
+                expires_at: mobile_expires_at,
+                revoked_at: None,
+                resume_anchor: resume_anchor.clone(),
+                resume_anchor_expires_at: resume_expires_at,
+            },
+        );
+
+        Ok(PairingExchangeSuccessResponse {
+            pairing_session_id: request.pairing_session_id,
+            namespace: request.namespace,
+            status: PairingExchangeSuccessStatus::Paired,
+            mobile_token: PairingMobileToken {
+                access_token,
+                token_type: "bearer".to_string(),
+                expires_at: mobile_expires_at,
+            },
+            trusted_device: PairingTrustedDevice {
+                trusted_device_id,
+                device_name: request.device_name,
+                device_platform: request.device_platform,
+            },
+            resume_anchor: PairingResumeAnchor {
+                anchor: resume_anchor,
+                expires_at: resume_expires_at,
+            },
+        })
     }
 
     pub fn start_stream_session(
@@ -1024,6 +1211,26 @@ impl SessionEngine {
                 },
             },
         )])
+    }
+}
+
+fn pairing_exchange_failure(
+    pairing_session_id: Option<String>,
+    namespace: Option<String>,
+    status: PairingExchangeFailureStatus,
+    code: &str,
+    message: &str,
+    retriable: bool,
+) -> PairingExchangeFailureResponse {
+    PairingExchangeFailureResponse {
+        pairing_session_id,
+        namespace,
+        status,
+        error: PairingExchangeError {
+            code: code.to_string(),
+            message: message.to_string(),
+            retriable,
+        },
     }
 }
 
@@ -1946,7 +2153,7 @@ pub fn demo_stream(
                 branch: SnapshotBranch {
                     cursor_node_id: conversation.current_cursor,
                     nodes: vec![
-                        selected_node_projection(&node_bundle).expect("demo node projection")
+                        selected_node_projection(&node_bundle).expect("demo node projection"),
                     ],
                 },
             },
@@ -1992,11 +2199,23 @@ mod tests {
         io::{Cursor, Write},
     };
     use vcpmobile_domain::AgentId;
+    use vcpmobile_protocol::{
+        PairingDevicePlatform, PairingExchangeFailureStatus, PairingExchangeRequest,
+    };
 
     fn test_engine() -> SessionEngine {
         let path = env::temp_dir().join(format!("vcpmobile-session-test-{}.json", Uuid::new_v4()));
         let store = FileStore::new(path);
         SessionEngine::new(store, Uuid::new_v4(), Uuid::new_v4())
+    }
+
+    fn seed_pairing(engine: &mut SessionEngine, expires_at: DateTime<Utc>) {
+        engine.seed_pairing_session(PairingBootstrapSeed {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            bootstrap_token: "bootstrap-secret".to_string(),
+            expires_at,
+        });
     }
 
     #[test]
@@ -2509,9 +2728,11 @@ mod tests {
             output.items[0].extracted_char_count,
             "hello\nworld".chars().count()
         );
-        assert!(output.items[0]
-            .prompt_text
-            .contains("[Document: notes.txt]"));
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("[Document: notes.txt]")
+        );
         assert!(output.items[0].prompt_text.contains("MIME: text/plain"));
         assert!(output.items[0].prompt_text.contains("hello\nworld"));
         assert_eq!(output.combined_prompt_text, output.items[0].prompt_text);
@@ -2533,14 +2754,18 @@ mod tests {
             output.items[0].status,
             DocumentPromptTransformStatus::ParseFailed
         );
-        assert!(output.items[0]
-            .prompt_text
-            .contains("[Document Parse Failure: broken.pdf]"));
-        assert!(output.items[0]
-            .error
-            .as_deref()
-            .expect("parse failure error")
-            .contains("invalid base64 payload"));
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("[Document Parse Failure: broken.pdf]")
+        );
+        assert!(
+            output.items[0]
+                .error
+                .as_deref()
+                .expect("parse failure error")
+                .contains("invalid base64 payload")
+        );
     }
 
     #[test]
@@ -2555,9 +2780,11 @@ mod tests {
             .expect("transform docx");
 
         assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
-        assert!(output.items[0]
-            .prompt_text
-            .contains("Hello DOCX\nSecond line"));
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("Hello DOCX\nSecond line")
+        );
     }
 
     #[test]
@@ -2572,9 +2799,11 @@ mod tests {
             .expect("transform pptx");
 
         assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
-        assert!(output.items[0]
-            .prompt_text
-            .contains("Hello PPTX\n\nSecond slide"));
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("Hello PPTX\n\nSecond slide")
+        );
     }
 
     #[test]
@@ -4125,9 +4354,11 @@ mod tests {
                 ],
             })
             .expect("persist restart fixture");
-        assert!(store
-            .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
-            .expect("select second variant"));
+        assert!(
+            store
+                .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
+                .expect("select second variant")
+        );
 
         let recovered = engine
             .snapshot_for(conversation_id)
@@ -4149,5 +4380,88 @@ mod tests {
         );
 
         fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_issues_short_lived_mobile_token_and_resume_anchor() {
+        let mut engine = test_engine();
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let response = engine
+            .exchange_pairing(PairingExchangeRequest {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+                device_public_key: "base64-public-key".to_string(),
+            })
+            .expect("pairing exchange succeeds");
+
+        assert_eq!(response.status, PairingExchangeSuccessStatus::Paired);
+        assert_eq!(response.mobile_token.token_type, "bearer");
+        assert!(
+            response
+                .mobile_token
+                .access_token
+                .starts_with("mobile-token-")
+        );
+        assert!(response.resume_anchor.anchor.starts_with("resume-anchor-"));
+        assert_eq!(response.trusted_device.device_name, "Pixel 9");
+        assert!(response.mobile_token.expires_at > Utc::now());
+        assert!(response.resume_anchor.expires_at > response.mobile_token.expires_at);
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_rejects_replay_after_successful_exchange() {
+        let mut engine = test_engine();
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let request = PairingExchangeRequest {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            bootstrap_token: "bootstrap-secret".to_string(),
+            device_name: "Pixel 9".to_string(),
+            device_platform: PairingDevicePlatform::Android,
+            device_public_key: "base64-public-key".to_string(),
+        };
+
+        engine
+            .exchange_pairing(request.clone())
+            .expect("first exchange succeeds");
+        let failure = engine
+            .exchange_pairing(request)
+            .expect_err("second exchange should be rejected");
+
+        assert_eq!(failure.status, PairingExchangeFailureStatus::Revoked);
+        assert_eq!(failure.error.code, "bootstrap_token_replayed");
+        assert!(!failure.error.retriable);
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_rejects_expired_bootstrap_token() {
+        let mut engine = test_engine();
+        seed_pairing(&mut engine, Utc::now() - Duration::seconds(1));
+
+        let failure = engine
+            .exchange_pairing(PairingExchangeRequest {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+                device_public_key: "base64-public-key".to_string(),
+            })
+            .expect_err("expired bootstrap should fail");
+
+        assert_eq!(failure.status, PairingExchangeFailureStatus::Expired);
+        assert_eq!(failure.error.code, "bootstrap_token_expired");
+        assert!(!failure.error.retriable);
+
+        fs::remove_file(engine.store().path()).ok();
     }
 }
