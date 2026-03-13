@@ -9,6 +9,7 @@ import okhttp3.Request
 import okhttp3.Response
 import okhttp3.ResponseBody.Companion.toResponseBody
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -227,6 +228,187 @@ class OkHttpSseHubApiClientTest {
         assertEquals("rejected", response.status)
         assertEquals("bootstrap_token_expired", response.error.code)
         assertEquals(false, response.error.retriable)
+    }
+
+    @Test
+    fun `parseAgentConfig returns frozen mobile_v1 document shape`() {
+        val agent = client.parseAgentConfig(
+            """
+            {
+              "id": "8f5a4569-4494-41d3-8201-ecf5efcdd4a5",
+              "identity": {
+                "name": "Planner",
+                "avatar_uri": "file:///planner.png",
+                "description": "Plans the next move"
+              },
+              "prompt": {
+                "system_prompt": "You are a planner.",
+                "prompt_mode": "system_and_message_template",
+                "message_template": "Plan for {{goal}}",
+                "placeholders": [
+                  {
+                    "key": "goal",
+                    "label": "Goal",
+                    "value": "Ship the bridge contract",
+                    "description": "Current objective"
+                  }
+                ]
+              },
+              "model": {
+                "provider_local_id": "provider_local_demo",
+                "preset_local_id": "provider_preset_local_balanced",
+                "model_id": "gpt-4.1-mini"
+              },
+              "request": {
+                "temperature": 0.7,
+                "top_p": 0.9,
+                "max_output_tokens": 1024,
+                "reasoning_effort": "medium"
+              },
+              "memory": {
+                "use_conversation_memory": true,
+                "pin_top_level_facts": true
+              },
+              "tools": {
+                "enable_local_tools": false,
+                "overrides": [
+                  {
+                    "tool_id": "search",
+                    "enabled": false
+                  }
+                ]
+              },
+              "group": {
+                "role_label": "Analyst",
+                "aliases": ["planner"],
+                "mention_tags": ["ops"],
+                "respond_to_mentions": true,
+                "allow_auto_relay": true
+              },
+              "created_at": "2026-03-13T00:00:00Z",
+              "updated_at": "2026-03-13T01:00:00Z"
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("Planner", agent.identity.name)
+        assertEquals("system_and_message_template", agent.prompt.promptMode)
+        assertEquals("goal", agent.prompt.placeholders.single().key)
+        assertEquals("provider_local_demo", agent.model.providerLocalId)
+        assertEquals(0.7f, agent.request.temperature ?: 0f, 0.0001f)
+        assertEquals(0.9f, agent.request.topP ?: 0f, 0.0001f)
+        assertEquals(1024, agent.request.maxOutputTokens)
+        assertEquals("medium", agent.request.reasoningEffort)
+        assertFalse(agent.tools.enableLocalTools)
+        assertEquals(listOf("planner"), agent.group.aliases)
+        assertEquals("2026-03-13T01:00:00Z", agent.updatedAt)
+    }
+
+    @Test
+    fun `parseBridgeFailure returns structured validation feedback`() {
+        val failure = client.parseBridgeFailure(
+            statusCode = 400,
+            statusMessage = "Bad Request",
+            raw = """
+            {
+              "error": {
+                "kind": "validation",
+                "code": "agent_config_invalid",
+                "message": "prompt.system_prompt must be non-empty",
+                "retriable": false
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals(400, failure.statusCode)
+        assertEquals("validation", failure.error.kind)
+        assertEquals("agent_config_invalid", failure.error.code)
+        assertEquals("prompt.system_prompt must be non-empty", failure.error.message)
+        assertFalse(failure.error.retriable)
+    }
+
+    @Test
+    fun `createAgent returns explicit validation failure payload instead of opaque exception`() = runBlocking {
+        val agentClient = OkHttpSseHubApiClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    Response.Builder()
+                        .request(chain.request())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(400)
+                        .message("Bad Request")
+                        .body(
+                            """
+                            {
+                              "error": {
+                                "kind": "validation",
+                                "code": "agent_config_invalid",
+                                "message": "identity.name must be non-empty",
+                                "retriable": false
+                              }
+                            }
+                            """.trimIndent().toResponseBody("application/json".toMediaType())
+                        )
+                        .build()
+                }
+                .build(),
+            baseUrl = "http://localhost:4001"
+        )
+
+        val result = agentClient.createAgent(
+            HubAgentConfig(
+                id = "8f5a4569-4494-41d3-8201-ecf5efcdd4a5",
+                identity = HubAgentIdentityConfig(name = ""),
+                prompt = HubAgentPromptConfig(systemPrompt = "You are a planner.")
+            )
+        )
+
+        assertTrue(result is HubAgentMutationResult.Failure)
+        val failure = (result as HubAgentMutationResult.Failure).failure
+        assertEquals(400, failure.statusCode)
+        assertEquals("agent_config_invalid", failure.error.code)
+        assertEquals("identity.name must be non-empty", failure.error.message)
+    }
+
+    @Test
+    fun `listAgents parses Rust-owned truth document array`() = runBlocking {
+        val agentClient = OkHttpSseHubApiClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    Response.Builder()
+                        .request(chain.request())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(200)
+                        .message("OK")
+                        .body(
+                            """
+                            [
+                              {
+                                "id": "8f5a4569-4494-41d3-8201-ecf5efcdd4a5",
+                                "identity": {
+                                  "name": "Planner"
+                                },
+                                "prompt": {
+                                  "system_prompt": "You are a planner."
+                                },
+                                "created_at": "2026-03-13T00:00:00Z",
+                                "updated_at": "2026-03-13T01:00:00Z"
+                              }
+                            ]
+                            """.trimIndent().toResponseBody("application/json".toMediaType())
+                        )
+                        .build()
+                }
+                .build(),
+            baseUrl = "http://localhost:4001"
+        )
+
+        val agents = agentClient.listAgents()
+
+        assertEquals(1, agents.size)
+        assertEquals("Planner", agents.single().identity.name)
+        assertEquals("You are a planner.", agents.single().prompt.systemPrompt)
     }
 
     @Test

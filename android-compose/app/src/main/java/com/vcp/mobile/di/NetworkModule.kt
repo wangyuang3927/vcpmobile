@@ -3,6 +3,8 @@ package com.vcp.mobile.di
 import com.vcp.mobile.BuildConfig
 import com.vcp.mobile.data.network.HubApiClient
 import com.vcp.mobile.data.network.OkHttpSseHubApiClient
+import com.vcp.mobile.data.repository.HubAgentRepository
+import com.vcp.mobile.data.repository.HubAgentRepositoryImpl
 import com.vcp.mobile.data.repository.HubChatRepository
 import com.vcp.mobile.data.repository.HubChatRepositoryImpl
 import dagger.Module
@@ -56,5 +58,11 @@ object NetworkModule {
     @Singleton
     fun provideHubChatRepository(hubApiClient: HubApiClient): HubChatRepository {
         return HubChatRepositoryImpl(hubApiClient)
+    }
+
+    @Provides
+    @Singleton
+    fun provideHubAgentRepository(hubApiClient: HubApiClient): HubAgentRepository {
+        return HubAgentRepositoryImpl(hubApiClient)
     }
 }
