@@ -453,27 +453,17 @@ async fn agent_prompt_preview(
 }
 
 async fn pairing_exchange(
+    State(state): State<AppState>,
     Json(body): Json<PairingExchangeRequest>,
 ) -> Result<Json<PairingExchangeSuccessResponse>, (StatusCode, Json<PairingExchangeFailureResponse>)>
 {
     validate_pairing_exchange_request(&body)
         .map_err(|failure| (StatusCode::BAD_REQUEST, Json(failure)))?;
-
-    Err((
-        StatusCode::NOT_IMPLEMENTED,
-        Json(PairingExchangeFailureResponse {
-            pairing_session_id: Some(body.pairing_session_id),
-            namespace: Some(body.namespace),
-            status: PairingExchangeFailureStatus::Rejected,
-            error: PairingExchangeError {
-                code: "pairing_exchange_not_ready".to_string(),
-                message:
-                    "pairing exchange contract is frozen, but token issuance is implemented in TES-43"
-                        .to_string(),
-                retriable: true,
-            },
-        }),
-    ))
+    let mut engine = state.engine.lock().await;
+    engine
+        .exchange_pairing(body)
+        .map(Json)
+        .map_err(|failure| (pairing_failure_status_code(&failure), Json(failure)))
 }
 
 async fn chat_edit(
@@ -874,6 +864,17 @@ fn pairing_validation_failure(
     }
 }
 
+fn pairing_failure_status_code(failure: &PairingExchangeFailureResponse) -> StatusCode {
+    match failure.error.code.as_str() {
+        "pairing_session_not_found" => StatusCode::NOT_FOUND,
+        _ => match failure.status {
+            PairingExchangeFailureStatus::Rejected => StatusCode::BAD_REQUEST,
+            PairingExchangeFailureStatus::Expired => StatusCode::GONE,
+            PairingExchangeFailureStatus::Revoked => StatusCode::CONFLICT,
+        },
+    }
+}
+
 fn reject_duplicate_provider_create(
     store: &FileStore,
     provider: &ProviderConfig,
@@ -1032,6 +1033,7 @@ mod tests {
     use std::{env, fs};
     use tower::util::ServiceExt;
     use vcpmobile_domain::TopicId;
+    use vcpmobile_session::PairingBootstrapSeed;
 
     fn test_store_path(name: &str) -> PathBuf {
         env::temp_dir().join(format!(
@@ -1040,12 +1042,21 @@ mod tests {
         ))
     }
 
-    fn test_app(name: &str) -> (Router, PathBuf) {
+    fn test_app_with_engine(name: &str) -> (Router, Arc<Mutex<SessionEngine>>, PathBuf) {
         let path = test_store_path(name);
-        let engine = SessionEngine::new(FileStore::new(&path), TopicId::new_v4(), Uuid::new_v4());
+        let engine = Arc::new(Mutex::new(SessionEngine::new(
+            FileStore::new(&path),
+            TopicId::new_v4(),
+            Uuid::new_v4(),
+        )));
         let app = app(AppState {
-            engine: Arc::new(Mutex::new(engine)),
+            engine: engine.clone(),
         });
+        (app, engine, path)
+    }
+
+    fn test_app(name: &str) -> (Router, PathBuf) {
+        let (app, _engine, path) = test_app_with_engine(name);
         (app, path)
     }
 
@@ -1196,8 +1207,17 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn pairing_exchange_route_freezes_not_ready_failure_shape_after_validation() {
-        let (app, path) = test_app("pairing-not-ready");
+    async fn pairing_exchange_route_issues_mobile_token_for_seeded_bootstrap() {
+        let (app, engine, path) = test_app_with_engine("pairing-success");
+        engine
+            .lock()
+            .await
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            });
         let request = json!({
             "pairing_session_id": "pairing-session-1",
             "namespace": "workspace-alpha",
@@ -1210,12 +1230,97 @@ mod tests {
         let (status, body) =
             json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
 
-        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(status, StatusCode::OK);
         assert_eq!(body["pairing_session_id"], "pairing-session-1");
         assert_eq!(body["namespace"], "workspace-alpha");
-        assert_eq!(body["status"], "rejected");
-        assert_eq!(body["error"]["code"], "pairing_exchange_not_ready");
-        assert_eq!(body["error"]["retriable"], true);
+        assert_eq!(body["status"], "paired");
+        assert_eq!(body["mobile_token"]["token_type"], "bearer");
+        assert!(
+            body["mobile_token"]["access_token"]
+                .as_str()
+                .expect("mobile token")
+                .starts_with("mobile-token-")
+        );
+        assert_eq!(body["trusted_device"]["device_name"], "Pixel 9");
+        assert!(
+            body["resume_anchor"]["anchor"]
+                .as_str()
+                .expect("resume anchor")
+                .starts_with("resume-anchor-")
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_rejects_replayed_bootstrap_token() {
+        let (app, engine, path) = test_app_with_engine("pairing-replay");
+        engine
+            .lock()
+            .await
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            });
+        let request = json!({
+            "pairing_session_id": "pairing-session-1",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (first_status, _) = json_request(
+            app.clone(),
+            "POST",
+            "/api/pairing/exchange",
+            Some(request.clone()),
+        )
+        .await;
+        assert_eq!(first_status, StatusCode::OK);
+
+        let (second_status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(second_status, StatusCode::CONFLICT);
+        assert_eq!(body["status"], "revoked");
+        assert_eq!(body["error"]["code"], "bootstrap_token_replayed");
+        assert_eq!(body["error"]["retriable"], false);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_rejects_expired_bootstrap_token() {
+        let (app, engine, path) = test_app_with_engine("pairing-expired");
+        engine
+            .lock()
+            .await
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+            });
+        let request = json!({
+            "pairing_session_id": "pairing-session-1",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(body["status"], "expired");
+        assert_eq!(body["error"]["code"], "bootstrap_token_expired");
+        assert_eq!(body["error"]["retriable"], false);
 
         fs::remove_file(path).ok();
     }
