@@ -17,11 +17,11 @@ use tokio_stream::StreamExt;
 use uuid::Uuid;
 use vcpmobile_domain::{ConversationId, DocumentAttachmentInput, GenerationState};
 use vcpmobile_protocol::{
-    ChatEvent, EditMessageRequest, EventEnvelope, SnapshotBranch, SnapshotConversation,
-    TransformDocumentPromptRequest, TransformDocumentPromptResponse,
+    ChatEvent, EditMessageRequest, EventEnvelope, EventError, EventErrorKind, SnapshotBranch,
+    SnapshotConversation, TransformDocumentPromptRequest, TransformDocumentPromptResponse,
 };
 use vcpmobile_session::{
-    SessionEditRequest, SessionEngine, SessionSendRequest, demo_conversation,
+    SessionEditRequest, SessionEngine, SessionSendRequest, StreamSessionStart, demo_conversation,
     selected_branch_snapshot_nodes,
 };
 use vcpmobile_store::FileStore;
@@ -81,6 +81,11 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/conversations", get(chat_conversations))
         .route("/api/chat/catalog", get(chat_catalog))
         .route("/api/chat", post(chat_send))
+        .route("/api/chat/cancel/{conversation_id}", post(chat_cancel))
+        .route(
+            "/api/chat/interrupt/{conversation_id}",
+            post(chat_interrupt),
+        )
         .route("/api/chat/edit", post(chat_edit))
         .route("/api/chat/document-prompt", post(chat_document_prompt))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
@@ -183,9 +188,10 @@ async fn chat_send(
         ));
     }
 
-    let engine = state.engine.lock().await;
-    let events = engine
-        .send_message(SessionSendRequest {
+    let engine_handle = Arc::clone(&state.engine);
+    let mut engine = engine_handle.lock().await;
+    let started = engine
+        .start_stream_session(SessionSendRequest {
             conversation_id: body.conversation_id,
             text: user_text,
             attachments: latest_user_message.attachments.clone(),
@@ -194,13 +200,20 @@ async fn chat_send(
             vcpmobile_session::SessionError::ConversationNotFound(_) => {
                 (axum::http::StatusCode::NOT_FOUND, error.to_string())
             }
+            vcpmobile_session::SessionError::ActiveGenerationExists { .. } => {
+                (axum::http::StatusCode::CONFLICT, error.to_string())
+            }
+            vcpmobile_session::SessionError::EmptyText => {
+                (axum::http::StatusCode::BAD_REQUEST, error.to_string())
+            }
             _ => (
                 axum::http::StatusCode::INTERNAL_SERVER_ERROR,
                 error.to_string(),
             ),
         })?;
+    drop(engine);
 
-    Ok(build_event_stream(events))
+    Ok(build_live_session_stream(state, started))
 }
 
 async fn chat_document_prompt(
@@ -213,6 +226,60 @@ async fn chat_document_prompt(
         .map_err(|error| (axum::http::StatusCode::BAD_REQUEST, error.to_string()))?;
 
     Ok(Json(TransformDocumentPromptResponse { output }))
+}
+
+async fn chat_cancel(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    let conversation_id = parse_conversation_id(&conversation_id)?;
+    let mut engine = state.engine.lock().await;
+    engine
+        .cancel_stream_session(conversation_id, Some("cancelled by client".to_string()))
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::NoActiveGeneration { .. } => {
+                (axum::http::StatusCode::CONFLICT, error.to_string())
+            }
+            vcpmobile_session::SessionError::ConversationNotFound(_) => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            ),
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "conversation_id": conversation_id,
+        "status": "cancelling"
+    })))
+}
+
+async fn chat_interrupt(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+    let conversation_id = parse_conversation_id(&conversation_id)?;
+    let mut engine = state.engine.lock().await;
+    engine
+        .interrupt_stream_session(conversation_id, None)
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::NoActiveGeneration { .. } => {
+                (axum::http::StatusCode::CONFLICT, error.to_string())
+            }
+            vcpmobile_session::SessionError::ConversationNotFound(_) => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (
+                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
+                error.to_string(),
+            ),
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "conversation_id": conversation_id,
+        "status": "interrupting"
+    })))
 }
 
 async fn chat_edit(
@@ -259,9 +326,7 @@ async fn chat_stream(
     Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
     (axum::http::StatusCode, String),
 > {
-    let conversation_id = Uuid::parse_str(&conversation_id)
-        .map(ConversationId::from)
-        .map_err(|error| (axum::http::StatusCode::BAD_REQUEST, error.to_string()))?;
+    let conversation_id = parse_conversation_id(&conversation_id)?;
     let engine = state.engine.lock().await;
     let stored = engine
         .snapshot_for(conversation_id)
@@ -295,10 +360,69 @@ async fn chat_stream(
     Ok(build_event_stream(events))
 }
 
+fn parse_conversation_id(
+    conversation_id: &str,
+) -> Result<ConversationId, (axum::http::StatusCode, String)> {
+    Uuid::parse_str(conversation_id)
+        .map(ConversationId::from)
+        .map_err(|error| (axum::http::StatusCode::BAD_REQUEST, error.to_string()))
+}
+
 fn build_event_stream(
     events: Vec<EventEnvelope<ChatEvent>>,
 ) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
     let stream = stream::iter(events)
+        .throttle(Duration::from_millis(250))
+        .map(|envelope| {
+            let payload = serde_json::to_string(&envelope).expect("serialize event");
+            Ok(Event::default().event("chat_event").data(payload))
+        });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keep-alive"),
+    )
+}
+
+fn build_live_session_stream(
+    state: AppState,
+    started: StreamSessionStart,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let conversation_id = started.conversation_id;
+    let initial_stream = stream::iter(started.initial_events);
+    let follow_up_stream = stream::unfold(Some((state, conversation_id)), |state| async move {
+        let Some((state, conversation_id)) = state else {
+            return None;
+        };
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let next_event = {
+            let mut engine = state.engine.lock().await;
+            engine.poll_stream_event(conversation_id)
+        };
+
+        match next_event {
+            Ok(Some(event)) => Some((event, Some((state, conversation_id)))),
+            Ok(None) => None,
+            Err(error) => Some((
+                EventEnvelope::new(
+                    Some(conversation_id),
+                    ChatEvent::EngineError {
+                        error: EventError {
+                            kind: EventErrorKind::Internal,
+                            code: Some("stream_session_dispatch_failed".to_string()),
+                            message: error.to_string(),
+                            retriable: false,
+                        },
+                    },
+                ),
+                None,
+            )),
+        }
+    });
+
+    let stream = initial_stream
+        .chain(follow_up_stream)
         .throttle(Duration::from_millis(250))
         .map(|envelope| {
             let payload = serde_json::to_string(&envelope).expect("serialize event");
