@@ -4,6 +4,7 @@ use std::{
     collections::{BTreeMap, BTreeSet, btree_map::Entry},
     fs,
     path::{Path, PathBuf},
+    sync::{Arc, Mutex},
 };
 
 use serde::{Deserialize, Serialize, Serializer, de::Deserializer};
@@ -328,6 +329,7 @@ impl StoreData {
 pub struct FileStore {
     sqlite_path: PathBuf,
     legacy_path: PathBuf,
+    bootstrap_report: Arc<Mutex<Option<ConversationBootstrapReport>>>,
 }
 
 #[derive(Debug, Error)]
@@ -343,6 +345,13 @@ pub enum StoreError {
 }
 
 pub type StoreResult<T> = Result<T, StoreError>;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ConversationBootstrapReport {
+    pub legacy_conversation_count: usize,
+    pub imported_conversation_count: usize,
+    pub already_present_conversation_count: usize,
+}
 
 impl FileStore {
     pub fn new(path: impl Into<PathBuf>) -> Self {
@@ -367,6 +376,7 @@ impl FileStore {
         Self {
             sqlite_path,
             legacy_path,
+            bootstrap_report: Arc::new(Mutex::new(None)),
         }
     }
 
@@ -398,6 +408,10 @@ impl FileStore {
 
         let raw = serde_json::to_string_pretty(&canonical)?;
         fs::write(&self.legacy_path, raw)?;
+        *self
+            .bootstrap_report
+            .lock()
+            .expect("lock bootstrap report cache") = None;
         Ok(())
     }
 
@@ -410,6 +424,7 @@ impl FileStore {
     }
 
     pub fn upsert_conversation(&self, record: StoredConversation) -> StoreResult<()> {
+        self.ensure_sqlite_conversations()?;
         self.sqlite_store().replace_conversation(&record)?;
         Ok(())
     }
@@ -575,23 +590,64 @@ impl FileStore {
         Ok(removed)
     }
 
+    pub fn bootstrap_conversations_from_legacy(&self) -> StoreResult<ConversationBootstrapReport> {
+        if let Some(report) = self
+            .bootstrap_report
+            .lock()
+            .expect("lock bootstrap report cache")
+            .clone()
+        {
+            return Ok(report);
+        }
+
+        let report = self.bootstrap_conversations_from_legacy_uncached()?;
+        *self
+            .bootstrap_report
+            .lock()
+            .expect("lock bootstrap report cache") = Some(report.clone());
+        Ok(report)
+    }
+
     fn sqlite_store(&self) -> SqliteStore {
         SqliteStore::new(&self.sqlite_path)
     }
 
     fn ensure_sqlite_conversations(&self) -> StoreResult<()> {
-        let sqlite_store = self.sqlite_store();
-        if sqlite_store.has_conversations()? || !self.legacy_path.exists() {
-            return Ok(());
+        self.bootstrap_conversations_from_legacy()?;
+        Ok(())
+    }
+
+    fn bootstrap_conversations_from_legacy_uncached(
+        &self,
+    ) -> StoreResult<ConversationBootstrapReport> {
+        if !self.legacy_path.exists() {
+            return Ok(ConversationBootstrapReport::default());
         }
 
         let data = self.load()?;
+        let mut report = ConversationBootstrapReport {
+            legacy_conversation_count: data.conversations.len(),
+            imported_conversation_count: 0,
+            already_present_conversation_count: 0,
+        };
+
         if data.conversations.is_empty() {
-            return Ok(());
+            return Ok(report);
         }
 
-        sqlite_store.import_conversations(data.conversations.into_values())?;
-        Ok(())
+        let sqlite_store = self.sqlite_store();
+        for stored in data.conversations.into_values() {
+            let conversation_id = stored.conversation.id;
+            if sqlite_store.get_conversation(conversation_id)?.is_some() {
+                report.already_present_conversation_count += 1;
+                continue;
+            }
+
+            sqlite_store.replace_conversation(&stored)?;
+            report.imported_conversation_count += 1;
+        }
+
+        Ok(report)
     }
 
     fn ensure_sqlite_agents(&self) -> StoreResult<()> {
@@ -829,6 +885,64 @@ mod tests {
             assistant_node_id,
             first_variant_id,
             second_variant_id,
+        )
+    }
+
+    fn sample_text_conversation(
+        title: &str,
+        text: &str,
+        now: chrono::DateTime<chrono::Utc>,
+    ) -> (StoredConversation, ConversationId) {
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+
+        (
+            StoredConversation {
+                conversation: Conversation {
+                    id: conversation_id,
+                    topic_id: TopicId::new_v4(),
+                    agent_id: AgentId::new_v4(),
+                    title: title.to_string(),
+                    summary: Some(text.to_string()),
+                    pinned: false,
+                    generation_state: GenerationState::Completed,
+                    current_cursor: Some(node_id),
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: vec![NodeBundle {
+                    node: MessageNode {
+                        id: node_id,
+                        conversation_id,
+                        parent_node_id: None,
+                        role: MessageRole::Assistant,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: variant_id,
+                            node_id,
+                            status: VariantStatus::Completed,
+                            model_id: Some("rust-session-engine".to_string()),
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![MessagePart {
+                            id: Uuid::new_v4(),
+                            variant_id,
+                            order_index: 0,
+                            payload: MessagePartPayload::Text {
+                                text: text.to_string(),
+                            },
+                        }],
+                    }],
+                }],
+            },
+            conversation_id,
         )
     }
 
@@ -1245,6 +1359,177 @@ mod tests {
         assert_eq!(
             reloaded.nodes[0].variants[0].parts[0].order_index, 0,
             "sqlite-backed recovery should preserve part ordering"
+        );
+
+        cleanup_store_paths(&path);
+    }
+
+    #[test]
+    fn explicit_bootstrap_imports_legacy_json_when_store_path_is_sqlite3() {
+        let legacy_path = temp_store_path("explicit-bootstrap");
+        let sqlite_path = legacy_path.with_extension("sqlite3");
+        let now = chrono::Utc::now();
+        let (legacy_conversation, conversation_id) =
+            sample_text_conversation("legacy bootstrap", "migrate me", now);
+
+        let legacy = StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                legacy_conversation.clone(),
+            )]),
+            agent_configs: BTreeMap::new(),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &legacy_path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy store"),
+        )
+        .expect("write legacy store");
+
+        let store = FileStore::new(&sqlite_path);
+        let report = store
+            .bootstrap_conversations_from_legacy()
+            .expect("bootstrap legacy conversations");
+
+        assert_eq!(
+            report,
+            ConversationBootstrapReport {
+                legacy_conversation_count: 1,
+                imported_conversation_count: 1,
+                already_present_conversation_count: 0,
+            }
+        );
+        assert!(store.path().exists(), "sqlite truth should be materialized");
+        assert_eq!(
+            store
+                .get_conversation(conversation_id)
+                .expect("load bootstrapped conversation")
+                .expect("bootstrapped conversation")
+                .conversation
+                .title,
+            "legacy bootstrap"
+        );
+
+        cleanup_store_paths(&legacy_path);
+    }
+
+    #[test]
+    fn upsert_conversation_bootstraps_legacy_json_before_first_sqlite_write() {
+        let path = temp_store_path("upsert-bootstrap");
+        let now = chrono::Utc::now();
+        let (legacy_conversation, legacy_conversation_id) =
+            sample_text_conversation("legacy thread", "legacy payload", now);
+        let (new_conversation, new_conversation_id) =
+            sample_text_conversation("fresh thread", "fresh payload", now);
+        let legacy = StoreData {
+            conversations: BTreeMap::from([(
+                legacy_conversation_id.to_string(),
+                legacy_conversation,
+            )]),
+            agent_configs: BTreeMap::new(),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy store"),
+        )
+        .expect("write legacy store");
+
+        let store = FileStore::new(&path);
+        store
+            .upsert_conversation(new_conversation)
+            .expect("persist new sqlite conversation");
+
+        fs::remove_file(&path).ok();
+
+        let mut titles = store
+            .list_conversations()
+            .expect("list sqlite conversations after bootstrap")
+            .into_iter()
+            .map(|stored| stored.conversation.title)
+            .collect::<Vec<_>>();
+        titles.sort();
+
+        assert_eq!(
+            titles,
+            vec!["fresh thread".to_string(), "legacy thread".to_string()]
+        );
+        assert!(
+            store
+                .get_conversation(legacy_conversation_id)
+                .expect("load legacy conversation from sqlite")
+                .is_some()
+        );
+        assert!(
+            store
+                .get_conversation(new_conversation_id)
+                .expect("load new conversation from sqlite")
+                .is_some()
+        );
+
+        cleanup_store_paths(&path);
+    }
+
+    #[test]
+    fn bootstrap_imports_missing_legacy_conversations_into_nonempty_sqlite_store() {
+        let path = temp_store_path("mixed-bootstrap");
+        let now = chrono::Utc::now();
+        let (already_bootstrapped, already_bootstrapped_id) =
+            sample_text_conversation("already sqlite", "kept in sqlite", now);
+        let (legacy_only, legacy_only_id) =
+            sample_text_conversation("legacy only", "imported from json", now);
+        let legacy = StoreData {
+            conversations: BTreeMap::from([
+                (
+                    already_bootstrapped_id.to_string(),
+                    already_bootstrapped.clone(),
+                ),
+                (legacy_only_id.to_string(), legacy_only),
+            ]),
+            agent_configs: BTreeMap::new(),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy store"),
+        )
+        .expect("write legacy store");
+
+        let store = FileStore::new(&path);
+        store
+            .sqlite_store()
+            .replace_conversation(&already_bootstrapped)
+            .expect("seed sqlite with one conversation");
+
+        let report = store
+            .bootstrap_conversations_from_legacy()
+            .expect("bootstrap missing legacy conversations");
+        assert_eq!(
+            report,
+            ConversationBootstrapReport {
+                legacy_conversation_count: 2,
+                imported_conversation_count: 1,
+                already_present_conversation_count: 1,
+            }
+        );
+
+        fs::remove_file(&path).ok();
+
+        let conversations = store
+            .list_conversations()
+            .expect("list reconciled conversations after json removal");
+        assert_eq!(conversations.len(), 2);
+        assert!(
+            store
+                .get_conversation(already_bootstrapped_id)
+                .expect("load already bootstrapped conversation")
+                .is_some()
+        );
+        assert!(
+            store
+                .get_conversation(legacy_only_id)
+                .expect("load imported legacy conversation")
+                .is_some()
         );
 
         cleanup_store_paths(&path);
