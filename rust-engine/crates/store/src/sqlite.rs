@@ -10,14 +10,14 @@ use rusqlite::{Connection, OptionalExtension, params};
 use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
-    AgentId, Conversation, ConversationId, GenerationState, MessageNode, MessagePart,
+    AgentConfig, AgentId, Conversation, ConversationId, GenerationState, MessageNode, MessagePart,
     MessagePartPayload, MessageRole, MessageVariant, NodeId, ToolPartState, TopicId, VariantStatus,
 };
 use vcpmobile_protocol::{NodeBundle, VariantBundle};
 
 use crate::StoredConversation;
 
-pub const CURRENT_SCHEMA_VERSION: i64 = 1;
+pub const CURRENT_SCHEMA_VERSION: i64 = 2;
 
 const BOOTSTRAP_SQL: &str = r#"
 CREATE TABLE IF NOT EXISTS schema_migrations (
@@ -291,6 +291,19 @@ CREATE INDEX idx_provider_reference_aliases_alias ON provider_reference_aliases(
 CREATE INDEX idx_pairing_sessions_status ON pairing_sessions(status, expires_at);
 "#;
 
+const MIGRATION_0002_AGENT_CONFIG_STORE: &str = r#"
+CREATE TABLE agent_configs (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    config_json TEXT NOT NULL,
+    FOREIGN KEY (id) REFERENCES agents(id) ON DELETE CASCADE
+);
+
+CREATE INDEX idx_agent_configs_updated_at ON agent_configs(updated_at DESC, id DESC);
+"#;
+
 #[derive(Debug, Clone, Copy)]
 struct MigrationSpec {
     version: i64,
@@ -298,11 +311,18 @@ struct MigrationSpec {
     sql: &'static str,
 }
 
-const MIGRATIONS: &[MigrationSpec] = &[MigrationSpec {
-    version: 1,
-    name: "0001_p0_truth_schema",
-    sql: MIGRATION_0001_P0_TRUTH_SCHEMA,
-}];
+const MIGRATIONS: &[MigrationSpec] = &[
+    MigrationSpec {
+        version: 1,
+        name: "0001_p0_truth_schema",
+        sql: MIGRATION_0001_P0_TRUTH_SCHEMA,
+    },
+    MigrationSpec {
+        version: 2,
+        name: "0002_agent_config_store",
+        sql: MIGRATION_0002_AGENT_CONFIG_STORE,
+    },
+];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MigrationRecord {
@@ -358,6 +378,14 @@ impl SqliteStore {
         Ok(count > 0)
     }
 
+    pub fn has_agent_configs(&self) -> SqliteStoreResult<bool> {
+        let connection = self.open()?;
+        let count = connection.query_row("SELECT COUNT(*) FROM agent_configs", [], |row| {
+            row.get::<_, i64>(0)
+        })?;
+        Ok(count > 0)
+    }
+
     pub fn import_conversations<I>(&self, conversations: I) -> SqliteStoreResult<()>
     where
         I: IntoIterator<Item = StoredConversation>,
@@ -377,6 +405,71 @@ impl SqliteStore {
         replace_conversation_tx(&transaction, record)?;
         transaction.commit()?;
         Ok(())
+    }
+
+    pub fn import_agents<I>(&self, agents: I) -> SqliteStoreResult<()>
+    where
+        I: IntoIterator<Item = AgentConfig>,
+    {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        for agent in agents {
+            upsert_agent_config_tx(&transaction, &agent)?;
+        }
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn get_agent(&self, agent_id: &str) -> SqliteStoreResult<Option<AgentConfig>> {
+        let connection = self.open()?;
+        load_agent_config(&connection, agent_id)
+    }
+
+    pub fn upsert_agent(&self, agent: &AgentConfig) -> SqliteStoreResult<()> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        upsert_agent_config_tx(&transaction, agent)?;
+        transaction.commit()?;
+        Ok(())
+    }
+
+    pub fn list_agents(&self) -> SqliteStoreResult<Vec<AgentConfig>> {
+        let connection = self.open()?;
+        let mut statement = connection
+            .prepare("SELECT id FROM agent_configs ORDER BY updated_at DESC, rowid DESC")?;
+        let ids = statement
+            .query_map([], |row| row.get::<_, String>(0))?
+            .collect::<Result<Vec<_>, _>>()?;
+
+        let mut agents = Vec::with_capacity(ids.len());
+        for id in ids {
+            if let Some(agent) = load_agent_config(&connection, &id)? {
+                agents.push(agent);
+            }
+        }
+        Ok(agents)
+    }
+
+    pub fn delete_agent(&self, agent_id: &str) -> SqliteStoreResult<Option<AgentConfig>> {
+        let mut connection = self.open()?;
+        let transaction = connection.transaction()?;
+        let Some(agent) = load_agent_config(&transaction, agent_id)? else {
+            return Ok(None);
+        };
+
+        transaction.execute("DELETE FROM agent_configs WHERE id = ?1", params![agent_id])?;
+        transaction.execute(
+            "DELETE FROM agents
+             WHERE id = ?1
+               AND NOT EXISTS (SELECT 1 FROM topics WHERE agent_id = ?1)
+               AND NOT EXISTS (SELECT 1 FROM conversations WHERE agent_id = ?1)
+               AND NOT EXISTS (
+                    SELECT 1 FROM conversation_participants WHERE agent_id = ?1
+               )",
+            params![agent_id],
+        )?;
+        transaction.commit()?;
+        Ok(Some(agent))
     }
 
     pub fn get_conversation(
@@ -584,6 +677,85 @@ fn replace_conversation_tx(
             }
         }
     }
+
+    Ok(())
+}
+
+fn upsert_agent_config_tx(
+    transaction: &rusqlite::Transaction<'_>,
+    agent: &AgentConfig,
+) -> SqliteStoreResult<()> {
+    let request_overrides_json = serde_json::to_string(&agent.request)
+        .map_err(|error| SqliteStoreError::Decode(error.to_string()))?;
+    let config_json = serde_json::to_string(agent)
+        .map_err(|error| SqliteStoreError::Decode(error.to_string()))?;
+    let description = agent.identity.description.clone().unwrap_or_default();
+    let prompt_mode = serde_json::to_value(agent.prompt.prompt_mode)
+        .map_err(|error| SqliteStoreError::Decode(error.to_string()))?
+        .as_str()
+        .unwrap_or("system_only")
+        .to_string();
+
+    transaction.execute(
+        "INSERT INTO agents (
+            id,
+            name,
+            description,
+            avatar_uri,
+            system_prompt,
+            prompt_mode,
+            provider_local_id,
+            model_id,
+            request_overrides_json,
+            memory_enabled,
+            local_tools_enabled,
+            group_participation_mode,
+            created_at,
+            updated_at
+        ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, 'invite_only', ?11, ?12)
+        ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            description = excluded.description,
+            avatar_uri = excluded.avatar_uri,
+            system_prompt = excluded.system_prompt,
+            prompt_mode = excluded.prompt_mode,
+            model_id = excluded.model_id,
+            request_overrides_json = excluded.request_overrides_json,
+            memory_enabled = excluded.memory_enabled,
+            local_tools_enabled = excluded.local_tools_enabled,
+            updated_at = excluded.updated_at",
+        params![
+            agent.id.to_string(),
+            agent.identity.name.as_str(),
+            description,
+            agent.identity.avatar_uri.as_deref(),
+            agent.prompt.system_prompt.as_str(),
+            prompt_mode,
+            agent.model.model_id.as_deref(),
+            request_overrides_json,
+            bool_to_sqlite(agent.memory.use_conversation_memory),
+            bool_to_sqlite(agent.tools.enable_local_tools),
+            agent.created_at.to_rfc3339(),
+            agent.updated_at.to_rfc3339(),
+        ],
+    )?;
+
+    transaction.execute(
+        "INSERT INTO agent_configs (id, name, created_at, updated_at, config_json)
+         VALUES (?1, ?2, ?3, ?4, ?5)
+         ON CONFLICT(id) DO UPDATE SET
+            name = excluded.name,
+            created_at = excluded.created_at,
+            updated_at = excluded.updated_at,
+            config_json = excluded.config_json",
+        params![
+            agent.id.to_string(),
+            agent.identity.name.as_str(),
+            agent.created_at.to_rfc3339(),
+            agent.updated_at.to_rfc3339(),
+            config_json,
+        ],
+    )?;
 
     Ok(())
 }
@@ -1009,6 +1181,26 @@ fn load_conversation(
     }))
 }
 
+fn load_agent_config(
+    connection: &Connection,
+    agent_id: &str,
+) -> SqliteStoreResult<Option<AgentConfig>> {
+    let raw = connection
+        .query_row(
+            "SELECT config_json FROM agent_configs WHERE id = ?1",
+            params![agent_id],
+            |row| row.get::<_, String>(0),
+        )
+        .optional()?;
+
+    raw.map(|config_json| {
+        serde_json::from_str(&config_json).map_err(|error| {
+            SqliteStoreError::Decode(format!("agent_configs.config_json: {error}"))
+        })
+    })
+    .transpose()
+}
+
 fn load_variants(connection: &Connection, node_id: &str) -> SqliteStoreResult<Vec<VariantBundle>> {
     let mut variant_statement = connection.prepare(
         "SELECT
@@ -1372,6 +1564,7 @@ pub fn list_applied_migrations(connection: &Connection) -> SqliteStoreResult<Vec
 mod tests {
     use super::*;
     use rusqlite::params;
+    use std::{env, fs};
     use uuid::Uuid;
 
     fn open_memory_db() -> Connection {
@@ -1421,6 +1614,7 @@ mod tests {
             "providers",
             "provider_presets",
             "agents",
+            "agent_configs",
             "topics",
             "conversations",
             "conversation_participants",
@@ -1451,9 +1645,11 @@ mod tests {
             CURRENT_SCHEMA_VERSION
         );
         let applied = list_applied_migrations(&connection).expect("list applied migrations");
-        assert_eq!(applied.len(), 1);
+        assert_eq!(applied.len(), 2);
         assert_eq!(applied[0].version, 1);
         assert_eq!(applied[0].name, "0001_p0_truth_schema");
+        assert_eq!(applied[1].version, 2);
+        assert_eq!(applied[1].name, "0002_agent_config_store");
     }
 
     #[test]
@@ -1464,8 +1660,39 @@ mod tests {
 
         assert_eq!(
             scalar_i64(&connection, "SELECT COUNT(*) FROM schema_migrations"),
-            1
+            2
         );
+    }
+
+    #[test]
+    fn sqlite_store_persists_and_restores_agent_configs() {
+        let path =
+            env::temp_dir().join(format!("vcpmobile-agent-config-{}.sqlite3", Uuid::new_v4()));
+        let store = SqliteStore::new(&path);
+        let mut agent = AgentConfig::new("Planner", "You are a focused helper.");
+        agent.group.aliases = vec!["planner".to_string()];
+        agent
+            .prompt
+            .placeholders
+            .push(vcpmobile_domain::AgentPromptVariable {
+                key: "cur_date".to_string(),
+                label: Some("Current date".to_string()),
+                value: "2026-03-13".to_string(),
+                description: Some("Injected runtime date".to_string()),
+            });
+
+        store.upsert_agent(&agent).expect("persist agent config");
+
+        let loaded = store
+            .get_agent(&agent.id.to_string())
+            .expect("get agent config")
+            .expect("stored agent config");
+        assert_eq!(loaded, agent);
+
+        let listed = store.list_agents().expect("list agent configs");
+        assert_eq!(listed, vec![agent]);
+
+        fs::remove_file(path).ok();
     }
 
     #[test]

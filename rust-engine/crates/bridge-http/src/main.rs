@@ -17,7 +17,8 @@ use tokio::sync::Mutex;
 use tokio_stream::StreamExt;
 use uuid::Uuid;
 use vcpmobile_domain::{
-    ConversationId, DocumentAttachmentInput, GenerationState, ProviderAuthConfig, ProviderConfig,
+    AgentConfig, ConversationId, DocumentAttachmentInput, GenerationState, ProviderAuthConfig,
+    ProviderConfig,
 };
 use vcpmobile_protocol::{
     ChatEvent, EditMessageRequest, EventEnvelope, EventError, EventErrorKind, PairingExchangeError,
@@ -255,6 +256,11 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/select-variant", post(chat_select_variant))
         .route("/api/chat/document-prompt", post(chat_document_prompt))
         .route("/api/pairing/exchange", post(pairing_exchange))
+        .route("/api/agents", get(agent_list).post(agent_create))
+        .route(
+            "/api/agents/{agent_id}",
+            get(agent_get).put(agent_update).delete(agent_delete),
+        )
         .route("/api/agents/prompt-preview", post(agent_prompt_preview))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
         .route("/api/providers", get(provider_list).post(provider_create))
@@ -452,6 +458,101 @@ async fn agent_prompt_preview(
     }))
 }
 
+async fn agent_list(State(state): State<AppState>) -> Result<Json<Vec<AgentConfig>>, ApiError> {
+    let engine = state.engine.lock().await;
+    let agents = engine
+        .store()
+        .list_agents()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(agents))
+}
+
+async fn agent_get(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AgentConfig>, ApiError> {
+    let agent_id = parse_agent_id(&agent_id)?;
+    let engine = state.engine.lock().await;
+    let agent = engine
+        .store()
+        .get_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("agent_not_found", "agent not found"))?;
+    Ok(Json(agent))
+}
+
+async fn agent_create(
+    State(state): State<AppState>,
+    Json(agent): Json<AgentConfig>,
+) -> Result<(StatusCode, Json<AgentConfig>), ApiError> {
+    validate_agent_config(&agent)?;
+    let agent_id = agent.id.to_string();
+    let engine = state.engine.lock().await;
+    if engine
+        .store()
+        .get_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .is_some()
+    {
+        return Err(ApiError::conflict(
+            "agent_already_exists",
+            format!("agent `{agent_id}` already exists"),
+        ));
+    }
+
+    let saved = engine
+        .store()
+        .upsert_agent(agent)
+        .map_err(|error| match error {
+            vcpmobile_store::StoreError::Validation(message) => {
+                ApiError::validation("agent_config_invalid", message)
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+    Ok((StatusCode::CREATED, Json(saved)))
+}
+
+async fn agent_update(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(mut agent): Json<AgentConfig>,
+) -> Result<Json<AgentConfig>, ApiError> {
+    let agent_id = parse_agent_id(&agent_id)?;
+    validate_agent_config(&agent)?;
+    let engine = state.engine.lock().await;
+    let existing = engine
+        .store()
+        .get_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("agent_not_found", "agent not found"))?;
+    agent.id = existing.id;
+
+    let saved = engine
+        .store()
+        .upsert_agent(agent)
+        .map_err(|error| match error {
+            vcpmobile_store::StoreError::Validation(message) => {
+                ApiError::validation("agent_config_invalid", message)
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+    Ok(Json(saved))
+}
+
+async fn agent_delete(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AgentConfig>, ApiError> {
+    let agent_id = parse_agent_id(&agent_id)?;
+    let engine = state.engine.lock().await;
+    let removed = engine
+        .store()
+        .delete_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("agent_not_found", "agent not found"))?;
+    Ok(Json(removed))
+}
+
 async fn pairing_exchange(
     Json(body): Json<PairingExchangeRequest>,
 ) -> Result<Json<PairingExchangeSuccessResponse>, (StatusCode, Json<PairingExchangeFailureResponse>)>
@@ -592,6 +693,12 @@ fn parse_conversation_id(conversation_id: &str) -> Result<ConversationId, (Statu
     Uuid::parse_str(conversation_id)
         .map(ConversationId::from)
         .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))
+}
+
+fn parse_agent_id(agent_id: &str) -> Result<String, ApiError> {
+    Uuid::parse_str(agent_id)
+        .map(|value| value.to_string())
+        .map_err(|error| ApiError::validation("agent_id_invalid", error.to_string()))
 }
 
 async fn provider_list(
@@ -808,6 +915,12 @@ fn validate_provider_config(provider: &ProviderConfig) -> Result<(), ApiError> {
     }
 
     Ok(())
+}
+
+fn validate_agent_config(agent: &AgentConfig) -> Result<(), ApiError> {
+    agent
+        .validate()
+        .map_err(|error| ApiError::validation("agent_config_invalid", error.to_string()))
 }
 
 fn validate_pairing_exchange_request(
@@ -1092,6 +1205,58 @@ mod tests {
         })
     }
 
+    fn sample_agent_payload(agent_id: Uuid) -> Value {
+        json!({
+            "id": agent_id,
+            "identity": {
+                "name": "Planner",
+                "avatar_uri": "file:///planner.png",
+                "description": "Plans tasks on mobile"
+            },
+            "prompt": {
+                "system_prompt": "You are a focused planner.",
+                "prompt_mode": "system_and_message_template",
+                "message_template": "Plan around {{goal}}",
+                "placeholders": [
+                    {
+                        "key": "goal",
+                        "label": "Goal",
+                        "value": "ship TES-14",
+                        "description": "current user goal"
+                    }
+                ]
+            },
+            "model": {
+                "provider_local_id": "provider_local_demo",
+                "model_id": "gpt-4.1-mini"
+            },
+            "request": {
+                "temperature": 0.4,
+                "top_p": 0.8
+            },
+            "memory": {
+                "use_conversation_memory": true,
+                "pin_top_level_facts": true
+            },
+            "tools": {
+                "enable_local_tools": true,
+                "overrides": [
+                    {
+                        "tool_id": "calendar",
+                        "enabled": false
+                    }
+                ]
+            },
+            "group": {
+                "role_label": "Planner",
+                "aliases": ["planner"],
+                "mention_tags": ["@planner"],
+                "respond_to_mentions": true,
+                "allow_auto_relay": false
+            }
+        })
+    }
+
     async fn json_request(
         app: Router,
         method: &str,
@@ -1167,6 +1332,95 @@ mod tests {
         assert_eq!(body["preview"]["records"][0]["status"], "applied");
         assert_eq!(body["preview"]["records"][3]["category"], "sticker_media");
         assert_eq!(body["preview"]["records"][3]["status"], "deferred");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn agent_crud_routes_persist_and_restore_full_agent_configs() {
+        let (app, path) = test_app("agent-crud");
+        let agent_id = Uuid::new_v4();
+
+        let (create_status, created) = json_request(
+            app.clone(),
+            "POST",
+            "/api/agents",
+            Some(sample_agent_payload(agent_id)),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::CREATED);
+        assert_eq!(created["id"], agent_id.to_string());
+        assert_eq!(created["identity"]["name"], "Planner");
+        assert_eq!(created["prompt"]["placeholders"][0]["key"], "goal");
+
+        let (list_status, listed) = json_request(app.clone(), "GET", "/api/agents", None).await;
+        assert_eq!(list_status, StatusCode::OK);
+        assert_eq!(listed.as_array().expect("agent list").len(), 1);
+
+        let (get_status, loaded) =
+            json_request(app.clone(), "GET", &format!("/api/agents/{agent_id}"), None).await;
+        assert_eq!(get_status, StatusCode::OK);
+        assert_eq!(loaded["identity"]["description"], "Plans tasks on mobile");
+
+        let mut updated_payload = sample_agent_payload(agent_id);
+        updated_payload["identity"]["name"] = Value::String("Planner v2".to_string());
+        updated_payload["group"]["aliases"] = json!(["planner", "strategist"]);
+
+        let (update_status, updated) = json_request(
+            app.clone(),
+            "PUT",
+            &format!("/api/agents/{agent_id}"),
+            Some(updated_payload),
+        )
+        .await;
+        assert_eq!(update_status, StatusCode::OK);
+        assert_eq!(updated["identity"]["name"], "Planner v2");
+        assert_eq!(updated["group"]["aliases"][1], "strategist");
+
+        let store = FileStore::new(&path);
+        let restored = store
+            .get_agent(&agent_id.to_string())
+            .expect("restore agent config from store")
+            .expect("stored agent config");
+        assert_eq!(restored.identity.name, "Planner v2");
+        assert_eq!(restored.group.aliases, vec!["planner", "strategist"]);
+
+        let (delete_status, deleted) = json_request(
+            app.clone(),
+            "DELETE",
+            &format!("/api/agents/{agent_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(delete_status, StatusCode::OK);
+        assert_eq!(deleted["id"], agent_id.to_string());
+
+        let (missing_status, missing) =
+            json_request(app, "GET", &format!("/api/agents/{agent_id}"), None).await;
+        assert_eq!(missing_status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "agent_not_found");
+
+        fs::remove_file(&path).ok();
+        fs::remove_file(path.with_extension("sqlite3")).ok();
+    }
+
+    #[tokio::test]
+    async fn agent_create_rejects_invalid_payloads() {
+        let (app, path) = test_app("agent-validation");
+        let agent_id = Uuid::new_v4();
+        let invalid = json!({
+            "id": agent_id,
+            "identity": {
+                "name": ""
+            },
+            "prompt": {
+                "system_prompt": " "
+            }
+        });
+
+        let (status, body) = json_request(app, "POST", "/api/agents", Some(invalid)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "agent_config_invalid");
 
         fs::remove_file(path).ok();
     }
