@@ -696,11 +696,11 @@ class ChatDetailReducerTest {
     }
 
     @Test
-    fun `generation state helpers classify active and recoverable states`() {
+    fun `generation state helpers classify active and map wire phases`() {
         assertTrue(ChatGenerationPhase.REQUESTING.isActive())
         assertTrue(ChatGenerationPhase.CANCELLED.isTerminal())
-        assertTrue("completed".isRecoverableGenerationState())
-        assertTrue("failed".isRecoverableGenerationState())
-        assertFalse("started".isRecoverableGenerationState())
+        assertEquals(ChatGenerationPhase.COMPLETED, "completed".toChatGenerationPhase())
+        assertEquals(ChatGenerationPhase.FAILED, "failed".toChatGenerationPhase())
+        assertEquals(ChatGenerationPhase.STARTED, "started".toChatGenerationPhase())
     }
 }

@@ -3,6 +3,7 @@ package com.vcp.mobile.ui.chat
 import com.vcp.mobile.data.network.HubConversationSummary
 import com.vcp.mobile.data.network.HubRegenerateRequest
 import com.vcp.mobile.data.network.HubRelayErrorException
+import com.vcp.mobile.data.network.HubResumeAnchor
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubStreamFailureException
 import com.vcp.mobile.data.network.HubSendMessageResponse
@@ -11,6 +12,7 @@ import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
 import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.recovery.RecoveryStore
+import com.vcp.mobile.data.recovery.RecoveryResumeAnchor
 import com.vcp.mobile.data.recovery.RecoverySceneAnchor
 import com.vcp.mobile.data.repository.HubChatRepository
 import kotlinx.coroutines.Dispatchers
@@ -141,75 +143,85 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
-    fun `startup recovery prefers most recently updated recoverable conversation`() = runTest(dispatcher) {
+    fun `startup recovery prefers persisted active resume anchor over newer active conversation`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             conversations = listOf(
                 HubConversationSummary(
-                    conversationId = "conversation-old",
-                    title = "Old",
-                    updatedAt = "2026-03-01T00:00:00Z",
-                    generationState = "idle",
+                    conversationId = "conversation-persisted",
+                    title = "Persisted",
+                    updatedAt = "2026-03-11T00:00:00Z",
+                    generationState = "streaming",
+                    resumeAnchor = HubResumeAnchor(
+                        messageId = "node-persisted:variant-persisted",
+                    ),
                 ),
                 HubConversationSummary(
-                    conversationId = "conversation-new",
+                    conversationId = "conversation-newer",
                     title = "New",
                     updatedAt = "2026-03-11T12:00:00Z",
-                    generationState = "idle",
+                    generationState = "started",
+                    resumeAnchor = HubResumeAnchor(
+                        messageId = "node-newer:variant-newer",
+                    ),
                 )
             ),
             snapshotEnvelope = snapshotEnvelope(
-                conversationId = "conversation-new",
+                conversationId = "conversation-persisted",
                 nodeId = "node-1",
                 role = "assistant",
                 text = "latest recovery",
             )
         )
-        val recoveryStore = FakeConversationRecoveryStore(null)
+        val recoveryStore = FakeConversationRecoveryStore(
+            currentConversationId = null,
+            resumeAnchor = RecoveryResumeAnchor(
+                conversationId = "conversation-persisted",
+                messageId = "node-persisted:variant-persisted",
+            ),
+        )
 
         val viewModel = ChatViewModel(repository, recoveryStore)
         dispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.detailState.value
-        assertEquals("conversation-new", state.conversationId)
-        assertEquals("conversation-new", recoveryStore.savedConversationId)
+        assertEquals("conversation-persisted", state.conversationId)
+        assertEquals("conversation-persisted", recoveryStore.savedConversationId)
         assertEquals("latest recovery", state.messages.first().content)
     }
 
     @Test
-    fun `startup recovery skips non recoverable conversation even if it is newer`() = runTest(dispatcher) {
+    fun `startup recovery ignores idle conversation without active resume anchor`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             conversations = listOf(
                 HubConversationSummary(
-                    conversationId = "conversation-unrecoverable",
-                    title = "Broken recent",
+                    conversationId = "conversation-idle",
+                    title = "Idle recent",
                     updatedAt = "2026-03-11T12:00:00Z",
-                    generationState = "idle",
-                    isRecoverable = false,
-                ),
-                HubConversationSummary(
-                    conversationId = "conversation-recoverable",
-                    title = "Recover me",
-                    updatedAt = "2026-03-10T12:00:00Z",
                     generationState = "idle",
                     isRecoverable = true,
                 )
             ),
             snapshotEnvelope = snapshotEnvelope(
-                conversationId = "conversation-recoverable",
+                conversationId = "conversation-idle",
                 nodeId = "node-1",
                 role = "assistant",
-                text = "recoverable wins",
+                text = "should stay unopened",
             )
         )
-        val recoveryStore = FakeConversationRecoveryStore(null)
+        val recoveryStore = FakeConversationRecoveryStore(
+            currentConversationId = "conversation-idle",
+        )
 
         val viewModel = ChatViewModel(repository, recoveryStore)
         dispatcher.scheduler.advanceUntilIdle()
 
         val state = viewModel.detailState.value
-        assertEquals("conversation-recoverable", state.conversationId)
-        assertEquals("conversation-recoverable", recoveryStore.savedConversationId)
-        assertEquals("recoverable wins", state.messages.first().content)
+        assertNull(state.conversationId)
+        assertEquals(
+            "你好，我是 VCP Agent。当前已接入 Hub，可开始实时对话。",
+            state.messages.single().content,
+        )
+        assertNull(recoveryStore.savedResumeAnchor)
     }
 
     @Test
@@ -277,6 +289,8 @@ class ChatViewModelRecoveryTest {
         )
 
         val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+        viewModel.recoverConversation("conversation-1")
         dispatcher.scheduler.advanceUntilIdle()
 
         assertEquals(false, viewModel.detailState.value.stickToBottom)
@@ -1425,92 +1439,17 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
-    fun `selected assistant variant restores after restart from persisted recovery conversation`() = runTest(dispatcher) {
-        val initialRepository = FakeHubChatRepository(
-            conversations = listOf(
-                HubConversationSummary(
-                    conversationId = "conversation-stream",
-                    title = "Branching",
-                    updatedAt = "2026-03-12T12:00:00Z",
-                    generationState = "idle",
-                )
-            ),
-            snapshotEnvelope = RustChatEventEnvelope(
-                conversationId = "conversation-stream",
-                kind = RustChatEventKind.CONVERSATION_SNAPSHOT,
-                event = "conversation_snapshot",
-                data = JSONObject(
-                    """
-                    {
-                      "branch":{
-                        "cursor_node_id":"node-stream",
-                        "nodes":[
-                          {
-                            "node_id":"node-stream",
-                            "role":"assistant",
-                            "selected_variant":{
-                              "variant_id":"variant-2",
-                              "parts":[
-                                {"payload":{"type":"text","text":"new branch"}}
-                              ]
-                            }
-                          }
-                        ]
-                      }
-                    }
-                    """.trimIndent()
-                ),
-            ),
-            selectVariantStreamEvents = flow {
-                emit(HubStreamEvent.Opened)
-                emit(
-                    HubStreamEvent.Message(
-                        event = "chat_event",
-                        data = """
-                        {
-                          "conversation_id":"conversation-stream",
-                          "event_name":"conversation_node_upsert",
-                          "payload":{
-                            "event":"conversation_node_upsert",
-                            "data":{
-                              "branch":{
-                                "cursor_node_id":"node-stream",
-                                "node":{
-                                  "node_id":"node-stream",
-                                  "role":"assistant",
-                                  "selected_variant":{
-                                    "variant_id":"variant-1",
-                                    "parts":[
-                                      {"payload":{"type":"text","text":"old branch"}}
-                                    ]
-                                  }
-                                }
-                              }
-                            }
-                          }
-                        }
-                        """.trimIndent()
-                    )
-                )
-                emit(HubStreamEvent.Completed)
-            }
-        )
-        val recoveryStore = FakeConversationRecoveryStore(null)
-        val firstViewModel = ChatViewModel(initialRepository, recoveryStore)
-        dispatcher.scheduler.advanceUntilIdle()
-
-        firstViewModel.recoverConversation("conversation-stream")
-        dispatcher.scheduler.advanceUntilIdle()
-        firstViewModel.selectAssistantVariant("node-stream", "variant-1")
-        dispatcher.scheduler.advanceUntilIdle()
-
+    fun `active generation restores after restart from persisted resume anchor`() = runTest(dispatcher) {
         val restartedRepository = FakeHubChatRepository(
             conversations = listOf(
                 HubConversationSummary(
                     conversationId = "conversation-stream",
                     title = "Branching",
                     updatedAt = "2026-03-12T12:00:00Z",
-                    generationState = "idle",
+                    generationState = "streaming",
+                    resumeAnchor = HubResumeAnchor(
+                        messageId = "node-stream:variant-1",
+                    ),
                 )
             ),
             snapshotEnvelope = RustChatEventEnvelope(
@@ -1520,6 +1459,10 @@ class ChatViewModelRecoveryTest {
                 data = JSONObject(
                     """
                     {
+                      "conversation":{
+                        "generation_state":"streaming",
+                        "current_cursor":"node-stream"
+                      },
                       "branch":{
                         "cursor_node_id":"node-stream",
                         "nodes":[
@@ -1540,6 +1483,13 @@ class ChatViewModelRecoveryTest {
                 ),
             ),
         )
+        val recoveryStore = FakeConversationRecoveryStore(
+            currentConversationId = null,
+            resumeAnchor = RecoveryResumeAnchor(
+                conversationId = "conversation-stream",
+                messageId = "node-stream:variant-1",
+            ),
+        )
 
         val restartedViewModel = ChatViewModel(restartedRepository, recoveryStore)
         dispatcher.scheduler.advanceUntilIdle()
@@ -1549,7 +1499,19 @@ class ChatViewModelRecoveryTest {
         assertEquals("node-stream:variant-1", restored.id)
         assertEquals("variant-1", restored.variantId)
         assertEquals("old branch", restored.content)
+        assertEquals(ChatGenerationPhase.STREAMING, restartedViewModel.detailState.value.generation.phase)
+        assertEquals(
+            "node-stream:variant-1",
+            restartedViewModel.detailState.value.generation.activeMessageKey,
+        )
         assertEquals("conversation-stream", recoveryStore.savedConversationId)
+        assertEquals(
+            RecoveryResumeAnchor(
+                conversationId = "conversation-stream",
+                messageId = "node-stream:variant-1",
+            ),
+            recoveryStore.savedResumeAnchor,
+        )
     }
 
     private fun snapshotEnvelope(
@@ -1635,10 +1597,13 @@ private class FakeHubChatRepository(
 
 private class FakeConversationRecoveryStore(
     private var currentConversationId: String?,
+    private var resumeAnchor: RecoveryResumeAnchor? = null,
     private var sceneAnchor: RecoverySceneAnchor? = null,
 ) : RecoveryStore {
     var savedConversationId: String? = currentConversationId
         private set
+    val savedResumeAnchor: RecoveryResumeAnchor?
+        get() = resumeAnchor
     val savedSceneAnchor: RecoverySceneAnchor?
         get() = sceneAnchor
 
@@ -1652,6 +1617,16 @@ private class FakeConversationRecoveryStore(
     override suspend fun clearLastConversationId() {
         currentConversationId = null
         savedConversationId = null
+    }
+
+    override suspend fun loadResumeAnchor(): RecoveryResumeAnchor? = resumeAnchor
+
+    override suspend fun saveResumeAnchor(anchor: RecoveryResumeAnchor) {
+        resumeAnchor = anchor
+    }
+
+    override suspend fun clearResumeAnchor() {
+        resumeAnchor = null
     }
 
     override suspend fun loadSceneAnchor(conversationId: String): RecoverySceneAnchor? {

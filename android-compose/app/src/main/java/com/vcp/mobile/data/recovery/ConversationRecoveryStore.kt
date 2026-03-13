@@ -13,6 +13,12 @@ interface RecoveryStore {
 
     suspend fun clearLastConversationId()
 
+    suspend fun loadResumeAnchor(): RecoveryResumeAnchor?
+
+    suspend fun saveResumeAnchor(anchor: RecoveryResumeAnchor)
+
+    suspend fun clearResumeAnchor()
+
     suspend fun loadSceneAnchor(conversationId: String): RecoverySceneAnchor?
 
     suspend fun saveSceneAnchor(anchor: RecoverySceneAnchor)
@@ -24,6 +30,11 @@ data class RecoverySceneAnchor(
     val conversationId: String,
     val lastMessageId: String?,
     val stickToBottom: Boolean,
+)
+
+data class RecoveryResumeAnchor(
+    val conversationId: String,
+    val messageId: String?,
 )
 
 class DataStoreConversationRecoveryStore(
@@ -42,6 +53,32 @@ class DataStoreConversationRecoveryStore(
     override suspend fun clearLastConversationId() {
         dataStore.edit { preferences ->
             preferences.remove(LAST_CONVERSATION_ID)
+        }
+    }
+
+    override suspend fun loadResumeAnchor(): RecoveryResumeAnchor? {
+        val preferences = dataStore.data.first()
+        val conversationId = preferences[RESUME_CONVERSATION_ID]?.takeIf { it.isNotBlank() }
+            ?: return null
+        return RecoveryResumeAnchor(
+            conversationId = conversationId,
+            messageId = preferences[RESUME_MESSAGE_ID]?.takeIf { it.isNotBlank() },
+        )
+    }
+
+    override suspend fun saveResumeAnchor(anchor: RecoveryResumeAnchor) {
+        dataStore.edit { preferences ->
+            preferences[RESUME_CONVERSATION_ID] = anchor.conversationId
+            anchor.messageId?.takeIf { it.isNotBlank() }?.let {
+                preferences[RESUME_MESSAGE_ID] = it
+            } ?: preferences.remove(RESUME_MESSAGE_ID)
+        }
+    }
+
+    override suspend fun clearResumeAnchor() {
+        dataStore.edit { preferences ->
+            preferences.remove(RESUME_CONVERSATION_ID)
+            preferences.remove(RESUME_MESSAGE_ID)
         }
     }
 
@@ -80,6 +117,8 @@ class DataStoreConversationRecoveryStore(
 
     private companion object {
         val LAST_CONVERSATION_ID = stringPreferencesKey("last_conversation_id")
+        val RESUME_CONVERSATION_ID = stringPreferencesKey("resume_conversation_id")
+        val RESUME_MESSAGE_ID = stringPreferencesKey("resume_message_id")
         val SCENE_CONVERSATION_ID = stringPreferencesKey("scene_conversation_id")
         val SCENE_LAST_MESSAGE_ID = stringPreferencesKey("scene_last_message_id")
         val SCENE_STICK_TO_BOTTOM = stringPreferencesKey("scene_stick_to_bottom")

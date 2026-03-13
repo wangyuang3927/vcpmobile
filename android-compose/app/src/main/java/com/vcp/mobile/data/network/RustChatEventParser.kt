@@ -163,6 +163,25 @@ object RustChatEventParser {
         return extractSnapshotMessages(data).firstOrNull()
     }
 
+    fun extractSnapshotGenerationState(data: JSONObject): String? {
+        return data.optJSONObject("conversation")
+            ?.optString("generation_state")
+            ?.trim()
+            ?.takeIf { it.isNotBlank() }
+    }
+
+    fun extractSnapshotActiveMessageKey(data: JSONObject): String? {
+        val cursorNodeId = data.optJSONObject("conversation")
+            ?.optNonBlankString("current_cursor")
+            ?: data.optJSONObject("branch")
+                ?.optNonBlankString("cursor_node_id")
+            ?: return null
+        return extractSnapshotMessages(data)
+            .firstOrNull { it.identity.nodeId == cursorNodeId }
+            ?.identity
+            ?.messageKey
+    }
+
     fun extractGenerationIdentity(data: JSONObject): RustStreamIdentity? {
         val nodeId = data.optString("node_id").trim()
         val variantId = data.optString("variant_id").trim()

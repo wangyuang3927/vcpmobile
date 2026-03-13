@@ -17,6 +17,7 @@ import com.vcp.mobile.data.network.RustToolCallPhase
 import com.vcp.mobile.data.network.toMessageSender
 import com.vcp.mobile.data.network.toRole
 import com.vcp.mobile.data.recovery.RecoveryStore
+import com.vcp.mobile.data.recovery.RecoveryResumeAnchor
 import com.vcp.mobile.data.recovery.RecoverySceneAnchor
 import com.vcp.mobile.data.repository.HubChatRepository
 import dagger.hilt.android.lifecycle.HiltViewModel
@@ -178,6 +179,7 @@ class ChatViewModel @Inject constructor(
         dispatchDetail(ChatDetailAction.ConversationCatalogExpandedChanged(false))
         viewModelScope.launch {
             recoveryStore.clearLastConversationId()
+            recoveryStore.clearResumeAnchor()
             previousConversationId?.let { recoveryStore.clearSceneAnchor(it) }
             refreshRecoveryCatalog()
         }
@@ -220,8 +222,7 @@ class ChatViewModel @Inject constructor(
     fun refreshRecoveryCatalog() {
         viewModelScope.launch {
             runCatching {
-                repository.listConversations()
-                    .filter { it.isRecoverable && it.generationState.isRecoverableGenerationState() }
+                listResumeCandidates()
                     .sortedByDescending { it.updatedAt }
                     .map { summary ->
                         RecoverableConversation(
@@ -248,18 +249,15 @@ class ChatViewModel @Inject constructor(
     private fun recoverConversationIfPossible() {
         viewModelScope.launch {
             runCatching {
-                val persistedConversationId = recoveryStore.lastConversationId()
-                val recoverableConversationId = repository.listConversations()
-                    .filter { it.isRecoverable && it.generationState.isRecoverableGenerationState() }
-                    .sortedByDescending { it.updatedAt }
-                    .firstOrNull()
-                    ?.conversationId
-                val conversationId = persistedConversationId
-                    ?: recoverableConversationId
+                val persistedResumeAnchor = recoveryStore.loadResumeAnchor()
+                val conversationId = selectStartupResumeConversation(
+                    persistedAnchor = persistedResumeAnchor,
+                    candidates = listResumeCandidates().sortedByDescending { it.updatedAt },
+                )?.conversationId
 
                 if (conversationId.isNullOrBlank()) {
-                    if (persistedConversationId != null) {
-                        recoveryStore.clearLastConversationId()
+                    if (persistedResumeAnchor != null) {
+                        recoveryStore.clearResumeAnchor()
                     }
                     return@runCatching
                 }
@@ -284,6 +282,7 @@ class ChatViewModel @Inject constructor(
     private fun bindConversationId(conversationId: String) {
         dispatchDetail(ChatDetailAction.ConversationBound(conversationId))
         dispatchDetail(ChatDetailAction.RecoveryNoticeChanged(null))
+        syncResumeAnchor()
         viewModelScope.launch {
             recoveryStore.saveLastConversationId(conversationId)
             refreshRecoveryCatalog()
@@ -300,7 +299,44 @@ class ChatViewModel @Inject constructor(
                 messageKey = messageKey,
             )
         )
+        syncResumeAnchor()
     }
+
+    private fun syncResumeAnchor() {
+        val state = _detailState.value
+        val conversationId = state.conversationId
+        val resumeAnchor = if (conversationId != null && state.generation.canResume) {
+            RecoveryResumeAnchor(
+                conversationId = conversationId,
+                messageId = state.generation.activeMessageKey,
+            )
+        } else {
+            null
+        }
+
+        viewModelScope.launch {
+            if (resumeAnchor == null) {
+                recoveryStore.clearResumeAnchor()
+            } else {
+                recoveryStore.saveResumeAnchor(resumeAnchor)
+            }
+        }
+    }
+
+    private suspend fun listResumeCandidates() = repository.listConversations()
+        .filter { it.isResumeCandidate() }
+
+    private fun selectStartupResumeConversation(
+        persistedAnchor: RecoveryResumeAnchor?,
+        candidates: List<com.vcp.mobile.data.network.HubConversationSummary>,
+    ) = persistedAnchor?.let { anchor ->
+        candidates.firstOrNull { candidate ->
+            candidate.conversationId == anchor.conversationId &&
+                candidate.resumeAnchor?.messageId == anchor.messageId
+        } ?: candidates.firstOrNull { candidate ->
+            candidate.conversationId == anchor.conversationId
+        }
+    } ?: candidates.firstOrNull()
 
     private fun appendAssistantDelta(
         currentMessageId: String?,
@@ -644,6 +680,14 @@ class ChatViewModel @Inject constructor(
         val conversationId = envelope.conversationId ?: return
         val snapshots = RustChatEventParser.extractSnapshotMessages(envelope.data)
         if (snapshots.isEmpty()) return
+        val generationPhase = RustChatEventParser.extractSnapshotGenerationState(envelope.data)
+            ?.toChatGenerationPhase()
+            ?: ChatGenerationPhase.IDLE
+        val activeMessageKey = if (generationPhase.isActive()) {
+            RustChatEventParser.extractSnapshotActiveMessageKey(envelope.data)
+        } else {
+            null
+        }
         pendingOptimisticUserMessageId = null
 
         val messages = snapshots.map { snapshot ->
@@ -670,6 +714,7 @@ class ChatViewModel @Inject constructor(
                 messages = messages,
             )
         )
+        dispatchGeneration(generationPhase, activeMessageKey)
         dispatchDetail(ChatDetailAction.RecoveryNoticeChanged(null))
         viewModelScope.launch {
             recoveryStore.saveLastConversationId(conversationId)
@@ -715,6 +760,12 @@ class ChatViewModel @Inject constructor(
         }
     }
 
+}
+
+private fun com.vcp.mobile.data.network.HubConversationSummary.isResumeCandidate(): Boolean {
+    return isRecoverable &&
+        generationState.isActiveGenerationState() &&
+        resumeAnchor != null
 }
 
 private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map { part ->

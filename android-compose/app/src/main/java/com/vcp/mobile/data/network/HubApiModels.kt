@@ -74,7 +74,14 @@ data class HubConversationSummary(
     val summary: String? = null,
     val pinned: Boolean = false,
     val isRecoverable: Boolean = true,
+    val resumeAnchor: HubResumeAnchor? = null,
     val nodeCount: Int = 0,
+)
+
+data class HubResumeAnchor(
+    val messageId: String,
+    val nodeId: String? = null,
+    val variantId: String? = null,
 )
 
 data class HubPromptPreviewPlaceholder(

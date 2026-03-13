@@ -218,6 +218,20 @@ class OkHttpSseHubApiClient(
                             summary = item.optString("summary").takeIf { it.isNotBlank() },
                             pinned = item.optBoolean("pinned", false),
                             isRecoverable = item.optBoolean("is_recoverable", true),
+                            resumeAnchor = item.optJSONObject("resume_anchor")
+                                ?.let { anchor ->
+                                    anchor.optString("message_id")
+                                        .takeIf { it.isNotBlank() }
+                                        ?.let { messageId ->
+                                            HubResumeAnchor(
+                                                messageId = messageId,
+                                                nodeId = anchor.optString("node_id")
+                                                    .takeIf { it.isNotBlank() },
+                                                variantId = anchor.optString("variant_id")
+                                                    .takeIf { it.isNotBlank() },
+                                            )
+                                        }
+                                },
                             nodeCount = item.optInt("node_count", 0),
                         )
                     )

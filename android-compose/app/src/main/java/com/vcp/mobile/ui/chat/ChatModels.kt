@@ -360,7 +360,15 @@ fun String.isIdleLikeGenerationState(): Boolean = normalizedGenerationState() in
     "cancelled",
 )
 
-fun String.isRecoverableGenerationState(): Boolean = !isActiveGenerationState()
+fun String.toChatGenerationPhase(): ChatGenerationPhase = when (normalizedGenerationState()) {
+    "requesting" -> ChatGenerationPhase.REQUESTING
+    "started" -> ChatGenerationPhase.STARTED
+    "streaming" -> ChatGenerationPhase.STREAMING
+    "completed" -> ChatGenerationPhase.COMPLETED
+    "failed" -> ChatGenerationPhase.FAILED
+    "cancelled" -> ChatGenerationPhase.CANCELLED
+    else -> ChatGenerationPhase.IDLE
+}
 
 data class ChatDraftState(
     val currentInput: String = "",

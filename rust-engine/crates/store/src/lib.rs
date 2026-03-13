@@ -118,7 +118,15 @@ pub struct StoredConversationCatalogItem {
     pub pinned: bool,
     pub current_cursor: Option<NodeId>,
     pub is_recoverable: bool,
+    pub resume_anchor: Option<StoredConversationResumeAnchor>,
     pub node_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredConversationResumeAnchor {
+    pub message_id: String,
+    pub node_id: NodeId,
+    pub variant_id: VariantId,
 }
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
@@ -440,6 +448,7 @@ impl FileStore {
             .into_iter()
             .map(|stored| {
                 let is_recoverable = cursor_resolves_to_leaf(&stored);
+                let resume_anchor = recovery_resume_anchor(&stored);
                 let node_count = stored.nodes.len();
                 let conversation = stored.conversation;
 
@@ -452,6 +461,7 @@ impl FileStore {
                     pinned: conversation.pinned,
                     current_cursor: conversation.current_cursor,
                     is_recoverable,
+                    resume_anchor,
                     node_count,
                 }
             })
@@ -632,6 +642,33 @@ fn cursor_resolves_to_leaf(stored: &StoredConversation) -> bool {
     }
 
     true
+}
+
+fn recovery_resume_anchor(stored: &StoredConversation) -> Option<StoredConversationResumeAnchor> {
+    if !stored.conversation.generation_state.can_resume() || !cursor_resolves_to_leaf(stored) {
+        return None;
+    }
+
+    let current_cursor = stored.conversation.current_cursor?;
+    let cursor_bundle = stored
+        .nodes
+        .iter()
+        .find(|bundle| bundle.node.id == current_cursor)?;
+    if cursor_bundle.node.conversation_id != stored.conversation.id {
+        return None;
+    }
+    if cursor_bundle.node.role != vcpmobile_domain::MessageRole::Assistant {
+        return None;
+    }
+
+    let selected_variant = cursor_bundle
+        .variants
+        .get(cursor_bundle.node.select_index)?;
+    Some(StoredConversationResumeAnchor {
+        message_id: format!("{}:{}", current_cursor, selected_variant.variant.id),
+        node_id: current_cursor,
+        variant_id: selected_variant.variant.id,
+    })
 }
 
 #[cfg(test)]
@@ -1139,6 +1176,14 @@ mod tests {
         assert_eq!(catalog.len(), 1);
         assert!(catalog[0].is_recoverable);
         assert_eq!(catalog[0].conversation_id, conversation_id);
+        assert_eq!(
+            catalog[0].resume_anchor,
+            Some(StoredConversationResumeAnchor {
+                message_id: format!("{node_id}:{variant_id}"),
+                node_id,
+                variant_id,
+            })
+        );
 
         let reloaded = store
             .get_conversation(conversation_id)
@@ -1149,6 +1194,29 @@ mod tests {
             reloaded.nodes[0].variants[0].parts[0].order_index, 0,
             "sqlite-backed recovery should preserve part ordering"
         );
+
+        cleanup_store_paths(&path);
+    }
+
+    #[test]
+    fn completed_catalog_entry_does_not_expose_resume_anchor() {
+        let path = temp_store_path("completed-resume-anchor");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let (stored, conversation_id, ..) = sample_variant_switch_conversation(now);
+
+        store
+            .upsert_conversation(stored)
+            .expect("persist completed conversation");
+
+        let catalog = store
+            .list_conversation_catalog()
+            .expect("load catalog projection");
+        let item = catalog
+            .iter()
+            .find(|item| item.conversation_id == conversation_id)
+            .expect("catalog entry");
+        assert!(item.resume_anchor.is_none());
 
         cleanup_store_paths(&path);
     }

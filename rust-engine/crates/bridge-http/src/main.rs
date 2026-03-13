@@ -31,7 +31,7 @@ use vcpmobile_session::{
     SessionSendRequest, StreamSessionStart, demo_conversation, resolve_prompt_preview,
     selected_branch_snapshot_nodes,
 };
-use vcpmobile_store::FileStore;
+use vcpmobile_store::{FileStore, StoredConversationResumeAnchor};
 
 #[derive(Clone)]
 struct AppState {
@@ -159,6 +159,7 @@ struct ConversationCatalogItem {
     /// This mirrors `Conversation.current_cursor` and is always a node identity.
     current_cursor: Option<uuid::Uuid>,
     is_recoverable: bool,
+    resume_anchor: Option<StoredConversationResumeAnchor>,
     node_count: usize,
 }
 
@@ -322,6 +323,7 @@ async fn chat_catalog(
             pinned: item.pinned,
             current_cursor: item.current_cursor,
             is_recoverable: item.is_recoverable,
+            resume_anchor: item.resume_anchor,
             node_count: item.node_count,
         })
         .collect::<Vec<_>>();
