@@ -20,6 +20,16 @@ interface HubApiClient {
 
     suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope?
 
+    suspend fun listAgents(): List<HubAgentConfig>
+
+    suspend fun getAgent(agentId: String): HubAgentConfig
+
+    suspend fun createAgent(agent: HubAgentConfig): HubAgentMutationResult
+
+    suspend fun updateAgent(agentId: String, agent: HubAgentConfig): HubAgentMutationResult
+
+    suspend fun deleteAgent(agentId: String): HubAgentMutationResult
+
     suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview
 
     suspend fun exchangePairing(request: HubPairingExchangeRequest): HubPairingExchangeResult

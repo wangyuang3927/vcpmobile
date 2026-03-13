@@ -37,6 +37,7 @@ class OkHttpSseHubApiClient(
         const val HUB_CONVERSATIONS_PATH = "/api/chat/conversations"
         const val HUB_CATALOG_PATH = "/api/chat/catalog"
         const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
+        const val HUB_AGENTS_PATH = "/api/agents"
         const val HUB_PROMPT_PREVIEW_PATH = "/api/agents/prompt-preview"
         const val HUB_PAIRING_EXCHANGE_PATH = "/api/pairing/exchange"
         const val CONTENT_TYPE_JSON = "application/json"
@@ -263,6 +264,67 @@ class OkHttpSseHubApiClient(
         }
     }
 
+    override suspend fun listAgents(): List<HubAgentConfig> {
+        val httpRequest = jsonRequestBuilder("$baseUrl$HUB_AGENTS_PATH")
+            .get()
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw parseBridgeFailureException(
+                    statusCode = response.code,
+                    statusMessage = response.message,
+                    raw = raw,
+                    operation = "Hub agent list"
+                )
+            }
+            return parseAgentList(raw)
+        }
+    }
+
+    override suspend fun getAgent(agentId: String): HubAgentConfig {
+        val httpRequest = jsonRequestBuilder("$baseUrl$HUB_AGENTS_PATH/$agentId")
+            .get()
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw parseBridgeFailureException(
+                    statusCode = response.code,
+                    statusMessage = response.message,
+                    raw = raw,
+                    operation = "Hub agent fetch"
+                )
+            }
+            return parseAgentConfig(raw)
+        }
+    }
+
+    override suspend fun createAgent(agent: HubAgentConfig): HubAgentMutationResult {
+        return executeAgentMutation(
+            path = HUB_AGENTS_PATH,
+            method = "POST",
+            body = agent.toUpstreamJsonBody(),
+        )
+    }
+
+    override suspend fun updateAgent(agentId: String, agent: HubAgentConfig): HubAgentMutationResult {
+        return executeAgentMutation(
+            path = "$HUB_AGENTS_PATH/$agentId",
+            method = "PUT",
+            body = agent.toUpstreamJsonBody(),
+        )
+    }
+
+    override suspend fun deleteAgent(agentId: String): HubAgentMutationResult {
+        return executeAgentMutation(
+            path = "$HUB_AGENTS_PATH/$agentId",
+            method = "DELETE",
+        )
+    }
+
     override suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview {
         val httpRequest = Request.Builder()
             .url("$baseUrl$HUB_PROMPT_PREVIEW_PATH")
@@ -319,6 +381,57 @@ class OkHttpSseHubApiClient(
         }
     }
 
+    private fun executeAgentMutation(
+        path: String,
+        method: String,
+        body: String? = null,
+    ): HubAgentMutationResult {
+        val requestBuilder = jsonRequestBuilder("$baseUrl$path")
+        when (method) {
+            "POST" -> requestBuilder.post((body ?: "{}").toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            "PUT" -> requestBuilder.put((body ?: "{}").toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            "DELETE" -> requestBuilder.delete()
+            else -> error("unsupported method $method")
+        }
+
+        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (response.isSuccessful) {
+                return HubAgentMutationResult.Success(
+                    agent = parseAgentConfig(raw),
+                    statusCode = response.code,
+                )
+            }
+
+            return runCatching {
+                HubAgentMutationResult.Failure(
+                    parseBridgeFailure(
+                        statusCode = response.code,
+                        statusMessage = response.message,
+                        raw = raw,
+                    )
+                )
+            }.getOrElse {
+                throw IllegalStateException(
+                    "Hub agent mutation failed: ${response.code} ${response.message} $raw",
+                    it
+                )
+            }
+        }
+    }
+
+    private fun jsonRequestBuilder(url: String): Request.Builder {
+        return Request.Builder()
+            .url(url)
+            .apply {
+                addHeader("Accept", CONTENT_TYPE_JSON)
+                addHeader("Content-Type", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+    }
+
     internal fun parseSnapshotEnvelope(raw: String): RustChatEventEnvelope? {
         val payload = raw.lineSequence()
             .filter { it.startsWith("data: ") }
@@ -359,6 +472,52 @@ class OkHttpSseHubApiClient(
             )
         }.getOrElse {
             throw IllegalStateException("Hub prompt preview payload malformed", it)
+        }
+    }
+
+    internal fun parseAgentList(raw: String): List<HubAgentConfig> {
+        return runCatching {
+            val agents = JSONArray(raw)
+            buildList {
+                for (index in 0 until agents.length()) {
+                    val item = agents.optJSONObject(index) ?: continue
+                    add(parseAgentConfig(item))
+                }
+            }
+        }.getOrElse {
+            throw IllegalStateException("Hub agent list payload malformed", it)
+        }
+    }
+
+    internal fun parseAgentConfig(raw: String): HubAgentConfig {
+        return runCatching {
+            parseAgentConfig(JSONObject(raw))
+        }.getOrElse {
+            throw IllegalStateException("Hub agent payload malformed", it)
+        }
+    }
+
+    internal fun parseBridgeFailure(
+        statusCode: Int,
+        statusMessage: String,
+        raw: String,
+    ): HubBridgeFailure {
+        return runCatching {
+            val body = JSONObject(raw)
+            val errorBody = body.optJSONObject("error")
+                ?: error("missing error object")
+            HubBridgeFailure(
+                statusCode = statusCode,
+                statusMessage = statusMessage,
+                error = HubBridgeError(
+                    kind = errorBody.optString("kind"),
+                    code = errorBody.optNullableString("code"),
+                    message = errorBody.optString("message"),
+                    retriable = errorBody.optBoolean("retriable", false),
+                )
+            )
+        }.getOrElse {
+            throw IllegalStateException("Hub bridge error payload malformed", it)
         }
     }
 
@@ -476,6 +635,102 @@ class OkHttpSseHubApiClient(
         }.getOrNull()?.toMessageSender()?.toRole()
     }
 
+    private fun parseAgentConfig(json: JSONObject): HubAgentConfig {
+        val identity = json.optJSONObject("identity") ?: JSONObject()
+        val prompt = json.optJSONObject("prompt") ?: JSONObject()
+        val promptPlaceholders = prompt.optJSONArray("placeholders")
+        val model = json.optJSONObject("model") ?: JSONObject()
+        val request = json.optJSONObject("request") ?: JSONObject()
+        val memory = json.optJSONObject("memory") ?: JSONObject()
+        val tools = json.optJSONObject("tools") ?: JSONObject()
+        val overrides = tools.optJSONArray("overrides")
+        val group = json.optJSONObject("group") ?: JSONObject()
+
+        return HubAgentConfig(
+            id = json.optString("id"),
+            identity = HubAgentIdentityConfig(
+                name = identity.optString("name"),
+                avatarUri = identity.optNullableString("avatar_uri"),
+                description = identity.optNullableString("description"),
+            ),
+            prompt = HubAgentPromptConfig(
+                systemPrompt = prompt.optString("system_prompt"),
+                promptMode = prompt.optString("prompt_mode").ifBlank { "system_only" },
+                messageTemplate = prompt.optNullableString("message_template"),
+                placeholders = buildList {
+                    for (index in 0 until (promptPlaceholders?.length() ?: 0)) {
+                        val item = promptPlaceholders?.optJSONObject(index) ?: continue
+                        add(
+                            HubAgentPromptVariable(
+                                key = item.optString("key"),
+                                label = item.optNullableString("label"),
+                                value = item.optString("value"),
+                                description = item.optNullableString("description"),
+                            )
+                        )
+                    }
+                },
+            ),
+            model = HubAgentModelConfig(
+                providerLocalId = model.optNullableString("provider_local_id"),
+                presetLocalId = model.optNullableString("preset_local_id"),
+                modelId = model.optNullableString("model_id"),
+            ),
+            request = HubAgentRequestConfig(
+                temperature = request.optNullableFloat("temperature"),
+                topP = request.optNullableFloat("top_p"),
+                maxOutputTokens = request.optNullableInt("max_output_tokens"),
+                reasoningEffort = request.optNullableString("reasoning_effort"),
+            ),
+            memory = HubAgentMemoryConfig(
+                useConversationMemory = memory.optBoolean("use_conversation_memory", true),
+                pinTopLevelFacts = memory.optBoolean("pin_top_level_facts", false),
+            ),
+            tools = HubAgentToolConfig(
+                enableLocalTools = tools.optBoolean("enable_local_tools", true),
+                overrides = buildList {
+                    for (index in 0 until (overrides?.length() ?: 0)) {
+                        val item = overrides?.optJSONObject(index) ?: continue
+                        add(
+                            HubAgentToolPermission(
+                                toolId = item.optString("tool_id"),
+                                enabled = item.optBoolean("enabled", true),
+                            )
+                        )
+                    }
+                },
+            ),
+            group = HubAgentGroupConfig(
+                roleLabel = group.optNullableString("role_label"),
+                aliases = group.optStringArray("aliases"),
+                mentionTags = group.optStringArray("mention_tags"),
+                respondToMentions = group.optBoolean("respond_to_mentions", true),
+                allowAutoRelay = group.optBoolean("allow_auto_relay", false),
+            ),
+            createdAt = json.optNullableString("created_at"),
+            updatedAt = json.optNullableString("updated_at"),
+        )
+    }
+
+    private fun parseBridgeFailureException(
+        statusCode: Int,
+        statusMessage: String,
+        raw: String,
+        operation: String,
+    ): Throwable {
+        return runCatching {
+            HubBridgeFailureException(
+                parseBridgeFailure(
+                    statusCode = statusCode,
+                    statusMessage = statusMessage,
+                    raw = raw,
+                )
+            )
+        }.getOrElse {
+            IllegalStateException("$operation failed: $statusCode $statusMessage $raw", it)
+        }
+    }
+
     private fun HubSendMessageRequest.toUpstreamJsonBody(): String {
         val messagesJson = JSONArray().apply {
             messages.forEach { message ->
@@ -541,6 +796,115 @@ class OkHttpSseHubApiClient(
             .put("device_public_key", devicePublicKey)
             .toString()
     }
+
+    private fun HubAgentConfig.toUpstreamJsonBody(): String {
+        return JSONObject()
+            .put("id", id)
+            .put(
+                "identity",
+                JSONObject()
+                    .put("name", identity.name)
+                    .apply {
+                        identity.avatarUri?.takeIf { it.isNotBlank() }?.let { put("avatar_uri", it) }
+                        identity.description?.takeIf { it.isNotBlank() }?.let { put("description", it) }
+                    }
+            )
+            .put(
+                "prompt",
+                JSONObject()
+                    .put("system_prompt", prompt.systemPrompt)
+                    .put("prompt_mode", prompt.promptMode)
+                    .apply {
+                        prompt.messageTemplate?.takeIf { it.isNotBlank() }?.let {
+                            put("message_template", it)
+                        }
+                        put(
+                            "placeholders",
+                            JSONArray().apply {
+                                prompt.placeholders.forEach { placeholder ->
+                                    put(
+                                        JSONObject()
+                                            .put("key", placeholder.key)
+                                            .put("value", placeholder.value)
+                                            .apply {
+                                                placeholder.label?.takeIf { it.isNotBlank() }?.let {
+                                                    put("label", it)
+                                                }
+                                                placeholder.description?.takeIf { it.isNotBlank() }?.let {
+                                                    put("description", it)
+                                                }
+                                            }
+                                    )
+                                }
+                            }
+                        )
+                    }
+            )
+            .put(
+                "model",
+                JSONObject().apply {
+                    model.providerLocalId?.takeIf { it.isNotBlank() }?.let {
+                        put("provider_local_id", it)
+                    }
+                    model.presetLocalId?.takeIf { it.isNotBlank() }?.let {
+                        put("preset_local_id", it)
+                    }
+                    model.modelId?.takeIf { it.isNotBlank() }?.let {
+                        put("model_id", it)
+                    }
+                }
+            )
+            .put(
+                "request",
+                JSONObject().apply {
+                    request.temperature?.let { put("temperature", it.toDouble()) }
+                    request.topP?.let { put("top_p", it.toDouble()) }
+                    request.maxOutputTokens?.let { put("max_output_tokens", it) }
+                    request.reasoningEffort?.takeIf { it.isNotBlank() }?.let {
+                        put("reasoning_effort", it)
+                    }
+                }
+            )
+            .put(
+                "memory",
+                JSONObject()
+                    .put("use_conversation_memory", memory.useConversationMemory)
+                    .put("pin_top_level_facts", memory.pinTopLevelFacts)
+            )
+            .put(
+                "tools",
+                JSONObject()
+                    .put("enable_local_tools", tools.enableLocalTools)
+                    .put(
+                        "overrides",
+                        JSONArray().apply {
+                            tools.overrides.forEach { override ->
+                                put(
+                                    JSONObject()
+                                        .put("tool_id", override.toolId)
+                                        .put("enabled", override.enabled)
+                                )
+                            }
+                        }
+                    )
+            )
+            .put(
+                "group",
+                JSONObject()
+                    .put("aliases", JSONArray(group.aliases))
+                    .put("mention_tags", JSONArray(group.mentionTags))
+                    .put("respond_to_mentions", group.respondToMentions)
+                    .put("allow_auto_relay", group.allowAutoRelay)
+                    .apply {
+                        group.roleLabel?.takeIf { it.isNotBlank() }?.let { put("role_label", it) }
+                    }
+            )
+            .apply {
+                createdAt?.takeIf { it.isNotBlank() }?.let { put("created_at", it) }
+                updatedAt?.takeIf { it.isNotBlank() }?.let { put("updated_at", it) }
+            }
+            .toString()
+    }
 }
 
 private fun JSONObject.optStringArray(key: String): List<String> {
@@ -550,6 +914,18 @@ private fun JSONObject.optStringArray(key: String): List<String> {
             array.optString(index).takeIf { it.isNotBlank() }?.let(::add)
         }
     }
+}
+
+private fun JSONObject.optNullableString(key: String): String? {
+    return if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotBlank() } else null
+}
+
+private fun JSONObject.optNullableFloat(key: String): Float? {
+    return if (has(key) && !isNull(key)) optDouble(key).toFloat() else null
+}
+
+private fun JSONObject.optNullableInt(key: String): Int? {
+    return if (has(key) && !isNull(key)) optInt(key) else null
 }
 
 internal class HubRelayErrorException(message: String) : IllegalStateException(
