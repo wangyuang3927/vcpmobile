@@ -283,11 +283,6 @@ object ChatDetailReducer {
             replacementIndex != -1 || replacementNodeId.isNullOrBlank() -> -1
             else -> state.messages.indexOfFirst { it.nodeId == replacementNodeId }
         }
-        val previousMessage = when {
-            replacementIndex != -1 -> state.messages[replacementIndex]
-            nodeReplacementIndex != -1 -> state.messages[nodeReplacementIndex]
-            else -> null
-        }
         val replacement = ChatMessage(
             id = messageId,
             sender = sender,
@@ -296,8 +291,7 @@ object ChatDetailReducer {
             ast = ast,
             nodeId = nodeId,
             variantId = variantId,
-            branchSelector = mergeBranchSelector(
-                previous = previousMessage?.branchSelector ?: ChatBranchSelector(),
+            branchSelector = branchSelectorFromRustTruth(
                 selectedVariantId = variantId,
                 incomingOptions = branchOptions,
             ),

@@ -131,13 +131,36 @@ fun ChatMessage.identity(): ChatMessageIdentity = ChatMessageIdentity(
     variantId = variantId,
 )
 
+fun branchSelectorFromRustTruth(
+    selectedVariantId: String?,
+    incomingOptions: List<ChatBranchOption> = emptyList(),
+): ChatBranchSelector {
+    return buildBranchSelector(
+        selectedVariantId = selectedVariantId,
+        options = incomingOptions,
+    )
+}
+
 fun mergeBranchSelector(
     previous: ChatBranchSelector,
     selectedVariantId: String?,
     incomingOptions: List<ChatBranchOption> = emptyList(),
 ): ChatBranchSelector {
+    return when {
+        selectedVariantId.isNullOrBlank() -> previous
+        else -> buildBranchSelector(
+            selectedVariantId = selectedVariantId,
+            options = previous.options + incomingOptions,
+        )
+    }
+}
+
+private fun buildBranchSelector(
+    selectedVariantId: String?,
+    options: List<ChatBranchOption>,
+): ChatBranchSelector {
     if (selectedVariantId.isNullOrBlank()) {
-        return previous
+        return ChatBranchSelector()
     }
 
     val mergedOptions = mutableListOf<ChatBranchOption>()
@@ -147,16 +170,16 @@ fun mergeBranchSelector(
         val existingIndex = mergedOptions.indexOfFirst { it.variantId == option.variantId }
         if (existingIndex == -1) {
             mergedOptions += option
-        } else {
-            val existing = mergedOptions[existingIndex]
-            mergedOptions[existingIndex] = existing.copy(
-                status = option.status ?: existing.status,
-            )
+            return
         }
+
+        val existing = mergedOptions[existingIndex]
+        mergedOptions[existingIndex] = existing.copy(
+            status = option.status ?: existing.status,
+        )
     }
 
-    previous.options.forEach(::upsert)
-    incomingOptions.forEach(::upsert)
+    options.forEach(::upsert)
     upsert(ChatBranchOption(variantId = selectedVariantId))
 
     return ChatBranchSelector(
