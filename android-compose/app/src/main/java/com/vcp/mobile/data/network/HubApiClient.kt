@@ -21,4 +21,6 @@ interface HubApiClient {
     suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope?
 
     suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview
+
+    suspend fun exchangePairing(request: HubPairingExchangeRequest): HubPairingExchangeResult
 }

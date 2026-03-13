@@ -946,6 +946,89 @@ QR onboarding consists of:
 
 Unlike `hapi`, bootstrap credentials should be exchanged quickly for revocable mobile credentials rather than lingering in URLs/storage.
 
+### 11.4 Pairing Exchange Contract
+
+Phase 1 freezes a single pairing exchange endpoint:
+
+- `POST /api/pairing/exchange`
+- request/response payloads are JSON
+- success returns `200 OK`
+- contract or validation failures return an explicit JSON failure payload
+
+Request body:
+
+```json
+{
+  "pairing_session_id": "pairing-session-1",
+  "namespace": "workspace-alpha",
+  "bootstrap_token": "bootstrap-secret",
+  "device_name": "Pixel 9",
+  "device_platform": "android",
+  "device_public_key": "base64-public-key"
+}
+```
+
+Field intent:
+
+- `pairing_session_id`: QR bootstrap session identity from the desktop bridge contract
+- `namespace`: backend or workspace isolation key carried through pairing and later revocation
+- `bootstrap_token`: one-time or short-lived secret scanned from QR
+- `device_name`: user-visible trusted-device label
+- `device_platform`: current phase-1 mobile platform, with `android` as the initial shipped value
+- `device_public_key`: device-side public key material used to register a revocable trusted device
+
+Success body:
+
+```json
+{
+  "pairing_session_id": "pairing-session-1",
+  "namespace": "workspace-alpha",
+  "status": "paired",
+  "mobile_token": {
+    "access_token": "mobile-token",
+    "token_type": "bearer",
+    "expires_at": "2026-03-13T12:00:00Z"
+  },
+  "trusted_device": {
+    "trusted_device_id": "trusted-device-1",
+    "device_name": "Pixel 9",
+    "device_platform": "android"
+  },
+  "resume_anchor": {
+    "anchor": "resume-anchor-1",
+    "expires_at": "2026-03-20T12:00:00Z"
+  }
+}
+```
+
+Failure body:
+
+```json
+{
+  "pairing_session_id": "pairing-session-1",
+  "namespace": "workspace-alpha",
+  "status": "rejected",
+  "error": {
+    "code": "bootstrap_token_expired",
+    "message": "bootstrap token expired",
+    "retriable": false
+  }
+}
+```
+
+Initial failure-code floor:
+
+- `pairing_session_id_required`
+- `pairing_namespace_required`
+- `pairing_bootstrap_token_required`
+- `pairing_device_name_required`
+- `pairing_device_public_key_required`
+
+Implementation staging rule:
+
+- before token issuance lands, bridge implementations may return `pairing_exchange_not_ready`
+- later work must preserve the same request keys and top-level success/failure structure
+
 ## 12. VCPToolBox Compatibility Layer
 
 ### 12.1 Placeholder Compatibility
