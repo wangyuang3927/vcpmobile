@@ -2,7 +2,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::{BTreeMap, BTreeSet, VecDeque},
     io::{Cursor, Read},
 };
 use thiserror::Error;
@@ -31,6 +31,7 @@ pub struct SessionEngine {
     store: FileStore,
     default_topic_id: TopicId,
     default_agent_id: Uuid,
+    active_streams: BTreeMap<ConversationId, ActiveStreamSession>,
 }
 
 #[derive(Debug, Clone)]
@@ -46,6 +47,40 @@ pub struct SessionEditRequest {
     pub node_id: NodeId,
     pub text: String,
     pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamSessionStart {
+    pub conversation_id: ConversationId,
+    pub initial_events: Vec<EventEnvelope<ChatEvent>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveStreamSession {
+    assistant_node_id: NodeId,
+    assistant_variant_id: Uuid,
+    assistant_node: NodeBundle,
+    delta_parts: Vec<MessagePart>,
+    next_step: ActiveStreamStep,
+    pending_events: VecDeque<EventEnvelope<ChatEvent>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveStreamStep {
+    Started,
+    Delta,
+    Complete,
+    Done,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedSendStreamSession {
+    stored: StoredConversation,
+    assistant_node_id: NodeId,
+    assistant_variant_id: Uuid,
+    assistant_node: NodeBundle,
+    delta_parts: Vec<MessagePart>,
+    initial_events: Vec<EventEnvelope<ChatEvent>>,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +144,10 @@ pub enum SessionError {
         conversation_id: ConversationId,
         reason: String,
     },
+    #[error("generation already active for conversation {conversation_id}")]
+    ActiveGenerationExists { conversation_id: ConversationId },
+    #[error("no active generation for conversation {conversation_id}")]
+    NoActiveGeneration { conversation_id: ConversationId },
     #[error("document transform error: {0}")]
     DocumentTransform(#[from] DocumentTransformError),
 }
@@ -119,6 +158,7 @@ impl SessionEngine {
             store,
             default_topic_id,
             default_agent_id,
+            active_streams: BTreeMap::new(),
         }
     }
 
@@ -153,6 +193,380 @@ impl SessionEngine {
         attachments: Vec<DocumentAttachmentInput>,
     ) -> Result<DocumentPromptTransformOutput, SessionError> {
         transform_document_prompt_output(&attachments).map_err(SessionError::from)
+    }
+
+    pub fn start_stream_session(
+        &mut self,
+        request: SessionSendRequest,
+    ) -> Result<StreamSessionStart, SessionError> {
+        let prepared = self.prepare_send_stream_session(request)?;
+        let conversation_id = prepared.stored.conversation.id;
+        self.store.upsert_conversation(prepared.stored.clone())?;
+        self.active_streams.insert(
+            conversation_id,
+            ActiveStreamSession {
+                assistant_node_id: prepared.assistant_node_id,
+                assistant_variant_id: prepared.assistant_variant_id,
+                assistant_node: prepared.assistant_node,
+                delta_parts: prepared.delta_parts,
+                next_step: ActiveStreamStep::Started,
+                pending_events: VecDeque::new(),
+            },
+        );
+
+        Ok(StreamSessionStart {
+            conversation_id,
+            initial_events: prepared.initial_events,
+        })
+    }
+
+    pub fn poll_stream_event(
+        &mut self,
+        conversation_id: ConversationId,
+    ) -> Result<Option<EventEnvelope<ChatEvent>>, SessionError> {
+        loop {
+            let Some((next_step, pending_event)) = self
+                .active_streams
+                .get_mut(&conversation_id)
+                .map(|session| (session.next_step, session.pending_events.pop_front()))
+            else {
+                return Ok(None);
+            };
+
+            if let Some(event) = pending_event {
+                let should_remove = self
+                    .active_streams
+                    .get(&conversation_id)
+                    .map(|session| {
+                        session.next_step == ActiveStreamStep::Done
+                            && session.pending_events.is_empty()
+                    })
+                    .unwrap_or(false);
+                if should_remove {
+                    self.active_streams.remove(&conversation_id);
+                }
+                return Ok(Some(event));
+            }
+
+            let queued_events = match next_step {
+                ActiveStreamStep::Started => {
+                    let session = self
+                        .active_streams
+                        .get(&conversation_id)
+                        .cloned()
+                        .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+                    let events = self.dispatch_started_events(
+                        conversation_id,
+                        session.assistant_node_id,
+                        session.assistant_variant_id,
+                    )?;
+                    if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                        active.next_step = ActiveStreamStep::Delta;
+                    }
+                    events
+                }
+                ActiveStreamStep::Delta => {
+                    let session = self
+                        .active_streams
+                        .get(&conversation_id)
+                        .cloned()
+                        .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+                    let events = self.dispatch_delta_events(
+                        conversation_id,
+                        session.assistant_node_id,
+                        session.assistant_variant_id,
+                        session.delta_parts,
+                    )?;
+                    if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                        active.next_step = ActiveStreamStep::Complete;
+                    }
+                    events
+                }
+                ActiveStreamStep::Complete => {
+                    let session = self
+                        .active_streams
+                        .get(&conversation_id)
+                        .cloned()
+                        .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+                    let events = self.dispatch_terminal_events(
+                        conversation_id,
+                        session.assistant_node_id,
+                        terminal_assistant_node(
+                            &session.assistant_node,
+                            VariantStatus::Completed,
+                            Utc::now(),
+                        ),
+                        ChatEvent::GenerationCompleted {
+                            node_id: session.assistant_node_id,
+                            variant_id: session.assistant_variant_id,
+                        },
+                        GenerationSignal::Complete,
+                    )?;
+                    if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                        active.next_step = ActiveStreamStep::Done;
+                    }
+                    events
+                }
+                ActiveStreamStep::Done => {
+                    self.active_streams.remove(&conversation_id);
+                    return Ok(None);
+                }
+            };
+
+            if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                active.pending_events.extend(queued_events);
+            }
+        }
+    }
+
+    pub fn cancel_stream_session(
+        &mut self,
+        conversation_id: ConversationId,
+        message: Option<String>,
+    ) -> Result<(), SessionError> {
+        let session = self
+            .active_streams
+            .get(&conversation_id)
+            .cloned()
+            .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+        let terminal_message = message;
+        let queued_events = self.dispatch_terminal_events(
+            conversation_id,
+            session.assistant_node_id,
+            terminal_assistant_node(
+                &session.assistant_node,
+                VariantStatus::Cancelled,
+                Utc::now(),
+            ),
+            ChatEvent::GenerationCancelled {
+                node_id: session.assistant_node_id,
+                variant_id: session.assistant_variant_id,
+                message: terminal_message.clone(),
+            },
+            GenerationSignal::Cancel,
+        )?;
+
+        if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+            active.pending_events.clear();
+            active.pending_events.extend(queued_events);
+            active.next_step = ActiveStreamStep::Done;
+        }
+        Ok(())
+    }
+
+    pub fn interrupt_stream_session(
+        &mut self,
+        conversation_id: ConversationId,
+        message: Option<String>,
+    ) -> Result<(), SessionError> {
+        self.cancel_stream_session(
+            conversation_id,
+            Some(message.unwrap_or_else(|| "interrupted by client".to_string())),
+        )
+    }
+
+    fn prepare_send_stream_session(
+        &self,
+        request: SessionSendRequest,
+    ) -> Result<PreparedSendStreamSession, SessionError> {
+        let text = request.text.trim();
+        if text.is_empty() && request.attachments.is_empty() {
+            return Err(SessionError::EmptyText);
+        }
+
+        let now = Utc::now();
+        let mut stored = match request.conversation_id {
+            Some(conversation_id) => self
+                .store
+                .get_conversation(conversation_id)?
+                .ok_or(SessionError::ConversationNotFound(conversation_id))?,
+            None => StoredConversation {
+                conversation: Conversation {
+                    id: ConversationId::new_v4(),
+                    topic_id: self.default_topic_id,
+                    agent_id: self.default_agent_id,
+                    title: truncate_title(text, &request.attachments),
+                    summary: Some("Rust session store conversation".to_string()),
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: Vec::new(),
+            },
+        };
+
+        if stored.conversation.generation_state.is_active()
+            || self.active_streams.contains_key(&stored.conversation.id)
+        {
+            return Err(SessionError::ActiveGenerationExists {
+                conversation_id: stored.conversation.id,
+            });
+        }
+
+        let parent_cursor = validated_current_cursor(&stored)?;
+        let user_node = build_user_node(
+            stored.conversation.id,
+            parent_cursor,
+            text,
+            &request.attachments,
+            now,
+        )?;
+        validate_node_bundle_parts(&user_node)?;
+        let user_node_id = user_node.node.id;
+        let assistant_node = build_assistant_node(
+            stored.conversation.id,
+            Some(user_node_id),
+            text,
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+        validate_node_bundle_parts(&assistant_node)?;
+        let assistant_node_id = assistant_node.node.id;
+        let assistant_variant_id = assistant_node.variants[0].variant.id;
+        let delta_parts = streaming_delta_parts(&assistant_node)?;
+
+        stored.conversation.current_cursor = Some(assistant_node_id);
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit);
+        stored.conversation.updated_at = now;
+        stored.nodes.push(user_node);
+        stored.nodes.push(assistant_node.clone());
+
+        let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
+        let initial_events = vec![EventEnvelope::new(
+            Some(stored.conversation.id),
+            ChatEvent::ConversationSnapshot {
+                conversation: SnapshotConversation::from(&stored.conversation),
+                branch: SnapshotBranch {
+                    cursor_node_id: stored.conversation.current_cursor,
+                    nodes: snapshot_nodes,
+                },
+            },
+        )];
+
+        Ok(PreparedSendStreamSession {
+            stored,
+            assistant_node_id,
+            assistant_variant_id,
+            assistant_node,
+            delta_parts,
+            initial_events,
+        })
+    }
+
+    fn dispatch_started_events(
+        &self,
+        conversation_id: ConversationId,
+        assistant_node_id: NodeId,
+        assistant_variant_id: Uuid,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let mut stored = self.load_conversation_strict(conversation_id)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Started);
+        stored.conversation.updated_at = Utc::now();
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::GenerationStarted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationMetaUpdate {
+                    conversation: stored.conversation,
+                },
+            ),
+        ])
+    }
+
+    fn dispatch_delta_events(
+        &self,
+        conversation_id: ConversationId,
+        assistant_node_id: NodeId,
+        assistant_variant_id: Uuid,
+        delta_parts: Vec<MessagePart>,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let mut stored = self.load_conversation_strict(conversation_id)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta);
+        stored.conversation.updated_at = Utc::now();
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::GenerationPartDelta {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                    appended_parts: delta_parts,
+                },
+            ),
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationMetaUpdate {
+                    conversation: stored.conversation,
+                },
+            ),
+        ])
+    }
+
+    fn dispatch_terminal_events(
+        &self,
+        conversation_id: ConversationId,
+        assistant_node_id: NodeId,
+        terminal_node: NodeBundle,
+        terminal_event: ChatEvent,
+        terminal_signal: GenerationSignal,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let mut stored = self.load_conversation_strict(conversation_id)?;
+        replace_node_bundle(&mut stored, assistant_node_id, terminal_node.clone())?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(terminal_signal);
+        stored.conversation.updated_at = Utc::now();
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationNodeUpsert {
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: selected_node_projection(&terminal_node)?,
+                    },
+                },
+            ),
+            EventEnvelope::new(Some(conversation_id), terminal_event),
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationMetaUpdate {
+                    conversation: stored.conversation,
+                },
+            ),
+        ])
+    }
+
+    fn load_conversation_strict(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<StoredConversation, SessionError> {
+        self.store
+            .get_conversation(conversation_id)?
+            .ok_or(SessionError::ConversationNotFound(conversation_id))
     }
 
     pub fn send_message(
@@ -1062,9 +1476,17 @@ fn build_assistant_node(
 }
 
 fn finalize_assistant_node(bundle: &NodeBundle, finished_at: chrono::DateTime<Utc>) -> NodeBundle {
+    terminal_assistant_node(bundle, VariantStatus::Completed, finished_at)
+}
+
+fn terminal_assistant_node(
+    bundle: &NodeBundle,
+    status: VariantStatus,
+    finished_at: chrono::DateTime<Utc>,
+) -> NodeBundle {
     let mut finalized = bundle.clone();
     if let Some(selected_variant) = finalized.variants.get_mut(finalized.node.select_index) {
-        selected_variant.variant.status = VariantStatus::Completed;
+        selected_variant.variant.status = status;
         selected_variant.variant.finished_at = Some(finished_at);
     }
     finalized
@@ -1261,6 +1683,23 @@ fn stored_node_index(stored: &StoredConversation) -> BTreeMap<NodeId, &NodeBundl
         .iter()
         .map(|bundle| (bundle.node.id, bundle))
         .collect()
+}
+
+fn replace_node_bundle(
+    stored: &mut StoredConversation,
+    node_id: NodeId,
+    replacement: NodeBundle,
+) -> Result<(), SessionError> {
+    let position = stored
+        .nodes
+        .iter()
+        .position(|bundle| bundle.node.id == node_id)
+        .ok_or(SessionError::NodeNotFound {
+            conversation_id: stored.conversation.id,
+            node_id,
+        })?;
+    stored.nodes[position] = replacement;
+    Ok(())
 }
 
 fn selected_variant(bundle: &NodeBundle) -> Result<&VariantBundle, SessionError> {
@@ -1557,6 +1996,300 @@ mod tests {
         let path = env::temp_dir().join(format!("vcpmobile-session-test-{}.json", Uuid::new_v4()));
         let store = FileStore::new(path);
         SessionEngine::new(store, Uuid::new_v4(), Uuid::new_v4())
+    }
+
+    #[test]
+    fn start_stream_session_persists_requesting_snapshot_before_dispatch() {
+        let mut engine = test_engine();
+
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+
+        assert_eq!(started.initial_events.len(), 1);
+        assert_eq!(
+            started.initial_events[0].event_name,
+            "conversation_snapshot"
+        );
+
+        let stored = engine
+            .snapshot_for(started.conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.conversation.generation_state,
+            GenerationState::Requesting
+        );
+
+        let snapshot = match &started.initial_events[0].payload {
+            ChatEvent::ConversationSnapshot {
+                conversation,
+                branch,
+            } => (conversation, branch),
+            other => panic!("expected conversation_snapshot, got {other:?}"),
+        };
+        assert_eq!(snapshot.0.generation_state, GenerationState::Requesting);
+        assert_eq!(
+            snapshot.1.cursor_node_id,
+            stored.conversation.current_cursor
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn poll_stream_event_advances_started_streaming_and_completed_deterministically() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+        let conversation_id = started.conversation_id;
+
+        let first = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll started event")
+            .expect("started event");
+        assert_eq!(first.event_name, "generation_started");
+
+        let second = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll started meta")
+            .expect("started meta");
+        match second.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Started);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        let third = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll delta")
+            .expect("delta");
+        assert_eq!(third.event_name, "generation_part_delta");
+
+        let fourth = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll streaming meta")
+            .expect("streaming meta");
+        match fourth.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Streaming);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        let fifth = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll completed upsert")
+            .expect("completed upsert");
+        match fifth.payload {
+            ChatEvent::ConversationNodeUpsert { branch } => {
+                assert_eq!(branch.node.selected_variant.status, VariantStatus::Completed);
+            }
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        }
+
+        let sixth = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll completed terminal")
+            .expect("completed terminal");
+        assert_eq!(sixth.event_name, "generation_completed");
+
+        let seventh = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll completed meta")
+            .expect("completed meta");
+        match seventh.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Completed);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        assert!(
+            engine
+                .poll_stream_event(conversation_id)
+                .expect("poll after completion")
+                .is_none(),
+            "stream should be exhausted after terminal meta update"
+        );
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load stored conversation")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.conversation.generation_state,
+            GenerationState::Completed
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn cancel_stream_session_enqueues_cancelled_terminal_events_for_live_stream() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+        let conversation_id = started.conversation_id;
+
+        engine
+            .cancel_stream_session(conversation_id, Some("cancelled by test".to_string()))
+            .expect("cancel active stream");
+
+        let first = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll cancelled upsert")
+            .expect("cancelled upsert");
+        match first.payload {
+            ChatEvent::ConversationNodeUpsert { branch } => {
+                assert_eq!(branch.node.selected_variant.status, VariantStatus::Cancelled);
+            }
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        }
+
+        let second = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll cancelled terminal")
+            .expect("cancelled terminal");
+        match second.payload {
+            ChatEvent::GenerationCancelled { message, .. } => {
+                assert_eq!(message.as_deref(), Some("cancelled by test"));
+            }
+            other => panic!("expected generation_cancelled, got {other:?}"),
+        }
+
+        let third = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll cancelled meta")
+            .expect("cancelled meta");
+        match third.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Cancelled);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        assert!(
+            engine
+                .poll_stream_event(conversation_id)
+                .expect("poll after cancellation")
+                .is_none(),
+            "cancelled stream should be exhausted after terminal meta update"
+        );
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load stored conversation")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.conversation.generation_state,
+            GenerationState::Cancelled
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn interrupt_stream_session_uses_default_interrupt_message() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+        let conversation_id = started.conversation_id;
+
+        engine
+            .interrupt_stream_session(conversation_id, None)
+            .expect("interrupt active stream");
+
+        let first = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll interrupted upsert")
+            .expect("interrupted upsert");
+        match first.payload {
+            ChatEvent::ConversationNodeUpsert { branch } => {
+                assert_eq!(branch.node.selected_variant.status, VariantStatus::Cancelled);
+            }
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        }
+
+        let second = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll interrupted terminal")
+            .expect("interrupted terminal");
+        match second.payload {
+            ChatEvent::GenerationCancelled { message, .. } => {
+                assert_eq!(message.as_deref(), Some("interrupted by client"));
+            }
+            other => panic!("expected generation_cancelled, got {other:?}"),
+        }
+
+        let third = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll interrupted meta")
+            .expect("interrupted meta");
+        match third.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Cancelled);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        assert!(
+            engine
+                .poll_stream_event(conversation_id)
+                .expect("poll after interrupt")
+                .is_none(),
+            "interrupted stream should be exhausted after terminal meta update"
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn start_stream_session_rejects_second_send_while_generation_is_active() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start first stream");
+
+        let error = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: Some(started.conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect_err("second send must be rejected while active");
+
+        assert!(matches!(
+            error,
+            SessionError::ActiveGenerationExists { conversation_id }
+                if conversation_id == started.conversation_id
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
     }
 
     fn attachment(name: &str, mime: Option<&str>, bytes: &[u8]) -> DocumentAttachmentInput {
@@ -2421,7 +3154,8 @@ mod tests {
             .expect("assistant bundle");
         assert_eq!(assistant_bundle.variants.len(), 2);
         assert_eq!(assistant_bundle.node.select_index, 1);
-        assert_eq!(assistant_bundle.variants[0], original_variant);
+        assert_eq!(assistant_bundle.variants[0].variant, original_variant.variant);
+        assert_eq!(assistant_bundle.variants[0].parts, original_variant.parts);
         assert_eq!(
             assistant_bundle.variants[1].variant.id,
             regenerated_variant_id
