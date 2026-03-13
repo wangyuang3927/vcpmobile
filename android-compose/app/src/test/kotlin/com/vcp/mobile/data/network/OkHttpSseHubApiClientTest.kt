@@ -133,6 +133,45 @@ class OkHttpSseHubApiClientTest {
     }
 
     @Test
+    fun `parseResolvedPromptPreview returns stable prompt and provenance shape`() {
+        val preview = client.parseResolvedPromptPreview(
+            """
+            {
+              "preview": {
+                "raw_prompt": "{{char}} waves at {{sticker_wave}}",
+                "resolved_prompt": "Analyst waves at {{sticker_wave}}",
+                "records": [
+                  {
+                    "key": "char",
+                    "value": "Analyst",
+                    "category": "agent",
+                    "source": "agent_profile",
+                    "status": "applied"
+                  },
+                  {
+                    "key": "sticker_wave",
+                    "value": ":wave:",
+                    "category": "sticker_media",
+                    "source": "sticker_pack",
+                    "status": "deferred"
+                  }
+                ],
+                "unresolved_tokens": ["{{missing_value}}"],
+                "partial_tokens": ["{{half"]
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("{{char}} waves at {{sticker_wave}}", preview.rawPrompt)
+        assertEquals("Analyst waves at {{sticker_wave}}", preview.resolvedPrompt)
+        assertEquals(listOf("agent", "sticker_media"), preview.records.map { it.category })
+        assertEquals(listOf("applied", "deferred"), preview.records.map { it.status })
+        assertEquals(listOf("{{missing_value}}"), preview.unresolvedTokens)
+        assertEquals(listOf("{{half"), preview.partialTokens)
+    }
+
+    @Test
     fun `fetchConversationSnapshot throws on malformed payload`() = runBlocking {
         val malformedClient = OkHttpSseHubApiClient(
             okHttpClient = OkHttpClient.Builder()

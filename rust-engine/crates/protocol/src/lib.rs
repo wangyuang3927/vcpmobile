@@ -4,7 +4,9 @@ use uuid::Uuid;
 use vcpmobile_domain::{
     AgentId, Conversation, ConversationId, DocumentAttachmentInput, DocumentPromptTransformOutput,
     DraftState, GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole,
-    MessageVariant, NodeId, PartId, TopicId, VariantId, VariantStatus,
+    MessageVariant, NodeId, PartId, PlaceholderCategory, PlaceholderSource, PromptPlaceholderValue,
+    PromptResolutionPreview, PromptResolutionRecord, PromptResolutionStatus, TopicId, VariantId,
+    VariantStatus,
 };
 
 pub const CHAT_EVENT_SCHEMA_FAMILY: &str = "chat_event";
@@ -199,14 +201,14 @@ impl NamedEvent for ChatEvent {
 /// Canonical Rust/store truth may include every variant and use `node.select_index` against the
 /// full `variants` array. App-facing payloads should project this into `SnapshotNode` so clients
 /// do not need to infer branch semantics from hidden variants.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NodeBundle {
     pub node: MessageNode,
     pub variants: Vec<VariantBundle>,
 }
 
 /// Transport shape for one variant and its ordered typed parts.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct VariantBundle {
     pub variant: MessageVariant,
     pub parts: Vec<MessagePart>,
@@ -352,6 +354,85 @@ pub struct TransformDocumentPromptRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TransformDocumentPromptResponse {
     pub output: DocumentPromptTransformOutput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptPreviewPlaceholder {
+    pub key: String,
+    pub value: String,
+    pub category: PlaceholderCategory,
+    pub source: PlaceholderSource,
+}
+
+impl From<PromptPreviewPlaceholder> for PromptPlaceholderValue {
+    fn from(value: PromptPreviewPlaceholder) -> Self {
+        Self {
+            key: value.key,
+            value: value.value,
+            category: value.category,
+            source: value.source,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PromptPreviewRecord {
+    pub key: String,
+    pub value: String,
+    pub category: PlaceholderCategory,
+    pub source: PlaceholderSource,
+    pub status: PromptResolutionStatus,
+}
+
+impl From<PromptResolutionRecord> for PromptPreviewRecord {
+    fn from(value: PromptResolutionRecord) -> Self {
+        Self {
+            key: value.key,
+            value: value.value,
+            category: value.category,
+            source: value.source,
+            status: value.status,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvedPromptPreview {
+    pub raw_prompt: String,
+    pub resolved_prompt: String,
+    pub records: Vec<PromptPreviewRecord>,
+    #[serde(default)]
+    pub unresolved_tokens: Vec<String>,
+    #[serde(default)]
+    pub partial_tokens: Vec<String>,
+}
+
+impl From<PromptResolutionPreview> for ResolvedPromptPreview {
+    fn from(value: PromptResolutionPreview) -> Self {
+        Self {
+            raw_prompt: value.raw_prompt,
+            resolved_prompt: value.resolved_prompt,
+            records: value
+                .records
+                .into_iter()
+                .map(PromptPreviewRecord::from)
+                .collect(),
+            unresolved_tokens: value.unresolved_tokens,
+            partial_tokens: value.partial_tokens,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvePromptPreviewRequest {
+    pub raw_prompt: String,
+    #[serde(default)]
+    pub placeholders: Vec<PromptPreviewPlaceholder>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ResolvePromptPreviewResponse {
+    pub preview: ResolvedPromptPreview,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -611,13 +692,17 @@ mod tests {
     use chrono::Utc;
     use serde_json::Value;
     use uuid::Uuid;
-    use vcpmobile_domain::{GenerationState, MessagePartPayload, MessageRole, VariantStatus};
+    use vcpmobile_domain::{
+        GenerationState, MessagePartPayload, MessageRole, PlaceholderCategory, PlaceholderSource,
+        PromptResolutionPreview, PromptResolutionRecord, PromptResolutionStatus, VariantStatus,
+    };
 
     use super::{
         AgentEditorFieldKey, AgentEditorFieldMutability, AgentEditorFieldPersistence,
         AgentEditorGroupKey, AgentEditorSchema, ChatEvent, EventEnvelope, EventError,
-        EventErrorKind, EventSchema, NamedEvent, SnapshotBranch, SnapshotConversation,
-        SnapshotNode, SnapshotPart, SnapshotVariant, UpsertBranch,
+        EventErrorKind, EventSchema, NamedEvent, PromptPreviewRecord, ResolvedPromptPreview,
+        SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
+        UpsertBranch,
     };
 
     #[test]
@@ -720,6 +805,67 @@ mod tests {
         for (event, expected_name) in cases {
             assert_eq!(event.event_name(), expected_name);
         }
+    }
+
+    #[test]
+    fn resolved_prompt_preview_transport_preserves_stable_preview_and_provenance_shape() {
+        let preview = ResolvedPromptPreview::from(PromptResolutionPreview {
+            raw_prompt: "{{agent_name}} waves at {{sticker_wave}}".to_string(),
+            resolved_prompt: "Analyst waves at {{sticker_wave}}".to_string(),
+            records: vec![
+                PromptResolutionRecord {
+                    key: "agent_name".to_string(),
+                    value: "Analyst".to_string(),
+                    category: PlaceholderCategory::Agent,
+                    source: PlaceholderSource::AgentProfile,
+                    status: PromptResolutionStatus::Applied,
+                },
+                PromptResolutionRecord {
+                    key: "sticker_wave".to_string(),
+                    value: ":wave:".to_string(),
+                    category: PlaceholderCategory::StickerMedia,
+                    source: PlaceholderSource::StickerPack,
+                    status: PromptResolutionStatus::Deferred,
+                },
+            ],
+            unresolved_tokens: vec!["{{missing_value}}".to_string()],
+            partial_tokens: vec!["{{half".to_string()],
+        });
+
+        assert_eq!(
+            preview.records,
+            vec![
+                PromptPreviewRecord {
+                    key: "agent_name".to_string(),
+                    value: "Analyst".to_string(),
+                    category: PlaceholderCategory::Agent,
+                    source: PlaceholderSource::AgentProfile,
+                    status: PromptResolutionStatus::Applied,
+                },
+                PromptPreviewRecord {
+                    key: "sticker_wave".to_string(),
+                    value: ":wave:".to_string(),
+                    category: PlaceholderCategory::StickerMedia,
+                    source: PlaceholderSource::StickerPack,
+                    status: PromptResolutionStatus::Deferred,
+                },
+            ]
+        );
+
+        let serialized = serde_json::to_value(&preview).expect("serialize preview");
+        assert_eq!(
+            serialized["raw_prompt"],
+            "{{agent_name}} waves at {{sticker_wave}}"
+        );
+        assert_eq!(
+            serialized["resolved_prompt"],
+            "Analyst waves at {{sticker_wave}}"
+        );
+        assert_eq!(serialized["records"][0]["category"], "agent");
+        assert_eq!(serialized["records"][0]["source"], "agent_profile");
+        assert_eq!(serialized["records"][1]["status"], "deferred");
+        assert_eq!(serialized["unresolved_tokens"][0], "{{missing_value}}");
+        assert_eq!(serialized["partial_tokens"][0], "{{half");
     }
 
     #[test]

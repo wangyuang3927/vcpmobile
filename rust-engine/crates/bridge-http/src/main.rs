@@ -21,12 +21,14 @@ use vcpmobile_domain::{
 };
 use vcpmobile_protocol::{
     ChatEvent, EditMessageRequest, EventEnvelope, EventError, EventErrorKind,
-    RegenerateNodeRequest, SelectVariantRequest, SnapshotBranch, SnapshotConversation,
+    RegenerateNodeRequest, ResolvePromptPreviewRequest, ResolvePromptPreviewResponse,
+    ResolvedPromptPreview, SelectVariantRequest, SnapshotBranch, SnapshotConversation,
     TransformDocumentPromptRequest, TransformDocumentPromptResponse,
 };
 use vcpmobile_session::{
     SessionEditRequest, SessionEngine, SessionRegenerateRequest, SessionSelectVariantRequest,
-    SessionSendRequest, StreamSessionStart, demo_conversation, selected_branch_snapshot_nodes,
+    SessionSendRequest, StreamSessionStart, demo_conversation, resolve_prompt_preview,
+    selected_branch_snapshot_nodes,
 };
 use vcpmobile_store::FileStore;
 
@@ -250,6 +252,7 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/regenerate", post(chat_regenerate))
         .route("/api/chat/select-variant", post(chat_select_variant))
         .route("/api/chat/document-prompt", post(chat_document_prompt))
+        .route("/api/agents/prompt-preview", post(agent_prompt_preview))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
         .route("/api/providers", get(provider_list).post(provider_create))
         .route(
@@ -385,22 +388,19 @@ async fn chat_document_prompt(
 async fn chat_cancel(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let conversation_id = parse_conversation_id(&conversation_id)?;
     let mut engine = state.engine.lock().await;
     engine
         .cancel_stream_session(conversation_id, Some("cancelled by client".to_string()))
         .map_err(|error| match error {
             vcpmobile_session::SessionError::NoActiveGeneration { .. } => {
-                (axum::http::StatusCode::CONFLICT, error.to_string())
+                (StatusCode::CONFLICT, error.to_string())
             }
             vcpmobile_session::SessionError::ConversationNotFound(_) => {
-                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+                (StatusCode::NOT_FOUND, error.to_string())
             }
-            _ => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                error.to_string(),
-            ),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         })?;
 
     Ok(Json(serde_json::json!({
@@ -412,28 +412,40 @@ async fn chat_cancel(
 async fn chat_interrupt(
     State(state): State<AppState>,
     Path(conversation_id): Path<String>,
-) -> Result<Json<serde_json::Value>, (axum::http::StatusCode, String)> {
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
     let conversation_id = parse_conversation_id(&conversation_id)?;
     let mut engine = state.engine.lock().await;
     engine
         .interrupt_stream_session(conversation_id, None)
         .map_err(|error| match error {
             vcpmobile_session::SessionError::NoActiveGeneration { .. } => {
-                (axum::http::StatusCode::CONFLICT, error.to_string())
+                (StatusCode::CONFLICT, error.to_string())
             }
             vcpmobile_session::SessionError::ConversationNotFound(_) => {
-                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+                (StatusCode::NOT_FOUND, error.to_string())
             }
-            _ => (
-                axum::http::StatusCode::INTERNAL_SERVER_ERROR,
-                error.to_string(),
-            ),
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
         })?;
 
     Ok(Json(serde_json::json!({
         "conversation_id": conversation_id,
         "status": "interrupting"
     })))
+}
+
+async fn agent_prompt_preview(
+    Json(body): Json<ResolvePromptPreviewRequest>,
+) -> Result<Json<ResolvePromptPreviewResponse>, ApiError> {
+    let placeholders = body
+        .placeholders
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    let preview = resolve_prompt_preview(&body.raw_prompt, &placeholders);
+
+    Ok(Json(ResolvePromptPreviewResponse {
+        preview: ResolvedPromptPreview::from(preview),
+    }))
 }
 
 async fn chat_edit(
@@ -1017,6 +1029,56 @@ mod tests {
             serde_json::from_slice(&bytes).expect("parse json body")
         };
         (status, body)
+    }
+
+    #[tokio::test]
+    async fn agent_prompt_preview_route_returns_resolved_prompt_and_provenance() {
+        let (app, path) = test_app("prompt-preview");
+
+        let request = json!({
+            "raw_prompt": "{{char}} meets {{cur_date}} via {{plugin_room}} and {{sticker_wave}}",
+            "placeholders": [
+                {
+                    "key": "plugin_room",
+                    "value": "plugin room",
+                    "category": "plugin",
+                    "source": "plugin"
+                },
+                {
+                    "key": "sticker_wave",
+                    "value": ":wave:",
+                    "category": "sticker_media",
+                    "source": "sticker_pack"
+                },
+                {
+                    "key": "cur_date",
+                    "value": "2026-03-13",
+                    "category": "generic",
+                    "source": "runtime"
+                },
+                {
+                    "key": "char",
+                    "value": "Analyst",
+                    "category": "agent",
+                    "source": "agent_profile"
+                }
+            ]
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/agents/prompt-preview", Some(request)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["preview"]["resolved_prompt"],
+            "Analyst meets 2026-03-13 via plugin room and {{sticker_wave}}"
+        );
+        assert_eq!(body["preview"]["records"][0]["category"], "agent");
+        assert_eq!(body["preview"]["records"][0]["status"], "applied");
+        assert_eq!(body["preview"]["records"][3]["category"], "sticker_media");
+        assert_eq!(body["preview"]["records"][3]["status"], "deferred");
+
+        fs::remove_file(path).ok();
     }
 
     #[tokio::test]

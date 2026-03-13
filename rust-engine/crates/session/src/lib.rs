@@ -1535,20 +1535,19 @@ fn finalize_selected_variant_in_place(
     bundle: &mut NodeBundle,
     finished_at: chrono::DateTime<Utc>,
 ) -> Result<(), SessionError> {
+    let conversation_id = bundle.node.conversation_id;
+    let node_id = bundle.node.id;
     let select_index = bundle.node.select_index;
-    let variant_count = bundle.variants.len();
-    let selected_variant = bundle
-        .variants
-        .get_mut(select_index)
-        .ok_or_else(|| SessionError::InvalidConversationState {
-            conversation_id: bundle.node.conversation_id,
+    let variant_len = bundle.variants.len();
+    let selected_variant = bundle.variants.get_mut(select_index).ok_or_else(|| {
+        SessionError::InvalidConversationState {
+            conversation_id,
             reason: format!(
                 "node {} select_index {} out of range for {} variants",
-                bundle.node.id,
-                select_index,
-                variant_count
+                node_id, select_index, variant_len
             ),
-        })?;
+        }
+    })?;
     selected_variant.variant.status = VariantStatus::Completed;
     selected_variant.variant.finished_at = Some(finished_at);
     Ok(())
