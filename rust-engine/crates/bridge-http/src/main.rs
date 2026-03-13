@@ -133,6 +133,10 @@ struct BridgeChatRequest {
     messages: Vec<BridgeChatMessage>,
     #[serde(default)]
     conversation_id: Option<ConversationId>,
+    #[serde(default, alias = "providerLocalId")]
+    provider_local_id: Option<String>,
+    #[serde(default, alias = "model", alias = "modelId")]
+    model_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -199,6 +203,24 @@ struct ProviderConfigView {
     updated_at: chrono::DateTime<chrono::Utc>,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProviderCatalogModelView {
+    model_id: String,
+    display_name: Option<String>,
+    enabled: bool,
+    is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProviderCatalogItemView {
+    provider_local_id: String,
+    display_name: String,
+    avatar_uri: Option<String>,
+    adapter_kind: vcpmobile_domain::ProviderAdapterKind,
+    default_model_id: Option<String>,
+    models: Vec<ProviderCatalogModelView>,
+}
+
 impl From<ProviderConfig> for ProviderConfigView {
     fn from(provider: ProviderConfig) -> Self {
         Self {
@@ -216,6 +238,38 @@ impl From<ProviderConfig> for ProviderConfigView {
             reference_aliases: provider.reference_aliases,
             created_at: provider.created_at,
             updated_at: provider.updated_at,
+        }
+    }
+}
+
+impl From<ProviderConfig> for ProviderCatalogItemView {
+    fn from(provider: ProviderConfig) -> Self {
+        let default_model_id = provider
+            .model_catalog
+            .default_model
+            .clone()
+            .filter(|model_id| !model_id.trim().is_empty());
+        let models = provider
+            .model_catalog
+            .entries
+            .into_iter()
+            .map(|entry| ProviderCatalogModelView {
+                is_default: default_model_id
+                    .as_ref()
+                    .is_some_and(|default_model_id| default_model_id == &entry.model_id),
+                model_id: entry.model_id,
+                display_name: entry.display_name,
+                enabled: entry.enabled,
+            })
+            .collect();
+
+        Self {
+            provider_local_id: provider.local_id,
+            display_name: provider.display_name,
+            avatar_uri: provider.avatar_uri,
+            adapter_kind: provider.adapter_kind,
+            default_model_id,
+            models,
         }
     }
 }
@@ -263,6 +317,7 @@ fn app(state: AppState) -> Router {
         )
         .route("/api/agents/prompt-preview", post(agent_prompt_preview))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
+        .route("/api/providers/catalog", get(provider_catalog))
         .route("/api/providers", get(provider_list).post(provider_create))
         .route(
             "/api/providers/{provider_local_id}",
@@ -701,6 +756,20 @@ async fn provider_list(
         .map_err(|error| ApiError::internal(error.to_string()))?
         .into_iter()
         .map(ProviderConfigView::from)
+        .collect::<Vec<_>>();
+    Ok(Json(providers))
+}
+
+async fn provider_catalog(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ProviderCatalogItemView>>, ApiError> {
+    let engine = state.engine.lock().await;
+    let providers = engine
+        .store()
+        .list_providers()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .into_iter()
+        .map(ProviderCatalogItemView::from)
         .collect::<Vec<_>>();
     Ok(Json(providers))
 }
@@ -1669,6 +1738,43 @@ mod tests {
             json_request(app, "GET", &format!("/api/providers/{local_id}"), None).await;
         assert_eq!(missing_status, StatusCode::NOT_FOUND);
         assert_eq!(missing["error"]["code"], "provider_not_found");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_route_returns_provider_and_model_lists() {
+        let (app, path) = test_app("provider-catalog");
+
+        let (create_status, created) = json_request(
+            app.clone(),
+            "POST",
+            "/api/providers",
+            Some(sample_provider_payload()),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::CREATED);
+
+        let (catalog_status, catalog) =
+            json_request(app, "GET", "/api/providers/catalog", None).await;
+        assert_eq!(catalog_status, StatusCode::OK);
+
+        let listed = catalog.as_array().expect("provider catalog");
+        assert_eq!(listed.len(), 1);
+
+        let provider = &listed[0];
+        assert_eq!(provider["provider_local_id"], created["local_id"]);
+        assert_eq!(provider["display_name"], "OpenAI");
+        assert_eq!(provider["default_model_id"], "gpt-4.1-mini");
+        assert!(provider.get("auth").is_none());
+        assert!(provider.get("base_url").is_none());
+
+        let models = provider["models"].as_array().expect("provider models");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model_id"], "gpt-4.1-mini");
+        assert_eq!(models[0]["display_name"], "GPT-4.1 mini");
+        assert_eq!(models[0]["enabled"], true);
+        assert_eq!(models[0]["is_default"], true);
 
         fs::remove_file(path).ok();
     }

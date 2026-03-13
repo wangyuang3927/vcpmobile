@@ -342,6 +342,34 @@ data class RecoverableConversation(
     val isCurrent: Boolean = false,
 )
 
+data class ChatProviderModelOption(
+    val modelId: String,
+    val displayName: String? = null,
+    val enabled: Boolean = true,
+    val isDefault: Boolean = false,
+)
+
+data class ChatProviderOption(
+    val providerLocalId: String,
+    val displayName: String,
+    val avatarUri: String? = null,
+    val adapterKind: String,
+    val defaultModelId: String? = null,
+    val models: List<ChatProviderModelOption> = emptyList(),
+)
+
+data class ChatProviderSelection(
+    val providerLocalId: String,
+    val modelId: String,
+)
+
+data class ChatProviderCatalogState(
+    val providers: List<ChatProviderOption> = emptyList(),
+    val selection: ChatProviderSelection? = null,
+    val isLoading: Boolean = false,
+    val errorMessage: String? = null,
+)
+
 enum class ConversationCatalogFilter {
     ALL,
     IDLE,

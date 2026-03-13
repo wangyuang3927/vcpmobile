@@ -173,6 +173,45 @@ class OkHttpSseHubApiClientTest {
     }
 
     @Test
+    fun `parseProviderCatalog returns provider and model lists`() {
+        val catalog = client.parseProviderCatalog(
+            """
+            [
+              {
+                "provider_local_id": "provider_local_123",
+                "display_name": "OpenAI",
+                "avatar_uri": "https://example.com/openai.png",
+                "adapter_kind": "openai_compatible",
+                "default_model_id": "gpt-4.1-mini",
+                "models": [
+                  {
+                    "model_id": "gpt-4.1-mini",
+                    "display_name": "GPT-4.1 mini",
+                    "enabled": true,
+                    "is_default": true
+                  },
+                  {
+                    "model_id": "gpt-4.1",
+                    "display_name": "GPT-4.1",
+                    "enabled": false,
+                    "is_default": false
+                  }
+                ]
+              }
+            ]
+            """.trimIndent()
+        )
+
+        assertEquals(1, catalog.size)
+        assertEquals("provider_local_123", catalog.first().providerLocalId)
+        assertEquals("OpenAI", catalog.first().displayName)
+        assertEquals("gpt-4.1-mini", catalog.first().defaultModelId)
+        assertEquals(2, catalog.first().models.size)
+        assertTrue(catalog.first().models.first().isDefault)
+        assertFalse(catalog.first().models.last().enabled)
+    }
+
+    @Test
     fun `parsePairingExchangeSuccess returns stable token and resume anchor shape`() {
         val response = client.parsePairingExchangeSuccess(
             """
