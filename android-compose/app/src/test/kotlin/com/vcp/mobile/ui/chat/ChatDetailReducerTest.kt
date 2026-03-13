@@ -371,6 +371,44 @@ class ChatDetailReducerTest {
     }
 
     @Test
+    fun `snapshot replace preserves branch selector history when same node selects another variant`() {
+        val existingMessage = ChatMessage(
+            id = "node-branch:variant-2",
+            sender = MessageSender.AGENT,
+            content = "new branch",
+            nodeId = "node-branch",
+            variantId = "variant-2",
+            branchSelector = ChatBranchSelector(
+                selectedVariantId = "variant-2",
+                options = listOf(ChatBranchOption("variant-2")),
+            ),
+            parts = listOf(UiMessagePart(type = "text", text = "new branch")),
+        )
+        val initial = ChatDetailReducer.initialState().copy(
+            messages = listOf(existingMessage)
+        )
+
+        val result = ChatDetailReducer.replaceOrUpsertSnapshot(
+            state = initial,
+            messageId = "node-branch:variant-1",
+            sender = MessageSender.AGENT,
+            content = "old branch",
+            nodeId = "node-branch",
+            variantId = "variant-1",
+            parts = listOf(UiMessagePart(type = "text", text = "old branch")),
+            partTypes = listOf("text"),
+        )
+
+        val updated = result.state.messages.single()
+        assertEquals("variant-1", updated.branchSelector.selectedVariantId)
+        assertEquals(
+            listOf("variant-2", "variant-1"),
+            updated.branchSelector.options.map { it.variantId },
+        )
+        assertTrue(updated.branchSelector.isVisible)
+    }
+
+    @Test
     fun `assistant delta merges repeated reasoning part updates by stable order`() {
         val started = ChatDetailReducer.reduce(
             ChatDetailReducer.initialState(),

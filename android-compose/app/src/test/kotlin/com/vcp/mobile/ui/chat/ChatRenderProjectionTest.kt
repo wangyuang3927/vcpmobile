@@ -116,4 +116,23 @@ class ChatRenderProjectionTest {
         assertEquals(listOf("文档"), documentProjection.labels)
         assertTrue(documentProjection.identity.isTyped)
     }
+
+    @Test
+    fun `branch selector becomes visible only when multiple variants are available`() {
+        val single = mergeBranchSelector(
+            previous = ChatBranchSelector(),
+            selectedVariantId = "variant-1",
+            incomingOptions = listOf(ChatBranchOption("variant-1")),
+        )
+        val multiple = mergeBranchSelector(
+            previous = single,
+            selectedVariantId = "variant-2",
+            incomingOptions = emptyList(),
+        )
+
+        assertTrue(!single.isVisible)
+        assertTrue(multiple.isVisible)
+        assertEquals(1, multiple.selectedIndex)
+        assertEquals(listOf("variant-1", "variant-2"), multiple.options.map { it.variantId })
+    }
 }
