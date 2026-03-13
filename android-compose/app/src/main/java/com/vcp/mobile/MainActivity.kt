@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Face
+import androidx.compose.material.icons.filled.Link
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
@@ -24,12 +25,15 @@ import com.vcp.mobile.ui.agent.AgentScreen
 import com.vcp.mobile.ui.agent.AgentViewModel
 import com.vcp.mobile.ui.chat.ChatViewModel
 import com.vcp.mobile.ui.chat.ChatScreen
+import com.vcp.mobile.ui.pairing.PairingScreen
+import com.vcp.mobile.ui.pairing.PairingViewModel
 import com.vcp.mobile.ui.theme.VcpMobileTheme
 import dagger.hilt.android.AndroidEntryPoint
 
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
     private val chatViewModel: ChatViewModel by viewModels()
+    private val pairingViewModel: PairingViewModel by viewModels()
     private val agentViewModel: AgentViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -37,6 +41,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             AppRoot(
                 chatViewModel = chatViewModel,
+                pairingViewModel = pairingViewModel,
                 agentViewModel = agentViewModel,
             )
         }
@@ -45,12 +50,14 @@ class MainActivity : ComponentActivity() {
 
 private enum class AppSection {
     CHAT,
+    PAIRING,
     AGENTS,
 }
 
 @Composable
 private fun AppRoot(
     chatViewModel: ChatViewModel,
+    pairingViewModel: PairingViewModel,
     agentViewModel: AgentViewModel,
 ) {
     var selectedSection by rememberSaveable { mutableStateOf(AppSection.CHAT) }
@@ -72,6 +79,17 @@ private fun AppRoot(
                             label = { androidx.compose.material3.Text(text = "聊天") },
                         )
                         NavigationBarItem(
+                            selected = selectedSection == AppSection.PAIRING,
+                            onClick = { selectedSection = AppSection.PAIRING },
+                            icon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Link,
+                                    contentDescription = "配对",
+                                )
+                            },
+                            label = { androidx.compose.material3.Text(text = "配对") },
+                        )
+                        NavigationBarItem(
                             selected = selectedSection == AppSection.AGENTS,
                             onClick = { selectedSection = AppSection.AGENTS },
                             icon = {
@@ -89,6 +107,12 @@ private fun AppRoot(
                     AppSection.CHAT -> ChatScreen(
                         viewModel = chatViewModel,
                         modifier = Modifier.padding(innerPadding),
+                    )
+
+                    AppSection.PAIRING -> PairingScreen(
+                        viewModel = pairingViewModel,
+                        modifier = Modifier.padding(innerPadding),
+                        onOpenChat = { selectedSection = AppSection.CHAT },
                     )
 
                     AppSection.AGENTS -> AgentScreen(
