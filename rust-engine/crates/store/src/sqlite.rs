@@ -6,7 +6,7 @@ use std::{
 };
 
 use chrono::{DateTime, Utc};
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
@@ -1386,7 +1386,11 @@ fn load_parts(connection: &Connection, variant_id: &str) -> SqliteStoreResult<Ve
 }
 
 fn bool_to_sqlite(value: bool) -> i64 {
-    if value { 1 } else { 0 }
+    if value {
+        1
+    } else {
+        0
+    }
 }
 
 fn sqlite_bool(value: i64) -> bool {
@@ -1563,18 +1567,39 @@ pub fn list_applied_migrations(connection: &Connection) -> SqliteStoreResult<Vec
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::FileStore;
     use rusqlite::params;
     use std::{env, fs};
     use uuid::Uuid;
+    use vcpmobile_domain::VariantId;
 
     fn open_memory_db() -> Connection {
         Connection::open_in_memory().expect("open sqlite memory database")
+    }
+
+    fn temp_sqlite_path(name: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "vcpmobile-store-migration-{name}-{}.sqlite3",
+            Uuid::new_v4()
+        ))
     }
 
     fn scalar_i64(connection: &Connection, sql: &str) -> i64 {
         connection
             .query_row(sql, [], |row| row.get::<_, i64>(0))
             .expect("query scalar i64")
+    }
+
+    fn table_exists(connection: &Connection, table: &str) -> bool {
+        connection
+            .query_row(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1",
+                [table],
+                |_| Ok(()),
+            )
+            .optional()
+            .expect("lookup sqlite_master")
+            .is_some()
     }
 
     fn insert_agent_graph(connection: &Connection) -> (String, String, String) {
@@ -1603,6 +1628,72 @@ mod tests {
             .expect("insert conversation");
 
         (agent_id, topic_id, conversation_id)
+    }
+
+    fn seed_v1_conversation_store(path: &Path) -> (ConversationId, NodeId, VariantId, String) {
+        let mut connection = Connection::open(path).expect("open sqlite file");
+        connection
+            .execute_batch(BOOTSTRAP_SQL)
+            .expect("bootstrap schema migrations table");
+        connection
+            .execute_batch(MIGRATION_0001_P0_TRUTH_SCHEMA)
+            .expect("apply v1 schema");
+        connection
+            .execute(
+                "INSERT INTO schema_migrations (version, name) VALUES (1, '0001_p0_truth_schema')",
+                [],
+            )
+            .expect("record v1 migration");
+        connection
+            .pragma_update(None, "user_version", 1_i64)
+            .expect("set schema version to v1");
+
+        let (_, _, conversation_id) = insert_agent_graph(&connection);
+        let conversation_id =
+            ConversationId::parse_str(&conversation_id).expect("parse seeded conversation id");
+        let now = "2026-03-13T00:00:00Z";
+        let node_id = NodeId::new_v4();
+        let variant_id = VariantId::new_v4();
+        let part_id = Uuid::new_v4().to_string();
+
+        let transaction = connection.transaction().expect("start v1 seed transaction");
+        transaction
+            .execute(
+                "INSERT INTO message_nodes (id, conversation_id, role, selected_variant_ordinal, created_at, updated_at)
+                 VALUES (?1, ?2, 'assistant', 0, ?3, ?3)",
+                params![node_id.to_string(), conversation_id.to_string(), now],
+            )
+            .expect("insert node");
+        transaction
+            .execute(
+                "INSERT INTO message_variants (id, node_id, ordinal, status, model_id, created_at)
+                 VALUES (?1, ?2, 0, 'completed', 'gpt-4.1-mini', ?3)",
+                params![variant_id.to_string(), node_id.to_string(), now],
+            )
+            .expect("insert variant");
+        transaction
+            .execute(
+                "INSERT INTO message_parts (id, variant_id, order_index, kind, text_value)
+                 VALUES (?1, ?2, 0, 'text', 'restored after migration')",
+                params![part_id, variant_id.to_string()],
+            )
+            .expect("insert part");
+        transaction
+            .execute(
+                "UPDATE conversations
+                 SET current_cursor_node_id = ?1, generation_state = 'streaming', summary = 'sqlite v1 payload'
+                 WHERE id = ?2",
+                params![node_id.to_string(), conversation_id.to_string()],
+            )
+            .expect("point cursor at restored node");
+        transaction.commit().expect("commit seeded v1 graph");
+
+        (
+            conversation_id,
+            node_id,
+            variant_id,
+            "restored after migration".to_string(),
+        )
     }
 
     #[test]
@@ -1662,6 +1753,107 @@ mod tests {
             scalar_i64(&connection, "SELECT COUNT(*) FROM schema_migrations"),
             2
         );
+    }
+
+    #[test]
+    fn open_upgrades_v1_database_to_latest_schema() {
+        let path = temp_sqlite_path("upgrade");
+        seed_v1_conversation_store(&path);
+
+        let store = SqliteStore::new(&path);
+        let connection = store.open().expect("upgrade v1 database");
+
+        assert_eq!(
+            scalar_i64(&connection, "PRAGMA user_version"),
+            CURRENT_SCHEMA_VERSION
+        );
+        assert!(table_exists(&connection, "agent_configs"));
+
+        let applied = list_applied_migrations(&connection).expect("list applied migrations");
+        assert_eq!(
+            applied
+                .iter()
+                .map(|migration| migration.version)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(applied[1].name, "0002_agent_config_store");
+
+        drop(connection);
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn file_store_restores_conversation_after_sqlite_schema_upgrade() {
+        let path = temp_sqlite_path("restore");
+        let (conversation_id, node_id, variant_id, expected_text) =
+            seed_v1_conversation_store(&path);
+
+        let store = FileStore::new(&path);
+        let restored = store
+            .get_conversation(conversation_id)
+            .expect("load migrated conversation")
+            .expect("conversation exists");
+
+        assert_eq!(restored.conversation.current_cursor, Some(node_id));
+        assert_eq!(restored.nodes.len(), 1);
+        assert_eq!(restored.nodes[0].node.select_index, 0);
+        assert_eq!(restored.nodes[0].variants[0].variant.id, variant_id);
+        assert_eq!(
+            restored.nodes[0].variants[0].parts[0],
+            MessagePart {
+                id: restored.nodes[0].variants[0].parts[0].id,
+                variant_id,
+                order_index: 0,
+                payload: MessagePartPayload::Text {
+                    text: expected_text,
+                },
+            }
+        );
+
+        let catalog = store
+            .list_conversation_catalog()
+            .expect("load catalog after schema upgrade");
+        let item = catalog
+            .iter()
+            .find(|item| item.conversation_id == conversation_id)
+            .expect("catalog entry");
+        assert!(item.is_recoverable);
+        assert_eq!(
+            item.resume_anchor,
+            Some(crate::StoredConversationResumeAnchor {
+                message_id: format!("{node_id}:{variant_id}"),
+                node_id,
+                variant_id,
+            })
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn open_rejects_future_schema_version() {
+        let path = temp_sqlite_path("future-version");
+        let connection = Connection::open(&path).expect("open sqlite file");
+        connection
+            .execute_batch(BOOTSTRAP_SQL)
+            .expect("bootstrap schema migrations table");
+        let unsupported_version = CURRENT_SCHEMA_VERSION + 1;
+        connection
+            .pragma_update(None, "user_version", unsupported_version)
+            .expect("set unsupported schema version");
+        drop(connection);
+
+        let store = SqliteStore::new(&path);
+        let error = store
+            .open()
+            .expect_err("future schema version should be rejected");
+        assert!(matches!(
+            error,
+            SqliteStoreError::UnsupportedSchemaVersion(version) if version == unsupported_version
+        ));
+
+        fs::remove_file(path).ok();
     }
 
     #[test]
