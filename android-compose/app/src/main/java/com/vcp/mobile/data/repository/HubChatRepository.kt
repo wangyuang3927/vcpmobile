@@ -2,7 +2,9 @@ package com.vcp.mobile.data.repository
 
 import com.vcp.mobile.data.network.HubApiClient
 import com.vcp.mobile.data.network.HubConversationSummary
+import com.vcp.mobile.data.network.HubPromptPreviewRequest
 import com.vcp.mobile.data.network.HubRegenerateRequest
+import com.vcp.mobile.data.network.HubResolvedPromptPreview
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubSendMessageResponse
 import com.vcp.mobile.data.network.HubSelectVariantRequest
@@ -30,6 +32,8 @@ interface HubChatRepository {
     suspend fun listConversations(): List<HubConversationSummary>
 
     suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope?
+
+    suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview
 }
 
 /**
@@ -85,6 +89,10 @@ class HubChatRepositoryImpl(
 
     override suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope? {
         return hubApiClient.fetchConversationSnapshot(conversationId)
+    }
+
+    override suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview {
+        return hubApiClient.previewResolvedPrompt(request)
     }
 }
 

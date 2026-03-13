@@ -76,6 +76,34 @@ data class HubConversationSummary(
     val nodeCount: Int = 0,
 )
 
+data class HubPromptPreviewPlaceholder(
+    val key: String,
+    val value: String,
+    val category: String,
+    val source: String,
+)
+
+data class HubPromptPreviewRequest(
+    val rawPrompt: String,
+    val placeholders: List<HubPromptPreviewPlaceholder> = emptyList(),
+)
+
+data class HubPromptPreviewRecord(
+    val key: String,
+    val value: String,
+    val category: String,
+    val source: String,
+    val status: String,
+)
+
+data class HubResolvedPromptPreview(
+    val rawPrompt: String,
+    val resolvedPrompt: String,
+    val records: List<HubPromptPreviewRecord> = emptyList(),
+    val unresolvedTokens: List<String> = emptyList(),
+    val partialTokens: List<String> = emptyList(),
+)
+
 /**
  * SSE 流式事件模型。
  */

@@ -37,6 +37,7 @@ class OkHttpSseHubApiClient(
         const val HUB_CONVERSATIONS_PATH = "/api/chat/conversations"
         const val HUB_CATALOG_PATH = "/api/chat/catalog"
         const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
+        const val HUB_PROMPT_PREVIEW_PATH = "/api/agents/prompt-preview"
         const val CONTENT_TYPE_JSON = "application/json"
         const val ACCEPT_SSE = "text/event-stream"
 
@@ -247,6 +248,32 @@ class OkHttpSseHubApiClient(
         }
     }
 
+    override suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview {
+        val httpRequest = Request.Builder()
+            .url("$baseUrl$HUB_PROMPT_PREVIEW_PATH")
+            .post(request.toUpstreamJsonBody().toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            .apply {
+                addHeader("Accept", CONTENT_TYPE_JSON)
+                addHeader("Content-Type", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string().orEmpty()
+                throw IllegalStateException(
+                    "Hub prompt preview failed: ${response.code} ${response.message} $errorBody"
+                )
+            }
+
+            val raw = response.body?.string().orEmpty()
+            return parseResolvedPromptPreview(raw)
+        }
+    }
+
     internal fun parseSnapshotEnvelope(raw: String): RustChatEventEnvelope? {
         val payload = raw.lineSequence()
             .filter { it.startsWith("data: ") }
@@ -258,6 +285,36 @@ class OkHttpSseHubApiClient(
             ?: throw HubSnapshotParseException(
                 "Hub snapshot payload malformed; manual reopen required"
             )
+    }
+
+    internal fun parseResolvedPromptPreview(raw: String): HubResolvedPromptPreview {
+        return runCatching {
+            val preview = JSONObject(raw).optJSONObject("preview")
+                ?: error("missing preview object")
+            val records = preview.optJSONArray("records")
+            HubResolvedPromptPreview(
+                rawPrompt = preview.optString("raw_prompt"),
+                resolvedPrompt = preview.optString("resolved_prompt"),
+                records = buildList {
+                    for (index in 0 until (records?.length() ?: 0)) {
+                        val item = records?.optJSONObject(index) ?: continue
+                        add(
+                            HubPromptPreviewRecord(
+                                key = item.optString("key"),
+                                value = item.optString("value"),
+                                category = item.optString("category"),
+                                source = item.optString("source"),
+                                status = item.optString("status"),
+                            )
+                        )
+                    }
+                },
+                unresolvedTokens = preview.optStringArray("unresolved_tokens"),
+                partialTokens = preview.optStringArray("partial_tokens"),
+            )
+        }.getOrElse {
+            throw IllegalStateException("Hub prompt preview payload malformed", it)
+        }
     }
 
     internal fun dispatchSseEvent(eventName: String?, data: String): HubStreamEvent {
@@ -355,6 +412,34 @@ class OkHttpSseHubApiClient(
             .put("node_id", nodeId)
             .put("variant_id", variantId)
             .toString()
+    }
+
+    private fun HubPromptPreviewRequest.toUpstreamJsonBody(): String {
+        val placeholdersJson = JSONArray().apply {
+            placeholders.forEach { placeholder ->
+                put(
+                    JSONObject()
+                        .put("key", placeholder.key)
+                        .put("value", placeholder.value)
+                        .put("category", placeholder.category)
+                        .put("source", placeholder.source)
+                )
+            }
+        }
+
+        return JSONObject()
+            .put("raw_prompt", rawPrompt)
+            .put("placeholders", placeholdersJson)
+            .toString()
+    }
+}
+
+private fun JSONObject.optStringArray(key: String): List<String> {
+    val array = optJSONArray(key) ?: return emptyList()
+    return buildList {
+        for (index in 0 until array.length()) {
+            array.optString(index).takeIf { it.isNotBlank() }?.let(::add)
+        }
     }
 }
 
