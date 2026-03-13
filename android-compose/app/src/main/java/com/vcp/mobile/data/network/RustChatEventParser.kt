@@ -102,10 +102,17 @@ data class RustToolCallEvent(
     val message: String? = null,
 )
 
+data class RustBranchOption(
+    val variantId: String,
+    val status: String? = null,
+)
+
 data class RustSnapshotMessage(
     val identity: RustStreamIdentity,
     val role: String,
-    val delta: RustMessageDelta
+    val delta: RustMessageDelta,
+    val cursorNodeId: String? = null,
+    val branchOptions: List<RustBranchOption> = emptyList(),
 )
 
 object RustChatEventParser {
@@ -140,11 +147,12 @@ object RustChatEventParser {
     fun extractSnapshotMessages(data: JSONObject): List<RustSnapshotMessage> {
         val branch = data.optJSONObject("branch") ?: return emptyList()
         val nodes = branch.optJSONArray("nodes") ?: return emptyList()
+        val cursorNodeId = branch.optNonBlankString("cursor_node_id")
         val results = mutableListOf<RustSnapshotMessage>()
 
         for (nodeIndex in 0 until nodes.length()) {
             val snapshotNode = nodes.optJSONObject(nodeIndex) ?: continue
-            val message = extractSnapshotNodeMessage(snapshotNode) ?: continue
+            val message = extractSnapshotNodeMessage(snapshotNode, cursorNodeId) ?: continue
             results += message
         }
 
@@ -163,8 +171,14 @@ object RustChatEventParser {
     }
 
     fun extractNodeUpsertMessage(data: JSONObject): RustSnapshotMessage? {
-        val snapshotNode = data.optJSONObject("node") ?: return null
-        return extractSnapshotNodeMessage(snapshotNode)
+        val branch = data.optJSONObject("branch")
+        val snapshotNode = branch?.optJSONObject("node")
+            ?: data.optJSONObject("node")
+            ?: return null
+        return extractSnapshotNodeMessage(
+            snapshotNode = snapshotNode,
+            cursorNodeId = branch?.optNonBlankString("cursor_node_id"),
+        )
     }
 
     fun extractPartDelta(data: JSONObject): RustMessageDelta {
@@ -390,7 +404,10 @@ object RustChatEventParser {
         )
     }
 
-    private fun extractSnapshotNodeMessage(snapshotNode: JSONObject): RustSnapshotMessage? {
+    private fun extractSnapshotNodeMessage(
+        snapshotNode: JSONObject,
+        cursorNodeId: String? = null,
+    ): RustSnapshotMessage? {
         val nodeId = snapshotNode.optString("node_id").trim()
         if (nodeId.isBlank()) return null
         val role = snapshotNode.optString("role").trim().ifBlank { HUB_ROLE_ASSISTANT }
@@ -402,8 +419,44 @@ object RustChatEventParser {
         return RustSnapshotMessage(
             identity = RustStreamIdentity(nodeId = nodeId, variantId = variantId),
             role = role,
-            delta = extractParts(selectedVariant.optJSONArray("parts"))
+            delta = extractParts(selectedVariant.optJSONArray("parts")),
+            cursorNodeId = cursorNodeId,
+            branchOptions = extractBranchOptions(snapshotNode, selectedVariant),
         )
+    }
+
+    private fun extractBranchOptions(
+        snapshotNode: JSONObject,
+        selectedVariant: JSONObject,
+    ): List<RustBranchOption> {
+        val options = mutableListOf<RustBranchOption>()
+
+        fun upsert(variantId: String, status: String?) {
+            if (variantId.isBlank()) return
+            val index = options.indexOfFirst { it.variantId == variantId }
+            if (index == -1) {
+                options += RustBranchOption(variantId = variantId, status = status)
+            } else if (!status.isNullOrBlank()) {
+                options[index] = options[index].copy(status = status)
+            }
+        }
+
+        val variants = snapshotNode.optJSONArray("variants")
+        if (variants != null) {
+            for (variantIndex in 0 until variants.length()) {
+                val variant = variants.optJSONObject(variantIndex) ?: continue
+                upsert(
+                    variantId = variant.optString("variant_id").trim(),
+                    status = variant.optString("status").takeIf { it.isNotBlank() },
+                )
+            }
+        }
+
+        upsert(
+            variantId = selectedVariant.optString("variant_id").trim(),
+            status = selectedVariant.optString("status").takeIf { it.isNotBlank() },
+        )
+        return options
     }
 
     private fun parseErrorKind(raw: String): RustEventErrorKind {

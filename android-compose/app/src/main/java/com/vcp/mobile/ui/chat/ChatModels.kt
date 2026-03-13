@@ -74,6 +74,24 @@ data class UiMessageCompatibilityProjection(
     val partTypes: List<String>,
 )
 
+data class ChatBranchOption(
+    val variantId: String,
+    val status: String? = null,
+)
+
+data class ChatBranchSelector(
+    val selectedVariantId: String? = null,
+    val options: List<ChatBranchOption> = emptyList(),
+) {
+    val isVisible: Boolean
+        get() = selectedVariantId != null && options.size > 1
+
+    val selectedIndex: Int
+        get() = options.indexOfFirst { it.variantId == selectedVariantId }
+            .takeIf { it >= 0 }
+            ?: 0
+}
+
 data class ChatMessage(
     val id: String = UUID.randomUUID().toString(),
     val sender: MessageSender,
@@ -82,6 +100,7 @@ data class ChatMessage(
     val ast: MarkdownDocument? = null,
     val nodeId: String? = null,
     val variantId: String? = null,
+    val branchSelector: ChatBranchSelector = ChatBranchSelector(),
     val parts: List<UiMessagePart> = emptyList(),
     val partTypes: List<String> = emptyList(),
     val timestampMillis: Long = System.currentTimeMillis(),
@@ -111,6 +130,40 @@ fun ChatMessage.identity(): ChatMessageIdentity = ChatMessageIdentity(
     nodeId = nodeId,
     variantId = variantId,
 )
+
+fun mergeBranchSelector(
+    previous: ChatBranchSelector,
+    selectedVariantId: String?,
+    incomingOptions: List<ChatBranchOption> = emptyList(),
+): ChatBranchSelector {
+    if (selectedVariantId.isNullOrBlank()) {
+        return previous
+    }
+
+    val mergedOptions = mutableListOf<ChatBranchOption>()
+
+    fun upsert(option: ChatBranchOption) {
+        if (option.variantId.isBlank()) return
+        val existingIndex = mergedOptions.indexOfFirst { it.variantId == option.variantId }
+        if (existingIndex == -1) {
+            mergedOptions += option
+        } else {
+            val existing = mergedOptions[existingIndex]
+            mergedOptions[existingIndex] = existing.copy(
+                status = option.status ?: existing.status,
+            )
+        }
+    }
+
+    previous.options.forEach(::upsert)
+    incomingOptions.forEach(::upsert)
+    upsert(ChatBranchOption(variantId = selectedVariantId))
+
+    return ChatBranchSelector(
+        selectedVariantId = selectedVariantId,
+        options = mergedOptions,
+    )
+}
 
 fun UiMessagePart.normalizedType(): String = type.trim().lowercase()
 

@@ -22,6 +22,7 @@ import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AssistChip
@@ -35,7 +36,6 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -228,6 +228,8 @@ fun ChatScreen(
                         message = message,
                         isStreamingActive = detailState.generation.activeMessageKey == message.id &&
                             detailState.isTyping,
+                        branchSelectionEnabled = !detailState.isTyping,
+                        onSelectBranch = viewModel::selectAssistantVariant,
                     )
                 }
 
@@ -745,6 +747,8 @@ private fun String.toStatusColor(selected: Boolean) = when (lowercase()) {
 private fun ChatBubble(
     message: ChatMessage,
     isStreamingActive: Boolean,
+    branchSelectionEnabled: Boolean,
+    onSelectBranch: (String, String) -> Unit,
 ) {
     val projection = message.renderProjection()
     val isUser = message.sender == MessageSender.USER
@@ -805,9 +809,65 @@ private fun ChatBubble(
                     }
                 }
 
+                if (!isUser && message.branchSelector.isVisible && message.nodeId != null) {
+                    BranchSelectorRow(
+                        nodeId = message.nodeId,
+                        selector = message.branchSelector,
+                        enabled = branchSelectionEnabled,
+                        onSelectBranch = onSelectBranch,
+                    )
+                }
+
                 TypedPartsRenderer(
                     message = message,
                     textColor = textColor,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun BranchSelectorRow(
+    nodeId: String,
+    selector: ChatBranchSelector,
+    enabled: Boolean,
+    onSelectBranch: (String, String) -> Unit,
+) {
+    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        Text(
+            text = "分支 ${selector.selectedIndex + 1}/${selector.options.size}",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        LazyRow(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+            itemsIndexed(selector.options, key = { _, option -> option.variantId }) { index, option ->
+                val selected = option.variantId == selector.selectedVariantId
+                AssistChip(
+                    onClick = { onSelectBranch(nodeId, option.variantId) },
+                    enabled = enabled && !selected,
+                    label = {
+                        Text(
+                            text = buildString {
+                                append("分支 ").append(index + 1)
+                                option.status?.takeIf { it.isNotBlank() }?.let {
+                                    append(" · ").append(it)
+                                }
+                            }
+                        )
+                    },
+                    colors = AssistChipDefaults.assistChipColors(
+                        containerColor = if (selected) {
+                            MaterialTheme.colorScheme.primary
+                        } else {
+                            MaterialTheme.colorScheme.surface.copy(alpha = 0.22f)
+                        },
+                        labelColor = if (selected) {
+                            MaterialTheme.colorScheme.onPrimary
+                        } else {
+                            MaterialTheme.colorScheme.onSecondaryContainer
+                        },
+                    ),
                 )
             }
         }

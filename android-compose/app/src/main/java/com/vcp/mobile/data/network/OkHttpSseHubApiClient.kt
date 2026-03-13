@@ -32,6 +32,8 @@ class OkHttpSseHubApiClient(
 
     companion object {
         const val HUB_CHAT_PATH = "/api/chat"
+        const val HUB_CHAT_REGENERATE_PATH = "/api/chat/regenerate"
+        const val HUB_CHAT_SELECT_VARIANT_PATH = "/api/chat/select-variant"
         const val HUB_CONVERSATIONS_PATH = "/api/chat/conversations"
         const val HUB_CATALOG_PATH = "/api/chat/catalog"
         const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
@@ -71,17 +73,35 @@ class OkHttpSseHubApiClient(
     }
 
     override fun streamEvents(request: HubSendMessageRequest): Flow<HubStreamEvent> = callbackFlow {
-        val eventRequest = Request.Builder()
-            .url("$baseUrl$HUB_CHAT_PATH")
-            .post(request.toUpstreamJsonBody().toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
-            .apply {
-                addHeader("Accept", ACCEPT_SSE)
-                addHeader("Content-Type", CONTENT_TYPE_JSON)
-                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
-                    addHeader("Authorization", "Bearer $it")
-                }
-            }
-            .build()
+        openSseStream(
+            buildSsePostRequest(
+                path = HUB_CHAT_PATH,
+                body = request.toUpstreamJsonBody(),
+            )
+        )
+    }
+
+    override fun regenerateAssistant(request: HubRegenerateRequest): Flow<HubStreamEvent> = callbackFlow {
+        openSseStream(
+            buildSsePostRequest(
+                path = HUB_CHAT_REGENERATE_PATH,
+                body = request.toUpstreamJsonBody(),
+            )
+        )
+    }
+
+    override fun selectVariant(request: HubSelectVariantRequest): Flow<HubStreamEvent> = callbackFlow {
+        openSseStream(
+            buildSsePostRequest(
+                path = HUB_CHAT_SELECT_VARIANT_PATH,
+                body = request.toUpstreamJsonBody(),
+            )
+        )
+    }
+
+    private suspend fun kotlinx.coroutines.channels.ProducerScope<HubStreamEvent>.openSseStream(
+        eventRequest: Request
+    ) {
 
         val listener = object : EventSourceListener() {
             var terminalEventDispatched = false
@@ -141,6 +161,20 @@ class OkHttpSseHubApiClient(
         awaitClose {
             eventSource.cancel()
         }
+    }
+
+    private fun buildSsePostRequest(path: String, body: String): Request {
+        return Request.Builder()
+            .url("$baseUrl$path")
+            .post(body.toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            .apply {
+                addHeader("Accept", ACCEPT_SSE)
+                addHeader("Content-Type", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
     }
 
     override suspend fun listConversations(): List<HubConversationSummary> {
@@ -305,6 +339,21 @@ class OkHttpSseHubApiClient(
             .apply {
                 conversationId?.takeIf { it.isNotBlank() }?.let { put("conversation_id", it) }
             }
+            .toString()
+    }
+
+    private fun HubRegenerateRequest.toUpstreamJsonBody(): String {
+        return JSONObject()
+            .put("conversation_id", conversationId)
+            .put("node_id", nodeId)
+            .toString()
+    }
+
+    private fun HubSelectVariantRequest.toUpstreamJsonBody(): String {
+        return JSONObject()
+            .put("conversation_id", conversationId)
+            .put("node_id", nodeId)
+            .put("variant_id", variantId)
             .toString()
     }
 }

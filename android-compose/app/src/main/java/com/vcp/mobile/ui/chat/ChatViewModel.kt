@@ -3,11 +3,14 @@ package com.vcp.mobile.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vcp.mobile.data.network.HubMessage
+import com.vcp.mobile.data.network.HubRegenerateRequest
 import com.vcp.mobile.data.network.HubSendMessageRequest
+import com.vcp.mobile.data.network.HubSelectVariantRequest
 import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
 import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.network.RustChatEventParser
+import com.vcp.mobile.data.network.RustBranchOption
 import com.vcp.mobile.data.network.RustMessagePart
 import com.vcp.mobile.data.network.RustToolCallEvent
 import com.vcp.mobile.data.network.RustToolCallPhase
@@ -71,39 +74,14 @@ class ChatViewModel @Inject constructor(
                 stream = true
             )
 
-            var assistantMessageKey: String? = _detailState.value.generation.activeMessageKey
-
             try {
-                repository.observeStream(request).collect { event ->
-                    when (event) {
-                        HubStreamEvent.Opened,
-                        HubStreamEvent.Completed -> Unit
-
-                        is HubStreamEvent.Error -> {
-                            discardPendingOptimisticUserMessage()
-                            dispatchGeneration(
-                                ChatGenerationPhase.FAILED,
-                                _detailState.value.generation.activeMessageKey,
-                            )
-                            dispatchDetail(
-                                ChatDetailAction.SystemMessageAppended(
-                                    text = "网络错误：${event.throwable.message ?: "未知错误"}",
-                                )
-                            )
-                        }
-
-                        is HubStreamEvent.Message -> {
-                            if (event.event == "chat_event") {
-                                val envelope = RustChatEventParser.parseEnvelope(event.data) ?: return@collect
-                                envelope.conversationId?.let { bindConversationId(it) }
-                                assistantMessageKey = handleRustChatEnvelope(
-                                    envelope = envelope,
-                                    currentMessageKey = assistantMessageKey,
-                                )
-                            }
-                        }
-                    }
-                }
+                collectHubStream(
+                    stream = repository.observeStream(request),
+                    initialMessageKey = _detailState.value.generation.activeMessageKey,
+                    failurePrefix = "请求失败",
+                    markGenerationFailedOnError = true,
+                    discardPendingOptimisticUserMessageOnError = true,
+                )
             } catch (error: Throwable) {
                 discardPendingOptimisticUserMessage()
                 dispatchGeneration(
@@ -113,6 +91,73 @@ class ChatViewModel @Inject constructor(
                 dispatchDetail(
                     ChatDetailAction.SystemMessageAppended(
                         text = "请求失败：${error.message ?: "未知异常"}",
+                    )
+                )
+            }
+        }
+    }
+
+    fun regenerateAssistant(nodeId: String) {
+        val conversationId = _detailState.value.conversationId ?: return
+        if (nodeId.isBlank() || _detailState.value.isTyping) return
+
+        dispatchGeneration(ChatGenerationPhase.REQUESTING, null)
+
+        viewModelScope.launch {
+            try {
+                collectHubStream(
+                    stream = repository.regenerateAssistant(
+                        HubRegenerateRequest(
+                            conversationId = conversationId,
+                            nodeId = nodeId,
+                        )
+                    ),
+                    initialMessageKey = null,
+                    failurePrefix = "重新生成失败",
+                    markGenerationFailedOnError = true,
+                    discardPendingOptimisticUserMessageOnError = false,
+                )
+            } catch (error: Throwable) {
+                dispatchGeneration(
+                    ChatGenerationPhase.FAILED,
+                    _detailState.value.generation.activeMessageKey,
+                )
+                dispatchDetail(
+                    ChatDetailAction.SystemMessageAppended(
+                        text = "重新生成失败：${error.message ?: "未知异常"}",
+                    )
+                )
+            }
+        }
+    }
+
+    fun selectAssistantVariant(nodeId: String, variantId: String) {
+        val conversationId = _detailState.value.conversationId ?: return
+        if (nodeId.isBlank() || variantId.isBlank() || _detailState.value.isTyping) return
+        val currentVariantId = _detailState.value.messages
+            .firstOrNull { it.nodeId == nodeId }
+            ?.variantId
+        if (currentVariantId == variantId) return
+
+        viewModelScope.launch {
+            try {
+                collectHubStream(
+                    stream = repository.selectVariant(
+                        HubSelectVariantRequest(
+                            conversationId = conversationId,
+                            nodeId = nodeId,
+                            variantId = variantId,
+                        )
+                    ),
+                    initialMessageKey = null,
+                    failurePrefix = "切换分支失败",
+                    markGenerationFailedOnError = false,
+                    discardPendingOptimisticUserMessageOnError = false,
+                )
+            } catch (error: Throwable) {
+                dispatchDetail(
+                    ChatDetailAction.SystemMessageAppended(
+                        text = "切换分支失败：${error.message ?: "未知异常"}",
                     )
                 )
             }
@@ -264,6 +309,7 @@ class ChatViewModel @Inject constructor(
         appendReasoning: String = "",
         nodeId: String? = null,
         variantId: String? = null,
+        branchOptions: List<ChatBranchOption> = emptyList(),
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
@@ -275,6 +321,7 @@ class ChatViewModel @Inject constructor(
             appendReasoning = appendReasoning,
             nodeId = nodeId,
             variantId = variantId,
+            branchOptions = branchOptions,
             parts = parts,
             partTypes = partTypes,
         )
@@ -289,6 +336,7 @@ class ChatViewModel @Inject constructor(
         reasoning: String = "",
         nodeId: String? = null,
         variantId: String? = null,
+        branchOptions: List<ChatBranchOption> = emptyList(),
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
@@ -307,6 +355,7 @@ class ChatViewModel @Inject constructor(
             reasoning = reasoning,
             nodeId = nodeId,
             variantId = variantId,
+            branchOptions = branchOptions,
             parts = parts,
             partTypes = partTypes,
             fallbackMessageId = fallbackMessageId,
@@ -377,6 +426,51 @@ class ChatViewModel @Inject constructor(
         pendingOptimisticUserMessageId = null
     }
 
+    private suspend fun collectHubStream(
+        stream: kotlinx.coroutines.flow.Flow<HubStreamEvent>,
+        initialMessageKey: String?,
+        failurePrefix: String,
+        markGenerationFailedOnError: Boolean,
+        discardPendingOptimisticUserMessageOnError: Boolean,
+    ): String? {
+        var assistantMessageKey = initialMessageKey
+        stream.collect { event ->
+            when (event) {
+                HubStreamEvent.Opened,
+                HubStreamEvent.Completed -> Unit
+
+                is HubStreamEvent.Error -> {
+                    if (discardPendingOptimisticUserMessageOnError) {
+                        discardPendingOptimisticUserMessage()
+                    }
+                    if (markGenerationFailedOnError) {
+                        dispatchGeneration(
+                            ChatGenerationPhase.FAILED,
+                            _detailState.value.generation.activeMessageKey,
+                        )
+                    }
+                    dispatchDetail(
+                        ChatDetailAction.SystemMessageAppended(
+                            text = "$failurePrefix：${event.throwable.message ?: "未知错误"}",
+                        )
+                    )
+                }
+
+                is HubStreamEvent.Message -> {
+                    if (event.event == "chat_event") {
+                        val envelope = RustChatEventParser.parseEnvelope(event.data) ?: return@collect
+                        envelope.conversationId?.let { bindConversationId(it) }
+                        assistantMessageKey = handleRustChatEnvelope(
+                            envelope = envelope,
+                            currentMessageKey = assistantMessageKey,
+                        )
+                    }
+                }
+            }
+        }
+        return assistantMessageKey
+    }
+
     private fun handleRustChatEnvelope(
         envelope: RustChatEventEnvelope,
         currentMessageKey: String?,
@@ -396,6 +490,7 @@ class ChatViewModel @Inject constructor(
                         reasoning = snapshot.delta.appendedReasoning,
                         nodeId = snapshot.identity.nodeId,
                         variantId = snapshot.identity.variantId,
+                        branchOptions = snapshot.branchOptions.toUiBranchOptions(),
                         parts = snapshot.delta.parts.toUiMessageParts(),
                         partTypes = snapshot.delta.partTypes,
                     )
@@ -449,6 +544,7 @@ class ChatViewModel @Inject constructor(
                     reasoning = snapshot.delta.appendedReasoning,
                     nodeId = snapshot.identity.nodeId,
                     variantId = snapshot.identity.variantId,
+                    branchOptions = snapshot.branchOptions.toUiBranchOptions(),
                     parts = snapshot.delta.parts.toUiMessageParts(),
                     partTypes = snapshot.delta.partTypes,
                 )
@@ -558,6 +654,11 @@ class ChatViewModel @Inject constructor(
                 reasoning = snapshot.delta.appendedReasoning.ifBlank { null },
                 nodeId = snapshot.identity.nodeId,
                 variantId = snapshot.identity.variantId,
+                branchSelector = mergeBranchSelector(
+                    previous = ChatBranchSelector(),
+                    selectedVariantId = snapshot.identity.variantId,
+                    incomingOptions = snapshot.branchOptions.toUiBranchOptions(),
+                ),
                 parts = snapshot.delta.parts.toUiMessageParts(),
                 partTypes = snapshot.delta.partTypes,
             )
@@ -628,6 +729,13 @@ private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map 
         partId = part.partId,
         orderIndex = part.orderIndex,
         toolCallId = part.toolCallId,
+    )
+}
+
+private fun List<RustBranchOption>.toUiBranchOptions(): List<ChatBranchOption> = map { option ->
+    ChatBranchOption(
+        variantId = option.variantId,
+        status = option.status,
     )
 }
 

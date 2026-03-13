@@ -54,6 +54,7 @@ class RustChatEventParserTest {
         assertNotNull(snapshot)
         assertEquals("node-1:variant-1", snapshot?.identity?.messageKey)
         assertEquals("assistant", snapshot?.role)
+        assertEquals("node-1", snapshot?.cursorNodeId)
         assertEquals("hello", snapshot?.delta?.appendedText)
         assertEquals("thinking", snapshot?.delta?.appendedReasoning)
         assertEquals(listOf("reasoning", "text"), snapshot?.delta?.partTypes)
@@ -133,6 +134,83 @@ class RustChatEventParserTest {
         val identity = RustChatEventParser.extractGenerationIdentity(json)
 
         assertNull(identity)
+    }
+
+    @Test
+    fun `extractNodeUpsertMessage keeps explicit branch cursor truth`() {
+        val json = JSONObject(
+            """
+            {
+              "branch": {
+                "cursor_node_id": "node-leaf",
+                "node": {
+                  "node_id": "node-leaf",
+                  "role": "assistant",
+                  "selected_variant": {
+                    "variant_id": "variant-leaf",
+                    "parts": [
+                      { "payload": { "type": "text", "text": "hello" } }
+                    ]
+                  }
+                }
+              }
+            }
+            """.trimIndent()
+        )
+
+        val snapshot = RustChatEventParser.extractNodeUpsertMessage(json)
+
+        assertNotNull(snapshot)
+        assertEquals("node-leaf:variant-leaf", snapshot?.identity?.messageKey)
+        assertEquals("node-leaf", snapshot?.cursorNodeId)
+        assertEquals("hello", snapshot?.delta?.appendedText)
+    }
+
+    @Test
+    fun `extractSnapshotMessage keeps branch selector variants when payload includes them`() {
+        val json = JSONObject(
+            """
+            {
+              "branch": {
+                "cursor_node_id": "node-branch",
+                "nodes": [
+                  {
+                    "node_id": "node-branch",
+                    "role": "assistant",
+                    "variants": [
+                      {
+                        "variant_id": "variant-1",
+                        "status": "completed"
+                      },
+                      {
+                        "variant_id": "variant-2",
+                        "status": "completed"
+                      }
+                    ],
+                    "selected_variant": {
+                      "variant_id": "variant-2",
+                      "status": "completed",
+                      "parts": [
+                        { "payload": { "type": "text", "text": "branch two" } }
+                      ]
+                    }
+                  }
+                ]
+              }
+            }
+            """.trimIndent()
+        )
+
+        val snapshot = RustChatEventParser.extractSnapshotMessage(json)
+
+        assertNotNull(snapshot)
+        assertEquals(
+            listOf(
+                RustBranchOption(variantId = "variant-1", status = "completed"),
+                RustBranchOption(variantId = "variant-2", status = "completed"),
+            ),
+            snapshot?.branchOptions,
+        )
     }
 
     @Test

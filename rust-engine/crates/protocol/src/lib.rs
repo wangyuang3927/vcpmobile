@@ -89,7 +89,7 @@ pub enum ChatEvent {
         branch: SnapshotBranch,
     },
     ConversationNodeUpsert {
-        node: SnapshotNode,
+        branch: UpsertBranch,
     },
     /// Selection-only mutation for an existing node.
     ///
@@ -254,6 +254,16 @@ pub struct SnapshotBranch {
     pub nodes: Vec<SnapshotNode>,
 }
 
+/// Selected-branch pointer plus one selected node projection.
+///
+/// `conversation_node_upsert` uses this so Android receives the same branch-truth anchor as
+/// `conversation_snapshot` while still replacing only one node in place.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct UpsertBranch {
+    pub cursor_node_id: Option<NodeId>,
+    pub node: SnapshotNode,
+}
+
 /// Selected node shape used by snapshot/upsert payloads.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct SnapshotNode {
@@ -318,6 +328,19 @@ pub struct EditMessageRequest {
     pub text: String,
     #[serde(default)]
     pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RegenerateNodeRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SelectVariantRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+    pub variant_id: VariantId,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -594,7 +617,7 @@ mod tests {
         AgentEditorFieldKey, AgentEditorFieldMutability, AgentEditorFieldPersistence,
         AgentEditorGroupKey, AgentEditorSchema, ChatEvent, EventEnvelope, EventError,
         EventErrorKind, EventSchema, NamedEvent, SnapshotBranch, SnapshotConversation,
-        SnapshotNode, SnapshotPart, SnapshotVariant,
+        SnapshotNode, SnapshotPart, SnapshotVariant, UpsertBranch,
     };
 
     #[test]
@@ -789,6 +812,61 @@ mod tests {
         );
         assert_eq!(
             serialized["payload"]["data"]["branch"]["nodes"][0]["selected_variant"]["parts"][0]["part_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+    }
+
+    #[test]
+    fn conversation_node_upsert_payload_uses_branch_truth_shape() {
+        let now = Utc::now();
+        let envelope = EventEnvelope::new(
+            Some(Uuid::nil()),
+            ChatEvent::ConversationNodeUpsert {
+                branch: UpsertBranch {
+                    cursor_node_id: Some(Uuid::nil()),
+                    node: SnapshotNode {
+                        node_id: Uuid::nil(),
+                        parent_node_id: Some(Uuid::nil()),
+                        role: MessageRole::Assistant,
+                        created_at: now,
+                        updated_at: now,
+                        selected_variant: SnapshotVariant {
+                            variant_id: Uuid::nil(),
+                            status: VariantStatus::Completed,
+                            model_id: Some("demo-model".to_string()),
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                            parts: vec![SnapshotPart {
+                                part_id: Uuid::nil(),
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "hello".to_string(),
+                                },
+                            }],
+                        },
+                    },
+                },
+            },
+        );
+
+        let serialized: Value = serde_json::to_value(&envelope).expect("serialize envelope");
+
+        assert!(serialized["payload"]["data"]["node"].is_null());
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["cursor_node_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["node"]["node_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["node"]["selected_variant"]["variant_id"],
+            Value::String(Uuid::nil().to_string())
+        );
+        assert_eq!(
+            serialized["payload"]["data"]["branch"]["node"]["selected_variant"]["parts"][0]["part_id"],
             Value::String(Uuid::nil().to_string())
         );
     }

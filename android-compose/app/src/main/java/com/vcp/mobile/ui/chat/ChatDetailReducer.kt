@@ -173,6 +173,7 @@ object ChatDetailReducer {
         ast: MarkdownDocument? = null,
         nodeId: String? = null,
         variantId: String? = null,
+        branchOptions: List<ChatBranchOption> = emptyList(),
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): AssistantDeltaResult {
@@ -181,6 +182,11 @@ object ChatDetailReducer {
         val nodeReplacementIndex = when {
             targetIndex != -1 || nodeId.isNullOrBlank() -> -1
             else -> state.messages.indexOfFirst { it.nodeId == nodeId }
+        }
+        val previousMessage = when {
+            targetIndex != -1 -> state.messages[targetIndex]
+            nodeReplacementIndex != -1 -> state.messages[nodeReplacementIndex]
+            else -> null
         }
 
         val updatedMessages = if (targetIndex == -1) {
@@ -193,6 +199,11 @@ object ChatDetailReducer {
                 ast = ast,
                 nodeId = nodeId,
                 variantId = variantId,
+                branchSelector = mergeBranchSelector(
+                    previous = previousMessage?.branchSelector ?: ChatBranchSelector(),
+                    selectedVariantId = variantId,
+                    incomingOptions = branchOptions,
+                ),
                 parts = parts,
                 partTypes = compatibilityProjection.partTypes.ifEmpty { partTypes },
             )
@@ -219,6 +230,11 @@ object ChatDetailReducer {
                     ast = ast ?: previous.ast,
                     nodeId = nodeId ?: previous.nodeId,
                     variantId = variantId ?: previous.variantId,
+                    branchSelector = mergeBranchSelector(
+                        previous = previous.branchSelector,
+                        selectedVariantId = variantId ?: previous.variantId,
+                        incomingOptions = branchOptions,
+                    ),
                     parts = mergedParts,
                     partTypes = compatibilityProjection.partTypes.ifEmpty {
                         (previous.partTypes + partTypes).distinct()
@@ -249,12 +265,14 @@ object ChatDetailReducer {
         ast: MarkdownDocument? = null,
         nodeId: String? = null,
         variantId: String? = null,
+        branchOptions: List<ChatBranchOption> = emptyList(),
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
         fallbackMessageId: String? = null,
         fallbackNodeId: String? = null,
     ): AssistantDeltaResult {
         val compatibilityProjection = parts.toCompatibilityProjection()
+        val replacementNodeId = fallbackNodeId ?: nodeId
         val targetIndex = state.messages.indexOfFirst { it.id == messageId }
         val replacementIndex = when {
             targetIndex != -1 -> targetIndex
@@ -262,8 +280,13 @@ object ChatDetailReducer {
             else -> state.messages.indexOfFirst { it.id == fallbackMessageId }
         }
         val nodeReplacementIndex = when {
-            replacementIndex != -1 || fallbackNodeId.isNullOrBlank() -> -1
-            else -> state.messages.indexOfFirst { it.nodeId == fallbackNodeId }
+            replacementIndex != -1 || replacementNodeId.isNullOrBlank() -> -1
+            else -> state.messages.indexOfFirst { it.nodeId == replacementNodeId }
+        }
+        val previousMessage = when {
+            replacementIndex != -1 -> state.messages[replacementIndex]
+            nodeReplacementIndex != -1 -> state.messages[nodeReplacementIndex]
+            else -> null
         }
         val replacement = ChatMessage(
             id = messageId,
@@ -273,6 +296,11 @@ object ChatDetailReducer {
             ast = ast,
             nodeId = nodeId,
             variantId = variantId,
+            branchSelector = mergeBranchSelector(
+                previous = previousMessage?.branchSelector ?: ChatBranchSelector(),
+                selectedVariantId = variantId,
+                incomingOptions = branchOptions,
+            ),
             parts = parts,
             partTypes = compatibilityProjection.partTypes.ifEmpty { partTypes },
         )
