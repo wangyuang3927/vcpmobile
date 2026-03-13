@@ -10,6 +10,7 @@ import com.vcp.mobile.data.network.HubStreamEvent
 import com.vcp.mobile.data.network.RustChatEventEnvelope
 import com.vcp.mobile.data.network.RustChatEventKind
 import com.vcp.mobile.data.network.RustChatEventParser
+import com.vcp.mobile.data.network.RustBranchOption
 import com.vcp.mobile.data.network.RustMessagePart
 import com.vcp.mobile.data.network.RustToolCallEvent
 import com.vcp.mobile.data.network.RustToolCallPhase
@@ -308,6 +309,7 @@ class ChatViewModel @Inject constructor(
         appendReasoning: String = "",
         nodeId: String? = null,
         variantId: String? = null,
+        branchOptions: List<ChatBranchOption> = emptyList(),
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
@@ -319,6 +321,7 @@ class ChatViewModel @Inject constructor(
             appendReasoning = appendReasoning,
             nodeId = nodeId,
             variantId = variantId,
+            branchOptions = branchOptions,
             parts = parts,
             partTypes = partTypes,
         )
@@ -333,6 +336,7 @@ class ChatViewModel @Inject constructor(
         reasoning: String = "",
         nodeId: String? = null,
         variantId: String? = null,
+        branchOptions: List<ChatBranchOption> = emptyList(),
         parts: List<UiMessagePart> = emptyList(),
         partTypes: List<String> = emptyList(),
     ): String {
@@ -351,6 +355,7 @@ class ChatViewModel @Inject constructor(
             reasoning = reasoning,
             nodeId = nodeId,
             variantId = variantId,
+            branchOptions = branchOptions,
             parts = parts,
             partTypes = partTypes,
             fallbackMessageId = fallbackMessageId,
@@ -485,6 +490,7 @@ class ChatViewModel @Inject constructor(
                         reasoning = snapshot.delta.appendedReasoning,
                         nodeId = snapshot.identity.nodeId,
                         variantId = snapshot.identity.variantId,
+                        branchOptions = snapshot.branchOptions.toUiBranchOptions(),
                         parts = snapshot.delta.parts.toUiMessageParts(),
                         partTypes = snapshot.delta.partTypes,
                     )
@@ -538,6 +544,7 @@ class ChatViewModel @Inject constructor(
                     reasoning = snapshot.delta.appendedReasoning,
                     nodeId = snapshot.identity.nodeId,
                     variantId = snapshot.identity.variantId,
+                    branchOptions = snapshot.branchOptions.toUiBranchOptions(),
                     parts = snapshot.delta.parts.toUiMessageParts(),
                     partTypes = snapshot.delta.partTypes,
                 )
@@ -647,6 +654,11 @@ class ChatViewModel @Inject constructor(
                 reasoning = snapshot.delta.appendedReasoning.ifBlank { null },
                 nodeId = snapshot.identity.nodeId,
                 variantId = snapshot.identity.variantId,
+                branchSelector = mergeBranchSelector(
+                    previous = ChatBranchSelector(),
+                    selectedVariantId = snapshot.identity.variantId,
+                    incomingOptions = snapshot.branchOptions.toUiBranchOptions(),
+                ),
                 parts = snapshot.delta.parts.toUiMessageParts(),
                 partTypes = snapshot.delta.partTypes,
             )
@@ -717,6 +729,13 @@ private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map 
         partId = part.partId,
         orderIndex = part.orderIndex,
         toolCallId = part.toolCallId,
+    )
+}
+
+private fun List<RustBranchOption>.toUiBranchOptions(): List<ChatBranchOption> = map { option ->
+    ChatBranchOption(
+        variantId = option.variantId,
+        status = option.status,
     )
 }
 

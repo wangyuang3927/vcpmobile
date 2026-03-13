@@ -1417,6 +1417,139 @@ class ChatViewModelRecoveryTest {
         assertEquals("node-stream:variant-1", message.id)
         assertEquals("variant-1", message.variantId)
         assertEquals("old branch", message.content)
+        assertEquals(
+            listOf("variant-2", "variant-1"),
+            message.branchSelector.options.map { it.variantId },
+        )
+        assertEquals("variant-1", message.branchSelector.selectedVariantId)
+    }
+
+    @Test
+    fun `selected assistant variant restores after restart from persisted recovery conversation`() = runTest(dispatcher) {
+        val initialRepository = FakeHubChatRepository(
+            conversations = listOf(
+                HubConversationSummary(
+                    conversationId = "conversation-stream",
+                    title = "Branching",
+                    updatedAt = "2026-03-12T12:00:00Z",
+                    generationState = "idle",
+                )
+            ),
+            snapshotEnvelope = RustChatEventEnvelope(
+                conversationId = "conversation-stream",
+                kind = RustChatEventKind.CONVERSATION_SNAPSHOT,
+                event = "conversation_snapshot",
+                data = JSONObject(
+                    """
+                    {
+                      "branch":{
+                        "cursor_node_id":"node-stream",
+                        "nodes":[
+                          {
+                            "node_id":"node-stream",
+                            "role":"assistant",
+                            "selected_variant":{
+                              "variant_id":"variant-2",
+                              "parts":[
+                                {"payload":{"type":"text","text":"new branch"}}
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                    """.trimIndent()
+                ),
+            ),
+            selectVariantStreamEvents = flow {
+                emit(HubStreamEvent.Opened)
+                emit(
+                    HubStreamEvent.Message(
+                        event = "chat_event",
+                        data = """
+                        {
+                          "conversation_id":"conversation-stream",
+                          "event_name":"conversation_node_upsert",
+                          "payload":{
+                            "event":"conversation_node_upsert",
+                            "data":{
+                              "branch":{
+                                "cursor_node_id":"node-stream",
+                                "node":{
+                                  "node_id":"node-stream",
+                                  "role":"assistant",
+                                  "selected_variant":{
+                                    "variant_id":"variant-1",
+                                    "parts":[
+                                      {"payload":{"type":"text","text":"old branch"}}
+                                    ]
+                                  }
+                                }
+                              }
+                            }
+                          }
+                        }
+                        """.trimIndent()
+                    )
+                )
+                emit(HubStreamEvent.Completed)
+            }
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val firstViewModel = ChatViewModel(initialRepository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        firstViewModel.recoverConversation("conversation-stream")
+        dispatcher.scheduler.advanceUntilIdle()
+        firstViewModel.selectAssistantVariant("node-stream", "variant-1")
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val restartedRepository = FakeHubChatRepository(
+            conversations = listOf(
+                HubConversationSummary(
+                    conversationId = "conversation-stream",
+                    title = "Branching",
+                    updatedAt = "2026-03-12T12:00:00Z",
+                    generationState = "idle",
+                )
+            ),
+            snapshotEnvelope = RustChatEventEnvelope(
+                conversationId = "conversation-stream",
+                kind = RustChatEventKind.CONVERSATION_SNAPSHOT,
+                event = "conversation_snapshot",
+                data = JSONObject(
+                    """
+                    {
+                      "branch":{
+                        "cursor_node_id":"node-stream",
+                        "nodes":[
+                          {
+                            "node_id":"node-stream",
+                            "role":"assistant",
+                            "selected_variant":{
+                              "variant_id":"variant-1",
+                              "parts":[
+                                {"payload":{"type":"text","text":"old branch"}}
+                              ]
+                            }
+                          }
+                        ]
+                      }
+                    }
+                    """.trimIndent()
+                ),
+            ),
+        )
+
+        val restartedViewModel = ChatViewModel(restartedRepository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val restored = restartedViewModel.detailState.value.messages.single()
+        assertEquals("conversation-stream", restartedViewModel.detailState.value.conversationId)
+        assertEquals("node-stream:variant-1", restored.id)
+        assertEquals("variant-1", restored.variantId)
+        assertEquals("old branch", restored.content)
+        assertEquals("conversation-stream", recoveryStore.savedConversationId)
     }
 
     private fun snapshotEnvelope(
