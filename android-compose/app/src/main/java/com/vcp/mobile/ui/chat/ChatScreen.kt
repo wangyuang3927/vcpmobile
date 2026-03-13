@@ -65,6 +65,7 @@ fun ChatScreen(
 ) {
     val detailState by viewModel.detailState.collectAsState()
     val draftState by viewModel.draftState.collectAsState()
+    val providerCatalogState by viewModel.providerCatalogState.collectAsState()
     val listState = rememberLazyListState()
     val defaultCatalogProjection = ConversationCatalogWorkbench.project(
         conversations = detailState.recoverableConversations,
@@ -207,6 +208,11 @@ fun ChatScreen(
             }
         }
         Spacer(modifier = Modifier.height(10.dp))
+        ProviderSelectionStatus(
+            state = providerCatalogState,
+            onRefreshClicked = viewModel::refreshProviderCatalog,
+        )
+        Spacer(modifier = Modifier.height(10.dp))
 
         Card(
             modifier = Modifier
@@ -254,6 +260,51 @@ fun ChatScreen(
             onInputChanged = viewModel::onInputChanged,
             onSendClicked = viewModel::sendMessage,
         )
+    }
+}
+
+@Composable
+private fun ProviderSelectionStatus(
+    state: ChatProviderCatalogState,
+    onRefreshClicked: () -> Unit,
+) {
+    val selection = state.selection
+    val selectedProvider = state.providers.firstOrNull { it.providerLocalId == selection?.providerLocalId }
+
+    Surface(
+        shape = RoundedCornerShape(16.dp),
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = selectedProvider?.displayName ?: "未选择 Provider",
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                Text(
+                    text = when {
+                        state.isLoading -> "正在同步 provider 目录…"
+                        state.errorMessage != null -> state.errorMessage
+                        selection == null -> "前往 Providers 标签完成配置并切换当前 provider。"
+                        else -> "当前模型: ${selection.modelId}"
+                    },
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            IconButton(onClick = onRefreshClicked) {
+                Icon(
+                    imageVector = Icons.Filled.Refresh,
+                    contentDescription = "刷新 provider 目录",
+                )
+            }
+        }
     }
 }
 

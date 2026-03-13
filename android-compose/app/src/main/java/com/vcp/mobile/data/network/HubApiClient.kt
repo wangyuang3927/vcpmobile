@@ -20,6 +20,16 @@ interface HubApiClient {
 
     suspend fun listProviderCatalog(): List<HubProviderCatalogEntry>
 
+    suspend fun listProviders(): List<HubProviderConfig>
+
+    suspend fun getProvider(providerLocalId: String): HubProviderConfig
+
+    suspend fun createProvider(provider: HubProviderConfig): HubProviderMutationResult
+
+    suspend fun updateProvider(providerLocalId: String, provider: HubProviderConfig): HubProviderMutationResult
+
+    suspend fun deleteProvider(providerLocalId: String): HubProviderMutationResult
+
     suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope?
 
     suspend fun listAgents(): List<HubAgentConfig>

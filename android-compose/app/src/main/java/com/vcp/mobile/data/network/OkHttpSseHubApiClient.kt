@@ -14,6 +14,7 @@ import okhttp3.sse.EventSourceListener
 import okhttp3.sse.EventSources
 import org.json.JSONArray
 import org.json.JSONObject
+import org.json.JSONTokener
 
 /**
  * Hub API 客户端（OkHttp + SSE）。
@@ -38,6 +39,7 @@ class OkHttpSseHubApiClient(
         const val HUB_CATALOG_PATH = "/api/chat/catalog"
         const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
         const val HUB_AGENTS_PATH = "/api/agents"
+        const val HUB_PROVIDERS_PATH = "/api/providers"
         const val HUB_PROVIDER_CATALOG_PATH = "/api/providers/catalog"
         const val HUB_PROMPT_PREVIEW_PATH = "/api/agents/prompt-preview"
         const val HUB_PAIRING_EXCHANGE_PATH = "/api/pairing/exchange"
@@ -212,6 +214,44 @@ class OkHttpSseHubApiClient(
         }
     }
 
+    override suspend fun listProviders(): List<HubProviderConfig> {
+        val httpRequest = jsonRequestBuilder("$baseUrl$HUB_PROVIDERS_PATH")
+            .get()
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw parseBridgeFailureException(
+                    statusCode = response.code,
+                    statusMessage = response.message,
+                    raw = raw,
+                    operation = "Hub provider list"
+                )
+            }
+            return parseProviderList(raw)
+        }
+    }
+
+    override suspend fun getProvider(providerLocalId: String): HubProviderConfig {
+        val httpRequest = jsonRequestBuilder("$baseUrl$HUB_PROVIDERS_PATH/$providerLocalId")
+            .get()
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (!response.isSuccessful) {
+                throw parseBridgeFailureException(
+                    statusCode = response.code,
+                    statusMessage = response.message,
+                    raw = raw,
+                    operation = "Hub provider fetch"
+                )
+            }
+            return parseProviderConfig(raw)
+        }
+    }
+
     private fun requestConversationList(path: String): List<HubConversationSummary> {
         val httpRequest = Request.Builder()
             .url("$baseUrl$path")
@@ -351,6 +391,32 @@ class OkHttpSseHubApiClient(
         )
     }
 
+    override suspend fun createProvider(provider: HubProviderConfig): HubProviderMutationResult {
+        return executeProviderMutation(
+            path = HUB_PROVIDERS_PATH,
+            method = "POST",
+            body = provider.toUpstreamJsonBody(),
+        )
+    }
+
+    override suspend fun updateProvider(
+        providerLocalId: String,
+        provider: HubProviderConfig,
+    ): HubProviderMutationResult {
+        return executeProviderMutation(
+            path = "$HUB_PROVIDERS_PATH/$providerLocalId",
+            method = "PUT",
+            body = provider.toUpstreamJsonBody(),
+        )
+    }
+
+    override suspend fun deleteProvider(providerLocalId: String): HubProviderMutationResult {
+        return executeProviderMutation(
+            path = "$HUB_PROVIDERS_PATH/$providerLocalId",
+            method = "DELETE",
+        )
+    }
+
     override suspend fun previewResolvedPrompt(request: HubPromptPreviewRequest): HubResolvedPromptPreview {
         val httpRequest = Request.Builder()
             .url("$baseUrl$HUB_PROMPT_PREVIEW_PATH")
@@ -440,6 +506,45 @@ class OkHttpSseHubApiClient(
             }.getOrElse {
                 throw IllegalStateException(
                     "Hub agent mutation failed: ${response.code} ${response.message} $raw",
+                    it
+                )
+            }
+        }
+    }
+
+    private fun executeProviderMutation(
+        path: String,
+        method: String,
+        body: String? = null,
+    ): HubProviderMutationResult {
+        val requestBuilder = jsonRequestBuilder("$baseUrl$path")
+        when (method) {
+            "POST" -> requestBuilder.post((body ?: "{}").toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            "PUT" -> requestBuilder.put((body ?: "{}").toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            "DELETE" -> requestBuilder.delete()
+            else -> error("unsupported method $method")
+        }
+
+        okHttpClient.newCall(requestBuilder.build()).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            if (response.isSuccessful) {
+                return HubProviderMutationResult.Success(
+                    provider = parseProviderConfig(raw),
+                    statusCode = response.code,
+                )
+            }
+
+            return runCatching {
+                HubProviderMutationResult.Failure(
+                    parseBridgeFailure(
+                        statusCode = response.code,
+                        statusMessage = response.message,
+                        raw = raw,
+                    )
+                )
+            }.getOrElse {
+                throw IllegalStateException(
+                    "Hub provider mutation failed: ${response.code} ${response.message} $raw",
                     it
                 )
             }
@@ -582,6 +687,28 @@ class OkHttpSseHubApiClient(
             }
         }.getOrElse {
             throw IllegalStateException("Hub provider catalog payload malformed", it)
+        }
+    }
+
+    internal fun parseProviderList(raw: String): List<HubProviderConfig> {
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    add(parseProviderConfig(item))
+                }
+            }
+        }.getOrElse {
+            throw IllegalStateException("Hub provider list payload malformed", it)
+        }
+    }
+
+    internal fun parseProviderConfig(raw: String): HubProviderConfig {
+        return runCatching {
+            parseProviderConfig(JSONObject(raw))
+        }.getOrElse {
+            throw IllegalStateException("Hub provider payload malformed", it)
         }
     }
 
@@ -774,6 +901,122 @@ class OkHttpSseHubApiClient(
             createdAt = json.optNullableString("created_at"),
             updatedAt = json.optNullableString("updated_at"),
         )
+    }
+
+    private fun parseProviderConfig(json: JSONObject): HubProviderConfig {
+        val auth = json.optJSONObject("auth") ?: JSONObject().put("type", HubProviderAuthType.NONE.wireName)
+        val modelCatalog = json.optJSONObject("model_catalog") ?: JSONObject()
+        val modelEntries = modelCatalog.optJSONArray("entries")
+        val customHeaders = json.optJSONArray("custom_headers")
+        val customBodyFragments = json.optJSONArray("custom_body_fragments")
+        val presets = json.optJSONArray("presets")
+
+        return HubProviderConfig(
+            localId = json.optString("local_id"),
+            adapterKind = HubProviderAdapterKind.fromWireName(json.optString("adapter_kind")),
+            displayName = json.optString("display_name"),
+            avatarUri = json.optNullableString("avatar_uri"),
+            baseUrl = json.optString("base_url"),
+            auth = parseProviderAuth(auth),
+            modelCatalog = HubProviderModelCatalog(
+                defaultModel = modelCatalog.optNullableString("default_model"),
+                entries = buildList {
+                    for (index in 0 until (modelEntries?.length() ?: 0)) {
+                        val entry = modelEntries?.optJSONObject(index) ?: continue
+                        add(
+                            HubProviderModelCatalogEntry(
+                                modelId = entry.optString("model_id"),
+                                displayName = entry.optNullableString("display_name"),
+                                enabled = entry.optBoolean("enabled", true),
+                            )
+                        )
+                    }
+                },
+            ),
+            customHeaders = buildList {
+                for (index in 0 until (customHeaders?.length() ?: 0)) {
+                    val header = customHeaders?.optJSONObject(index) ?: continue
+                    add(
+                        HubProviderHeader(
+                            name = header.optString("name"),
+                            value = header.optString("value"),
+                        )
+                    )
+                }
+            },
+            customBodyFragments = buildList {
+                for (index in 0 until (customBodyFragments?.length() ?: 0)) {
+                    val fragment = customBodyFragments?.optJSONObject(index) ?: continue
+                    add(
+                        HubProviderBodyFragment(
+                            pointer = fragment.optString("pointer"),
+                            valueJson = fragment.opt("value").toCanonicalJson(),
+                        )
+                    )
+                }
+            },
+            presets = buildList {
+                for (index in 0 until (presets?.length() ?: 0)) {
+                    val preset = presets?.optJSONObject(index) ?: continue
+                    val presetHeaders = preset.optJSONArray("headers")
+                    val presetBodyFragments = preset.optJSONArray("body_fragments")
+                    add(
+                        HubProviderPreset(
+                            localId = preset.optString("local_id"),
+                            name = preset.optString("name"),
+                            description = preset.optNullableString("description"),
+                            modelId = preset.optNullableString("model_id"),
+                            headers = buildList {
+                                for (headerIndex in 0 until (presetHeaders?.length() ?: 0)) {
+                                    val header = presetHeaders?.optJSONObject(headerIndex) ?: continue
+                                    add(
+                                        HubProviderHeader(
+                                            name = header.optString("name"),
+                                            value = header.optString("value"),
+                                        )
+                                    )
+                                }
+                            },
+                            bodyFragments = buildList {
+                                for (fragmentIndex in 0 until (presetBodyFragments?.length() ?: 0)) {
+                                    val fragment = presetBodyFragments?.optJSONObject(fragmentIndex) ?: continue
+                                    add(
+                                        HubProviderBodyFragment(
+                                            pointer = fragment.optString("pointer"),
+                                            valueJson = fragment.opt("value").toCanonicalJson(),
+                                        )
+                                    )
+                                }
+                            },
+                        )
+                    )
+                }
+            },
+            defaultPresetLocalId = json.optNullableString("default_preset_local_id"),
+            referenceAliases = json.optStringArray("reference_aliases"),
+            createdAt = json.optNullableString("created_at"),
+            updatedAt = json.optNullableString("updated_at"),
+        )
+    }
+
+    private fun parseProviderAuth(auth: JSONObject): HubProviderAuthConfig {
+        return when (val type = HubProviderAuthType.fromWireName(auth.optString("type"))) {
+            HubProviderAuthType.NONE -> HubProviderAuthConfig(type = type)
+            HubProviderAuthType.BEARER_TOKEN -> HubProviderAuthConfig(
+                type = type,
+                hasStoredSecret = auth.optBoolean("has_token", false),
+            )
+            HubProviderAuthType.API_KEY -> HubProviderAuthConfig(
+                type = type,
+                headerName = auth.optString("header_name").ifBlank { "Authorization" },
+                hasStoredSecret = auth.optBoolean("has_value", false),
+            )
+            HubProviderAuthType.BASIC -> HubProviderAuthConfig(
+                type = type,
+                username = auth.optString("username"),
+                hasStoredPassword = auth.optBoolean("has_password", false),
+            )
+        }
     }
 
     private fun parseBridgeFailureException(
@@ -987,6 +1230,18 @@ private fun JSONObject.optStringArray(key: String): List<String> {
 
 private fun JSONObject.optNullableString(key: String): String? {
     return if (has(key) && !isNull(key)) optString(key).takeIf { it.isNotBlank() } else null
+}
+
+private fun Any?.toCanonicalJson(): String {
+    return when (this) {
+        null, JSONObject.NULL -> "null"
+        is JSONObject -> toString()
+        is JSONArray -> toString()
+        is String -> runCatching {
+            JSONTokener(this).nextValue().toString()
+        }.getOrElse { JSONObject.quote(this) }
+        else -> toString()
+    }
 }
 
 private fun JSONObject.optNullableFloat(key: String): Float? {

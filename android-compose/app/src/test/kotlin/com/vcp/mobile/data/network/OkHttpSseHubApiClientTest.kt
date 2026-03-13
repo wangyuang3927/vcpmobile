@@ -212,6 +212,71 @@ class OkHttpSseHubApiClientTest {
     }
 
     @Test
+    fun `parseProviderConfig returns redacted auth and advanced fields`() {
+        val provider = client.parseProviderConfig(
+            """
+            {
+              "local_id": "provider_local_123",
+              "adapter_kind": "openai_compatible",
+              "display_name": "OpenAI",
+              "avatar_uri": "https://example.com/openai.png",
+              "base_url": "https://api.example.com/v1",
+              "auth": {
+                "type": "api_key",
+                "header_name": "X-API-Key",
+                "has_value": true
+              },
+              "model_catalog": {
+                "default_model": "gpt-4.1-mini",
+                "entries": [
+                  {
+                    "model_id": "gpt-4.1-mini",
+                    "display_name": "GPT-4.1 mini",
+                    "enabled": true
+                  }
+                ]
+              },
+              "custom_headers": [
+                {
+                  "name": "X-Tenant",
+                  "value": "mobile"
+                }
+              ],
+              "custom_body_fragments": [
+                {
+                  "pointer": "/temperature",
+                  "value": 0.2
+                }
+              ],
+              "presets": [
+                {
+                  "local_id": "preset-1",
+                  "name": "balanced",
+                  "model_id": "gpt-4.1-mini",
+                  "headers": [],
+                  "body_fragments": []
+                }
+              ],
+              "reference_aliases": ["legacy-openai"],
+              "created_at": "2026-03-13T00:00:00Z",
+              "updated_at": "2026-03-13T01:00:00Z"
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("provider_local_123", provider.localId)
+        assertEquals(HubProviderAdapterKind.OPENAI_COMPATIBLE, provider.adapterKind)
+        assertEquals(HubProviderAuthType.API_KEY, provider.auth.type)
+        assertEquals("X-API-Key", provider.auth.headerName)
+        assertTrue(provider.auth.hasStoredSecret)
+        assertEquals("gpt-4.1-mini", provider.modelCatalog.defaultModel)
+        assertEquals("X-Tenant", provider.customHeaders.single().name)
+        assertEquals("0.2", provider.customBodyFragments.single().valueJson)
+        assertEquals("preset-1", provider.presets.single().localId)
+        assertEquals(listOf("legacy-openai"), provider.referenceAliases)
+    }
+
+    @Test
     fun `parsePairingExchangeSuccess returns stable token and resume anchor shape`() {
         val response = client.parsePairingExchangeSuccess(
             """

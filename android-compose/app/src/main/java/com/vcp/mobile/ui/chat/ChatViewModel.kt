@@ -107,6 +107,7 @@ class ChatViewModel @Inject constructor(
 
     fun refreshProviderCatalog() {
         viewModelScope.launch {
+            val currentSelection = _providerCatalogState.value.selection
             _providerCatalogState.update { state ->
                 state.copy(
                     isLoading = true,
@@ -119,7 +120,7 @@ class ChatViewModel @Inject constructor(
                     val mappedProviders = providers.map { provider -> provider.toChatProviderOption() }
                     _providerCatalogState.value = ChatProviderCatalogState(
                         providers = mappedProviders,
-                        selection = mappedProviders.resolvePreferredProviderSelection(),
+                        selection = mappedProviders.resolvePreferredProviderSelection(currentSelection),
                         isLoading = false,
                     )
                 }
@@ -131,6 +132,19 @@ class ChatViewModel @Inject constructor(
                         )
                     }
                 }
+        }
+    }
+
+    fun selectProvider(providerLocalId: String, modelId: String) {
+        if (providerLocalId.isBlank() || modelId.isBlank()) return
+        _providerCatalogState.update { state ->
+            state.copy(
+                selection = ChatProviderSelection(
+                    providerLocalId = providerLocalId,
+                    modelId = modelId,
+                ),
+                errorMessage = null,
+            )
         }
     }
 
@@ -521,7 +535,25 @@ class ChatViewModel @Inject constructor(
         )
     }
 
-    private fun List<ChatProviderOption>.resolvePreferredProviderSelection(): ChatProviderSelection? {
+    private fun List<ChatProviderOption>.resolvePreferredProviderSelection(
+        currentSelection: ChatProviderSelection? = null,
+    ): ChatProviderSelection? {
+        currentSelection?.let { selection ->
+            firstOrNull { it.providerLocalId == selection.providerLocalId }
+                ?.let { provider ->
+                    val stillExists = provider.models.any { it.modelId == selection.modelId && it.modelId.isNotBlank() }
+                    if (stillExists) {
+                        return selection
+                    }
+                    provider.resolvePreferredModelId()?.let { modelId ->
+                        return ChatProviderSelection(
+                            providerLocalId = provider.providerLocalId,
+                            modelId = modelId,
+                        )
+                    }
+                }
+        }
+
         val providerWithModel = firstNotNullOfOrNull { provider ->
             provider.resolvePreferredModelId()
                 ?.let { modelId ->

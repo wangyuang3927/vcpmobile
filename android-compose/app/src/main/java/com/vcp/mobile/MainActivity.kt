@@ -10,12 +10,15 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.ChatBubble
 import androidx.compose.material.icons.filled.Face
 import androidx.compose.material.icons.filled.Link
+import androidx.compose.material.icons.filled.Storage
 import androidx.compose.material3.Icon
 import androidx.compose.material3.NavigationBar
 import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
@@ -27,6 +30,8 @@ import com.vcp.mobile.ui.chat.ChatViewModel
 import com.vcp.mobile.ui.chat.ChatScreen
 import com.vcp.mobile.ui.pairing.PairingScreen
 import com.vcp.mobile.ui.pairing.PairingViewModel
+import com.vcp.mobile.ui.provider.ProviderScreen
+import com.vcp.mobile.ui.provider.ProviderViewModel
 import com.vcp.mobile.ui.theme.VcpMobileTheme
 import dagger.hilt.android.AndroidEntryPoint
 
@@ -35,6 +40,7 @@ class MainActivity : ComponentActivity() {
     private val chatViewModel: ChatViewModel by viewModels()
     private val pairingViewModel: PairingViewModel by viewModels()
     private val agentViewModel: AgentViewModel by viewModels()
+    private val providerViewModel: ProviderViewModel by viewModels()
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,6 +49,7 @@ class MainActivity : ComponentActivity() {
                 chatViewModel = chatViewModel,
                 pairingViewModel = pairingViewModel,
                 agentViewModel = agentViewModel,
+                providerViewModel = providerViewModel,
             )
         }
     }
@@ -52,6 +59,7 @@ private enum class AppSection {
     CHAT,
     PAIRING,
     AGENTS,
+    PROVIDERS,
 }
 
 @Composable
@@ -59,8 +67,16 @@ private fun AppRoot(
     chatViewModel: ChatViewModel,
     pairingViewModel: PairingViewModel,
     agentViewModel: AgentViewModel,
+    providerViewModel: ProviderViewModel,
 ) {
     var selectedSection by rememberSaveable { mutableStateOf(AppSection.CHAT) }
+    val providerCatalogState by chatViewModel.providerCatalogState.collectAsState()
+
+    LaunchedEffect(selectedSection) {
+        if (selectedSection == AppSection.CHAT) {
+            chatViewModel.refreshProviderCatalog()
+        }
+    }
 
     VcpMobileTheme {
         Surface(modifier = Modifier.fillMaxSize()) {
@@ -100,6 +116,17 @@ private fun AppRoot(
                             },
                             label = { androidx.compose.material3.Text(text = "Agents") },
                         )
+                        NavigationBarItem(
+                            selected = selectedSection == AppSection.PROVIDERS,
+                            onClick = { selectedSection = AppSection.PROVIDERS },
+                            icon = {
+                                Icon(
+                                    imageVector = Icons.Filled.Storage,
+                                    contentDescription = "Providers",
+                                )
+                            },
+                            label = { androidx.compose.material3.Text(text = "Providers") },
+                        )
                     }
                 }
             ) { innerPadding ->
@@ -117,6 +144,15 @@ private fun AppRoot(
 
                     AppSection.AGENTS -> AgentScreen(
                         viewModel = agentViewModel,
+                        modifier = Modifier.padding(innerPadding),
+                    )
+
+                    AppSection.PROVIDERS -> ProviderScreen(
+                        viewModel = providerViewModel,
+                        activeProviderLocalId = providerCatalogState.selection?.providerLocalId,
+                        onSetActiveProvider = { providerLocalId, modelId ->
+                            chatViewModel.selectProvider(providerLocalId, modelId)
+                        },
                         modifier = Modifier.padding(innerPadding),
                     )
                 }

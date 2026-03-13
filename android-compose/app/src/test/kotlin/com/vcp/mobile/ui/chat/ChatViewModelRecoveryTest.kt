@@ -493,6 +493,53 @@ class ChatViewModelRecoveryTest {
     }
 
     @Test
+    fun `selected provider is preserved across catalog refresh when still valid`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            providerCatalog = listOf(
+                HubProviderCatalogEntry(
+                    providerLocalId = "provider-openai",
+                    displayName = "OpenAI",
+                    adapterKind = "openai_compatible",
+                    defaultModelId = "gpt-4.1-mini",
+                    models = listOf(
+                        HubProviderCatalogModel(
+                            modelId = "gpt-4.1-mini",
+                            displayName = "GPT-4.1 mini",
+                            enabled = true,
+                            isDefault = true,
+                        )
+                    )
+                ),
+                HubProviderCatalogEntry(
+                    providerLocalId = "provider-anthropic",
+                    displayName = "Anthropic",
+                    adapterKind = "anthropic_compatible",
+                    defaultModelId = "claude-3-7-sonnet",
+                    models = listOf(
+                        HubProviderCatalogModel(
+                            modelId = "claude-3-7-sonnet",
+                            displayName = "Claude 3.7 Sonnet",
+                            enabled = true,
+                            isDefault = true,
+                        )
+                    )
+                )
+            )
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.selectProvider("provider-anthropic", "claude-3-7-sonnet")
+        viewModel.refreshProviderCatalog()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.providerCatalogState.value
+        assertEquals("provider-anthropic", state.selection?.providerLocalId)
+        assertEquals("claude-3-7-sonnet", state.selection?.modelId)
+    }
+
+    @Test
     fun `send message uses rust catalog selection instead of hardcoded model fallback`() = runTest(dispatcher) {
         val repository = FakeHubChatRepository(
             providerCatalog = listOf(

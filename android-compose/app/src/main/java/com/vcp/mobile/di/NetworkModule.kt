@@ -9,6 +9,8 @@ import com.vcp.mobile.data.repository.HubChatRepository
 import com.vcp.mobile.data.repository.HubChatRepositoryImpl
 import com.vcp.mobile.data.repository.HubPairingRepository
 import com.vcp.mobile.data.repository.HubPairingRepositoryImpl
+import com.vcp.mobile.data.repository.HubProviderRepository
+import com.vcp.mobile.data.repository.HubProviderRepositoryImpl
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -66,6 +68,12 @@ object NetworkModule {
     @Singleton
     fun provideHubAgentRepository(hubApiClient: HubApiClient): HubAgentRepository {
         return HubAgentRepositoryImpl(hubApiClient)
+    }
+
+    @Provides
+    @Singleton
+    fun provideHubProviderRepository(hubApiClient: HubApiClient): HubProviderRepository {
+        return HubProviderRepositoryImpl(hubApiClient)
     }
 
     @Provides
