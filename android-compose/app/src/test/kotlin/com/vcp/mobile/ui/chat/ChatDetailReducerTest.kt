@@ -235,6 +235,13 @@ class ChatDetailReducerTest {
             content = "old",
             nodeId = "node-1",
             variantId = "variant-old",
+            branchSelector = ChatBranchSelector(
+                selectedVariantId = "variant-old",
+                options = listOf(
+                    ChatBranchOption(variantId = "variant-old"),
+                    ChatBranchOption(variantId = "variant-hidden"),
+                ),
+            ),
             parts = listOf(UiMessagePart(type = "text", text = "old")),
             partTypes = listOf("text"),
             timestampMillis = 1234L,
@@ -260,6 +267,8 @@ class ChatDetailReducerTest {
         assertEquals("node-1", updated.nodeId)
         assertEquals("variant-new", updated.variantId)
         assertEquals("new", updated.content)
+        assertEquals("variant-new", updated.branchSelector.selectedVariantId)
+        assertEquals(listOf("variant-new"), updated.branchSelector.options.map { it.variantId })
         assertEquals(listOf(UiMessagePart(type = "text", text = "new")), updated.parts)
         assertEquals(existingMessage.timestampMillis, updated.timestampMillis)
     }
@@ -371,7 +380,7 @@ class ChatDetailReducerTest {
     }
 
     @Test
-    fun `snapshot replace preserves branch selector history when same node selects another variant`() {
+    fun `snapshot replace trusts rust branch truth when same node selects another variant`() {
         val existingMessage = ChatMessage(
             id = "node-branch:variant-2",
             sender = MessageSender.AGENT,
@@ -401,11 +410,8 @@ class ChatDetailReducerTest {
 
         val updated = result.state.messages.single()
         assertEquals("variant-1", updated.branchSelector.selectedVariantId)
-        assertEquals(
-            listOf("variant-2", "variant-1"),
-            updated.branchSelector.options.map { it.variantId },
-        )
-        assertTrue(updated.branchSelector.isVisible)
+        assertEquals(listOf("variant-1"), updated.branchSelector.options.map { it.variantId })
+        assertFalse(updated.branchSelector.isVisible)
     }
 
     @Test

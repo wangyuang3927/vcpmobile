@@ -1431,11 +1431,9 @@ class ChatViewModelRecoveryTest {
         assertEquals("node-stream:variant-1", message.id)
         assertEquals("variant-1", message.variantId)
         assertEquals("old branch", message.content)
-        assertEquals(
-            listOf("variant-2", "variant-1"),
-            message.branchSelector.options.map { it.variantId },
-        )
+        assertEquals(listOf("variant-1"), message.branchSelector.options.map { it.variantId })
         assertEquals("variant-1", message.branchSelector.selectedVariantId)
+        assertFalse(message.branchSelector.isVisible)
     }
 
     @Test
@@ -1504,6 +1502,8 @@ class ChatViewModelRecoveryTest {
             "node-stream:variant-1",
             restartedViewModel.detailState.value.generation.activeMessageKey,
         )
+        assertEquals(listOf("variant-1"), restored.branchSelector.options.map { it.variantId })
+        assertFalse(restored.branchSelector.isVisible)
         assertEquals("conversation-stream", recoveryStore.savedConversationId)
         assertEquals(
             RecoveryResumeAnchor(

@@ -698,8 +698,7 @@ class ChatViewModel @Inject constructor(
                 reasoning = snapshot.delta.appendedReasoning.ifBlank { null },
                 nodeId = snapshot.identity.nodeId,
                 variantId = snapshot.identity.variantId,
-                branchSelector = mergeBranchSelector(
-                    previous = ChatBranchSelector(),
+                branchSelector = branchSelectorFromRustTruth(
                     selectedVariantId = snapshot.identity.variantId,
                     incomingOptions = snapshot.branchOptions.toUiBranchOptions(),
                 ),
