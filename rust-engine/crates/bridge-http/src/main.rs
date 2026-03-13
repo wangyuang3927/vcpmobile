@@ -998,6 +998,9 @@ fn server_port() -> u16 {
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     let store = FileStore::new(default_store_path());
+    store
+        .bootstrap_conversations_from_legacy()
+        .context("bootstrap sqlite conversations from legacy json")?;
     let topic_id = Uuid::new_v4();
     let agent_id = Uuid::new_v4();
     let engine = SessionEngine::new(store, topic_id, agent_id);
