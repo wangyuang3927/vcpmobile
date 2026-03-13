@@ -498,7 +498,10 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationNodeUpsert {
-                    node: streaming_projection,
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: streaming_projection,
+                    },
                 },
             ),
             EventEnvelope::new(
@@ -519,7 +522,10 @@ impl SessionEngine {
             EventEnvelope::new(
                 Some(stored.conversation.id),
                 ChatEvent::ConversationNodeUpsert {
-                    node: completed_projection,
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: completed_projection,
+                    },
                 },
             ),
             EventEnvelope::new(
@@ -597,7 +603,10 @@ impl SessionEngine {
         Ok(vec![EventEnvelope::new(
             Some(stored.conversation.id),
             ChatEvent::ConversationNodeUpsert {
-                node: selected_projection,
+                branch: UpsertBranch {
+                    cursor_node_id: stored.conversation.current_cursor,
+                    node: selected_projection,
+                },
             },
         )])
     }
@@ -1104,18 +1113,19 @@ fn finalize_selected_variant_in_place(
     bundle: &mut NodeBundle,
     finished_at: chrono::DateTime<Utc>,
 ) -> Result<(), SessionError> {
-    let selected_variant = bundle
-        .variants
-        .get_mut(bundle.node.select_index)
-        .ok_or_else(|| SessionError::InvalidConversationState {
-            conversation_id: bundle.node.conversation_id,
+    let conversation_id = bundle.node.conversation_id;
+    let node_id = bundle.node.id;
+    let select_index = bundle.node.select_index;
+    let variant_len = bundle.variants.len();
+    let selected_variant = bundle.variants.get_mut(select_index).ok_or_else(|| {
+        SessionError::InvalidConversationState {
+            conversation_id,
             reason: format!(
                 "node {} select_index {} out of range for {} variants",
-                bundle.node.id,
-                bundle.node.select_index,
-                bundle.variants.len()
+                node_id, select_index, variant_len
             ),
-        })?;
+        }
+    })?;
     selected_variant.variant.status = VariantStatus::Completed;
     selected_variant.variant.finished_at = Some(finished_at);
     Ok(())
@@ -2343,7 +2353,7 @@ mod tests {
             .expect("first message");
         let conversation_id = first_events[0].conversation_id.expect("conversation id");
         let assistant_node_id = match &first_events[3].payload {
-            ChatEvent::ConversationNodeUpsert { node } => node.node_id,
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.node_id,
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
         let original_snapshot = engine
@@ -2367,7 +2377,7 @@ mod tests {
 
         assert_eq!(events.len(), 5);
         let streaming_upsert = match &events[0].payload {
-            ChatEvent::ConversationNodeUpsert { node } => node,
+            ChatEvent::ConversationNodeUpsert { branch } => &branch.node,
             other => panic!("expected regenerate upsert, got {other:?}"),
         };
         let regenerated_variant_id = streaming_upsert.selected_variant.variant_id;
@@ -2464,11 +2474,11 @@ mod tests {
             .expect("first message");
         let conversation_id = first_events[0].conversation_id.expect("conversation id");
         let assistant_node_id = match &first_events[3].payload {
-            ChatEvent::ConversationNodeUpsert { node } => node.node_id,
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.node_id,
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
         let original_variant_id = match &first_events[3].payload {
-            ChatEvent::ConversationNodeUpsert { node } => node.selected_variant.variant_id,
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.selected_variant.variant_id,
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         };
 
@@ -2479,7 +2489,7 @@ mod tests {
             })
             .expect("regenerate");
         let regenerated_variant_id = match &regenerate_events[0].payload {
-            ChatEvent::ConversationNodeUpsert { node } => node.selected_variant.variant_id,
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.selected_variant.variant_id,
             other => panic!("expected regenerate upsert, got {other:?}"),
         };
         assert_ne!(original_variant_id, regenerated_variant_id);
@@ -2494,9 +2504,9 @@ mod tests {
         assert_eq!(select_events.len(), 1);
         assert!(matches!(
             &select_events[0].payload,
-            ChatEvent::ConversationNodeUpsert { node }
-                if node.node_id == assistant_node_id
-                    && node.selected_variant.variant_id == original_variant_id
+            ChatEvent::ConversationNodeUpsert { branch }
+                if branch.node.node_id == assistant_node_id
+                    && branch.node.selected_variant.variant_id == original_variant_id
         ));
 
         engine

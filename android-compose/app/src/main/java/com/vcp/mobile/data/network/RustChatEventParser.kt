@@ -165,9 +165,11 @@ object RustChatEventParser {
     }
 
     fun extractNodeUpsertMessage(data: JSONObject): RustSnapshotMessage? {
-        val branch = data.optJSONObject("branch") ?: return null
-        val snapshotNode = branch.optJSONObject("node") ?: return null
-        return extractSnapshotNodeMessage(snapshotNode, branch.optNonBlankString("cursor_node_id"))
+        val branch = data.optJSONObject("branch")
+        val snapshotNode = branch?.optJSONObject("node")
+            ?: data.optJSONObject("node")
+            ?: return null
+        return extractSnapshotNodeMessage(snapshotNode, branch?.optNonBlankString("cursor_node_id"))
     }
 
     fun extractPartDelta(data: JSONObject): RustMessageDelta {

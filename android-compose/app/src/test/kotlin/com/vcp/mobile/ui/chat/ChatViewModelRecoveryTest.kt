@@ -1494,6 +1494,10 @@ private class FakeHubChatRepository(
         if (failSnapshot) error("snapshot failure")
         return snapshotEnvelope
     }
+
+    override suspend fun previewResolvedPrompt(request: com.vcp.mobile.data.network.HubPromptPreviewRequest): com.vcp.mobile.data.network.HubResolvedPromptPreview {
+        error("not used in recovery tests")
+    }
 }
 
 private class FakeConversationRecoveryStore(
