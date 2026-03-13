@@ -22,14 +22,16 @@ use vcpmobile_protocol::{
     SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
     UpsertBranch, VariantBundle,
 };
-use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
+use vcpmobile_store::{
+    FileStore, StoreError, StoredConversation, StoredConversationCatalogItem, StoredMobileSession,
+    StoredPairingSession, StoredPairingSessionStatus, StoredPairingState, StoredTrustedDevice,
+};
 
+pub use vcpmobile_domain::resolve_prompt_preview;
 #[cfg(test)]
 use vcpmobile_domain::{
     PlaceholderCategory, PlaceholderSource, PromptPlaceholderValue, PromptResolutionStatus,
 };
-
-pub use vcpmobile_domain::resolve_prompt_preview;
 
 #[derive(Debug, Clone)]
 pub struct SessionEngine {
@@ -37,8 +39,9 @@ pub struct SessionEngine {
     default_topic_id: TopicId,
     default_agent_id: Uuid,
     active_streams: BTreeMap<ConversationId, ActiveStreamSession>,
-    pairing_sessions: BTreeMap<String, BootstrapPairingSession>,
-    mobile_sessions: BTreeMap<String, MobileSessionRecord>,
+    pairing_sessions: BTreeMap<String, StoredPairingSession>,
+    trusted_devices: BTreeMap<String, StoredTrustedDevice>,
+    mobile_sessions: BTreeMap<String, StoredMobileSession>,
 }
 
 #[derive(Debug, Clone)]
@@ -117,37 +120,16 @@ struct PreparedDocumentAttachment {
     bytes: Vec<u8>,
 }
 
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct BootstrapPairingSession {
-    namespace: String,
-    bootstrap_token: String,
-    expires_at: DateTime<Utc>,
-    state: BootstrapPairingState,
-    trusted_device_id: Option<String>,
-    completed_at: Option<DateTime<Utc>>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum BootstrapPairingState {
-    Pending,
-    Paired,
-    Expired,
-}
-
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-struct MobileSessionRecord {
-    pairing_session_id: String,
-    namespace: String,
-    trusted_device_id: String,
-    device_name: String,
-    device_public_key: String,
-    issued_at: DateTime<Utc>,
-    expires_at: DateTime<Utc>,
-    revoked_at: Option<DateTime<Utc>>,
-    resume_anchor: String,
-    resume_anchor_expires_at: DateTime<Utc>,
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMobileSession {
+    pub access_token: String,
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub trusted_device: PairingTrustedDevice,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub resume_anchor: PairingResumeAnchor,
 }
 
 const MOBILE_TOKEN_TTL_MINUTES: i64 = 15;
@@ -205,18 +187,93 @@ pub enum SessionError {
 
 impl SessionEngine {
     pub fn new(store: FileStore, default_topic_id: TopicId, default_agent_id: Uuid) -> Self {
-        Self {
+        Self::try_new(store, default_topic_id, default_agent_id)
+            .unwrap_or_else(|error| panic!("restore session engine state: {error}"))
+    }
+
+    pub fn try_new(
+        store: FileStore,
+        default_topic_id: TopicId,
+        default_agent_id: Uuid,
+    ) -> Result<Self, SessionError> {
+        let pairing_state = store.load_pairing_state()?;
+        Ok(Self {
             store,
             default_topic_id,
             default_agent_id,
             active_streams: BTreeMap::new(),
-            pairing_sessions: BTreeMap::new(),
-            mobile_sessions: BTreeMap::new(),
-        }
+            pairing_sessions: pairing_state.pairing_sessions,
+            trusted_devices: pairing_state.trusted_devices,
+            mobile_sessions: pairing_state.mobile_sessions,
+        })
     }
 
     pub fn store(&self) -> &FileStore {
         &self.store
+    }
+
+    pub fn trusted_device(
+        &mut self,
+        trusted_device_id: &str,
+    ) -> Result<Option<StoredTrustedDevice>, SessionError> {
+        self.refresh_pairing_state()?;
+        Ok(self.trusted_devices.get(trusted_device_id).cloned())
+    }
+
+    pub fn resolve_mobile_session_by_resume_anchor(
+        &mut self,
+        resume_anchor: &str,
+    ) -> Result<Option<ResolvedMobileSession>, SessionError> {
+        self.refresh_pairing_state()?;
+        let now = Utc::now();
+        let Some((access_token, session)) = self.mobile_sessions.iter().find(|(_, session)| {
+            session.resume_anchor == resume_anchor
+                && session.revoked_at.is_none()
+                && session.resume_anchor_expires_at > now
+        }) else {
+            return Ok(None);
+        };
+        let Some(trusted_device) = self.trusted_devices.get(&session.trusted_device_id) else {
+            return Ok(None);
+        };
+        if trusted_device.revoked_at.is_some() {
+            return Ok(None);
+        }
+
+        Ok(Some(ResolvedMobileSession {
+            access_token: access_token.clone(),
+            pairing_session_id: session.pairing_session_id.clone(),
+            namespace: session.namespace.clone(),
+            trusted_device: PairingTrustedDevice {
+                trusted_device_id: trusted_device.trusted_device_id.clone(),
+                device_name: trusted_device.device_name.clone(),
+                device_platform: trusted_device.device_platform,
+            },
+            issued_at: session.issued_at,
+            expires_at: session.expires_at,
+            revoked_at: session.revoked_at,
+            resume_anchor: PairingResumeAnchor {
+                anchor: session.resume_anchor.clone(),
+                expires_at: session.resume_anchor_expires_at,
+            },
+        }))
+    }
+
+    fn refresh_pairing_state(&mut self) -> Result<(), SessionError> {
+        let state = self.store.load_pairing_state()?;
+        self.pairing_sessions = state.pairing_sessions;
+        self.trusted_devices = state.trusted_devices;
+        self.mobile_sessions = state.mobile_sessions;
+        Ok(())
+    }
+
+    fn persist_pairing_state(&self) -> Result<(), SessionError> {
+        self.store.save_pairing_state(&StoredPairingState {
+            pairing_sessions: self.pairing_sessions.clone(),
+            trusted_devices: self.trusted_devices.clone(),
+            mobile_sessions: self.mobile_sessions.clone(),
+        })?;
+        Ok(())
     }
 
     pub fn ensure_demo_conversation(&self) -> Result<StoredConversation, SessionError> {
@@ -248,26 +305,49 @@ impl SessionEngine {
         transform_document_prompt_output(&attachments).map_err(SessionError::from)
     }
 
-    pub fn seed_pairing_session(&mut self, seed: PairingBootstrapSeed) {
+    pub fn seed_pairing_session(&mut self, seed: PairingBootstrapSeed) -> Result<(), SessionError> {
+        self.refresh_pairing_state()?;
+        if matches!(
+            self.pairing_sessions
+                .get(&seed.pairing_session_id)
+                .map(|session| &session.status),
+            Some(StoredPairingSessionStatus::Paired)
+        ) {
+            return Ok(());
+        }
+
         self.pairing_sessions.insert(
-            seed.pairing_session_id,
-            BootstrapPairingSession {
+            seed.pairing_session_id.clone(),
+            StoredPairingSession {
+                pairing_session_id: seed.pairing_session_id,
                 namespace: seed.namespace,
                 bootstrap_token: seed.bootstrap_token,
                 expires_at: seed.expires_at,
-                state: BootstrapPairingState::Pending,
+                status: StoredPairingSessionStatus::Pending,
                 trusted_device_id: None,
                 completed_at: None,
             },
         );
+        self.persist_pairing_state()
     }
 
     pub fn exchange_pairing(
         &mut self,
         request: PairingExchangeRequest,
     ) -> Result<PairingExchangeSuccessResponse, PairingExchangeFailureResponse> {
+        let pairing_session_id = request.pairing_session_id.clone();
+        let namespace = request.namespace.clone();
+        if let Err(error) = self.refresh_pairing_state() {
+            return Err(pairing_state_failure(
+                Some(pairing_session_id),
+                Some(namespace),
+                "pairing_state_unavailable",
+                format!("pairing state unavailable: {error}"),
+            ));
+        }
+
         let now = Utc::now();
-        let Some(session) = self.pairing_sessions.get_mut(&request.pairing_session_id) else {
+        let Some(session) = self.pairing_sessions.get(&request.pairing_session_id) else {
             return Err(pairing_exchange_failure(
                 Some(request.pairing_session_id),
                 Some(request.namespace),
@@ -289,8 +369,8 @@ impl SessionEngine {
             ));
         }
 
-        match session.state {
-            BootstrapPairingState::Paired => {
+        match session.status {
+            StoredPairingSessionStatus::Paired => {
                 return Err(pairing_exchange_failure(
                     Some(request.pairing_session_id),
                     Some(request.namespace),
@@ -300,7 +380,7 @@ impl SessionEngine {
                     false,
                 ));
             }
-            BootstrapPairingState::Expired => {
+            StoredPairingSessionStatus::Expired => {
                 return Err(pairing_exchange_failure(
                     Some(request.pairing_session_id),
                     Some(request.namespace),
@@ -310,11 +390,21 @@ impl SessionEngine {
                     false,
                 ));
             }
-            BootstrapPairingState::Pending => {}
+            StoredPairingSessionStatus::Pending => {}
         }
 
         if session.expires_at <= now {
-            session.state = BootstrapPairingState::Expired;
+            if let Some(session) = self.pairing_sessions.get_mut(&request.pairing_session_id) {
+                session.status = StoredPairingSessionStatus::Expired;
+            }
+            if let Err(error) = self.persist_pairing_state() {
+                return Err(pairing_state_failure(
+                    Some(request.pairing_session_id),
+                    Some(request.namespace),
+                    "pairing_state_persist_failed",
+                    format!("persist pairing expiry failed: {error}"),
+                ));
+            }
             return Err(pairing_exchange_failure(
                 Some(request.pairing_session_id),
                 Some(request.namespace),
@@ -341,19 +431,35 @@ impl SessionEngine {
         let resume_anchor = format!("resume-anchor-{}", Uuid::new_v4().simple());
         let mobile_expires_at = now + Duration::minutes(MOBILE_TOKEN_TTL_MINUTES);
         let resume_expires_at = now + Duration::days(RESUME_ANCHOR_TTL_DAYS);
-
-        session.state = BootstrapPairingState::Paired;
-        session.trusted_device_id = Some(trusted_device_id.clone());
-        session.completed_at = Some(now);
+        let previous_pairing_sessions = self.pairing_sessions.clone();
+        let previous_trusted_devices = self.trusted_devices.clone();
+        let previous_mobile_sessions = self.mobile_sessions.clone();
+        if let Some(session) = self.pairing_sessions.get_mut(&request.pairing_session_id) {
+            session.status = StoredPairingSessionStatus::Paired;
+            session.trusted_device_id = Some(trusted_device_id.clone());
+            session.completed_at = Some(now);
+        }
+        self.trusted_devices.insert(
+            trusted_device_id.clone(),
+            StoredTrustedDevice {
+                trusted_device_id: trusted_device_id.clone(),
+                namespace: request.namespace.clone(),
+                device_name: request.device_name.clone(),
+                device_platform: request.device_platform,
+                device_public_key: request.device_public_key.clone(),
+                paired_at: now,
+                last_seen_at: now,
+                revoked_at: None,
+            },
+        );
 
         self.mobile_sessions.insert(
             access_token.clone(),
-            MobileSessionRecord {
+            StoredMobileSession {
+                access_token: access_token.clone(),
                 pairing_session_id: request.pairing_session_id.clone(),
                 namespace: request.namespace.clone(),
                 trusted_device_id: trusted_device_id.clone(),
-                device_name: request.device_name.clone(),
-                device_public_key: request.device_public_key.clone(),
                 issued_at: now,
                 expires_at: mobile_expires_at,
                 revoked_at: None,
@@ -361,6 +467,17 @@ impl SessionEngine {
                 resume_anchor_expires_at: resume_expires_at,
             },
         );
+        if let Err(error) = self.persist_pairing_state() {
+            self.pairing_sessions = previous_pairing_sessions;
+            self.trusted_devices = previous_trusted_devices;
+            self.mobile_sessions = previous_mobile_sessions;
+            return Err(pairing_state_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                "pairing_state_persist_failed",
+                format!("persist pairing state failed: {error}"),
+            ));
+        }
 
         Ok(PairingExchangeSuccessResponse {
             pairing_session_id: request.pairing_session_id,
@@ -1232,6 +1349,22 @@ fn pairing_exchange_failure(
             retriable,
         },
     }
+}
+
+fn pairing_state_failure(
+    pairing_session_id: Option<String>,
+    namespace: Option<String>,
+    code: &str,
+    message: String,
+) -> PairingExchangeFailureResponse {
+    pairing_exchange_failure(
+        pairing_session_id,
+        namespace,
+        PairingExchangeFailureStatus::Rejected,
+        code,
+        &message,
+        true,
+    )
 }
 
 fn truncate_title(text: &str, attachments: &[DocumentAttachmentInput]) -> String {
@@ -2210,12 +2343,14 @@ mod tests {
     }
 
     fn seed_pairing(engine: &mut SessionEngine, expires_at: DateTime<Utc>) {
-        engine.seed_pairing_session(PairingBootstrapSeed {
-            pairing_session_id: "pairing-session-1".to_string(),
-            namespace: "workspace-alpha".to_string(),
-            bootstrap_token: "bootstrap-secret".to_string(),
-            expires_at,
-        });
+        engine
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at,
+            })
+            .expect("seed pairing session");
     }
 
     #[test]
@@ -3086,6 +3221,7 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..vcpmobile_store::StoreData::default()
         };
         fs::write(
             &path,
@@ -3951,6 +4087,7 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..vcpmobile_store::StoreData::default()
         };
         fs::write(
             &path,
@@ -4412,6 +4549,97 @@ mod tests {
         assert!(response.resume_anchor.expires_at > response.mobile_token.expires_at);
 
         fs::remove_file(engine.store().path()).ok();
+        fs::remove_file(engine.store().path().with_extension("json")).ok();
+    }
+
+    #[test]
+    fn pairing_state_survives_restart_and_restores_mobile_session_from_explicit_anchor() {
+        let path = env::temp_dir().join(format!(
+            "vcpmobile-session-pairing-restart-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = FileStore::new(&path);
+        let mut engine = SessionEngine::try_new(store.clone(), Uuid::new_v4(), Uuid::new_v4())
+            .expect("create engine");
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let response = engine
+            .exchange_pairing(PairingExchangeRequest {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+                device_public_key: "base64-public-key".to_string(),
+            })
+            .expect("pairing exchange succeeds");
+
+        let mut restarted =
+            SessionEngine::try_new(FileStore::new(&path), Uuid::new_v4(), Uuid::new_v4())
+                .expect("restart engine");
+        let trusted_device = restarted
+            .trusted_device(&response.trusted_device.trusted_device_id)
+            .expect("load trusted device")
+            .expect("trusted device exists");
+        let resumed = restarted
+            .resolve_mobile_session_by_resume_anchor(&response.resume_anchor.anchor)
+            .expect("resolve resume anchor")
+            .expect("resume anchor should restore session");
+
+        assert_eq!(trusted_device.device_name, "Pixel 9");
+        assert_eq!(
+            trusted_device.device_platform,
+            PairingDevicePlatform::Android
+        );
+        assert_eq!(trusted_device.namespace, "workspace-alpha");
+        assert_eq!(resumed.pairing_session_id, "pairing-session-1");
+        assert_eq!(resumed.namespace, "workspace-alpha");
+        assert_eq!(
+            resumed.trusted_device.trusted_device_id,
+            response.trusted_device.trusted_device_id
+        );
+        assert_eq!(resumed.resume_anchor.anchor, response.resume_anchor.anchor);
+
+        fs::remove_file(store.path()).ok();
+        fs::remove_file(store.path().with_extension("json")).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_rejects_replay_after_restart() {
+        let path = env::temp_dir().join(format!(
+            "vcpmobile-session-pairing-replay-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = FileStore::new(&path);
+        let mut engine = SessionEngine::try_new(store.clone(), Uuid::new_v4(), Uuid::new_v4())
+            .expect("create engine");
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let request = PairingExchangeRequest {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            bootstrap_token: "bootstrap-secret".to_string(),
+            device_name: "Pixel 9".to_string(),
+            device_platform: PairingDevicePlatform::Android,
+            device_public_key: "base64-public-key".to_string(),
+        };
+
+        engine
+            .exchange_pairing(request.clone())
+            .expect("first exchange succeeds");
+
+        let mut restarted =
+            SessionEngine::try_new(FileStore::new(&path), Uuid::new_v4(), Uuid::new_v4())
+                .expect("restart engine");
+        let failure = restarted
+            .exchange_pairing(request)
+            .expect_err("replayed bootstrap should stay rejected after restart");
+
+        assert_eq!(failure.status, PairingExchangeFailureStatus::Revoked);
+        assert_eq!(failure.error.code, "bootstrap_token_replayed");
+
+        fs::remove_file(store.path()).ok();
+        fs::remove_file(store.path().with_extension("json")).ok();
     }
 
     #[test]
@@ -4440,6 +4668,7 @@ mod tests {
         assert!(!failure.error.retriable);
 
         fs::remove_file(engine.store().path()).ok();
+        fs::remove_file(engine.store().path().with_extension("json")).ok();
     }
 
     #[test]
@@ -4463,5 +4692,6 @@ mod tests {
         assert!(!failure.error.retriable);
 
         fs::remove_file(engine.store().path()).ok();
+        fs::remove_file(engine.store().path().with_extension("json")).ok();
     }
 }

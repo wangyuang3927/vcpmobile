@@ -153,6 +153,8 @@ class ChatViewModelRecoveryTest {
                     generationState = "streaming",
                     resumeAnchor = HubResumeAnchor(
                         messageId = "node-persisted:variant-persisted",
+                        nodeId = "node-persisted",
+                        variantId = "variant-persisted",
                     ),
                 ),
                 HubConversationSummary(
@@ -162,6 +164,8 @@ class ChatViewModelRecoveryTest {
                     generationState = "started",
                     resumeAnchor = HubResumeAnchor(
                         messageId = "node-newer:variant-newer",
+                        nodeId = "node-newer",
+                        variantId = "variant-newer",
                     ),
                 )
             ),
@@ -177,6 +181,8 @@ class ChatViewModelRecoveryTest {
             resumeAnchor = RecoveryResumeAnchor(
                 conversationId = "conversation-persisted",
                 messageId = "node-persisted:variant-persisted",
+                nodeId = "node-persisted",
+                variantId = "variant-persisted",
             ),
         )
 
@@ -187,6 +193,46 @@ class ChatViewModelRecoveryTest {
         assertEquals("conversation-persisted", state.conversationId)
         assertEquals("conversation-persisted", recoveryStore.savedConversationId)
         assertEquals("latest recovery", state.messages.first().content)
+    }
+
+    @Test
+    fun `startup recovery matches persisted explicit node and variant anchor`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            conversations = listOf(
+                HubConversationSummary(
+                    conversationId = "conversation-explicit",
+                    title = "Explicit",
+                    updatedAt = "2026-03-11T00:00:00Z",
+                    generationState = "streaming",
+                    resumeAnchor = HubResumeAnchor(
+                        messageId = "node-explicit:variant-explicit",
+                        nodeId = "node-explicit",
+                        variantId = "variant-explicit",
+                    ),
+                )
+            ),
+            snapshotEnvelope = snapshotEnvelope(
+                conversationId = "conversation-explicit",
+                nodeId = "node-explicit",
+                role = "assistant",
+                text = "explicit recovery",
+            )
+        )
+        val recoveryStore = FakeConversationRecoveryStore(
+            currentConversationId = null,
+            resumeAnchor = RecoveryResumeAnchor(
+                conversationId = "conversation-explicit",
+                messageId = null,
+                nodeId = "node-explicit",
+                variantId = "variant-explicit",
+            ),
+        )
+
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        assertEquals("conversation-explicit", viewModel.detailState.value.conversationId)
+        assertEquals("explicit recovery", viewModel.detailState.value.messages.first().content)
     }
 
     @Test
@@ -1447,6 +1493,8 @@ class ChatViewModelRecoveryTest {
                     generationState = "streaming",
                     resumeAnchor = HubResumeAnchor(
                         messageId = "node-stream:variant-1",
+                        nodeId = "node-stream",
+                        variantId = "variant-1",
                     ),
                 )
             ),
@@ -1486,6 +1534,8 @@ class ChatViewModelRecoveryTest {
             resumeAnchor = RecoveryResumeAnchor(
                 conversationId = "conversation-stream",
                 messageId = "node-stream:variant-1",
+                nodeId = "node-stream",
+                variantId = "variant-1",
             ),
         )
 
@@ -1509,6 +1559,8 @@ class ChatViewModelRecoveryTest {
             RecoveryResumeAnchor(
                 conversationId = "conversation-stream",
                 messageId = "node-stream:variant-1",
+                nodeId = "node-stream",
+                variantId = "variant-1",
             ),
             recoveryStore.savedResumeAnchor,
         )

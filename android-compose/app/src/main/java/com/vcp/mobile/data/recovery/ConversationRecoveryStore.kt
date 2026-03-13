@@ -35,6 +35,8 @@ data class RecoverySceneAnchor(
 data class RecoveryResumeAnchor(
     val conversationId: String,
     val messageId: String?,
+    val nodeId: String? = null,
+    val variantId: String? = null,
 )
 
 class DataStoreConversationRecoveryStore(
@@ -63,6 +65,8 @@ class DataStoreConversationRecoveryStore(
         return RecoveryResumeAnchor(
             conversationId = conversationId,
             messageId = preferences[RESUME_MESSAGE_ID]?.takeIf { it.isNotBlank() },
+            nodeId = preferences[RESUME_NODE_ID]?.takeIf { it.isNotBlank() },
+            variantId = preferences[RESUME_VARIANT_ID]?.takeIf { it.isNotBlank() },
         )
     }
 
@@ -72,6 +76,12 @@ class DataStoreConversationRecoveryStore(
             anchor.messageId?.takeIf { it.isNotBlank() }?.let {
                 preferences[RESUME_MESSAGE_ID] = it
             } ?: preferences.remove(RESUME_MESSAGE_ID)
+            anchor.nodeId?.takeIf { it.isNotBlank() }?.let {
+                preferences[RESUME_NODE_ID] = it
+            } ?: preferences.remove(RESUME_NODE_ID)
+            anchor.variantId?.takeIf { it.isNotBlank() }?.let {
+                preferences[RESUME_VARIANT_ID] = it
+            } ?: preferences.remove(RESUME_VARIANT_ID)
         }
     }
 
@@ -79,6 +89,8 @@ class DataStoreConversationRecoveryStore(
         dataStore.edit { preferences ->
             preferences.remove(RESUME_CONVERSATION_ID)
             preferences.remove(RESUME_MESSAGE_ID)
+            preferences.remove(RESUME_NODE_ID)
+            preferences.remove(RESUME_VARIANT_ID)
         }
     }
 
@@ -119,6 +131,8 @@ class DataStoreConversationRecoveryStore(
         val LAST_CONVERSATION_ID = stringPreferencesKey("last_conversation_id")
         val RESUME_CONVERSATION_ID = stringPreferencesKey("resume_conversation_id")
         val RESUME_MESSAGE_ID = stringPreferencesKey("resume_message_id")
+        val RESUME_NODE_ID = stringPreferencesKey("resume_node_id")
+        val RESUME_VARIANT_ID = stringPreferencesKey("resume_variant_id")
         val SCENE_CONVERSATION_ID = stringPreferencesKey("scene_conversation_id")
         val SCENE_LAST_MESSAGE_ID = stringPreferencesKey("scene_last_message_id")
         val SCENE_STICK_TO_BOTTOM = stringPreferencesKey("scene_stick_to_bottom")

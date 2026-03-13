@@ -305,10 +305,15 @@ class ChatViewModel @Inject constructor(
     private fun syncResumeAnchor() {
         val state = _detailState.value
         val conversationId = state.conversationId
+        val activeMessage = state.generation.activeMessageKey?.let { messageKey ->
+            state.messages.firstOrNull { it.id == messageKey }
+        }
         val resumeAnchor = if (conversationId != null && state.generation.canResume) {
             RecoveryResumeAnchor(
                 conversationId = conversationId,
                 messageId = state.generation.activeMessageKey,
+                nodeId = activeMessage?.nodeId ?: state.generation.activeMessageKey.extractResumeNodeId(),
+                variantId = activeMessage?.variantId ?: state.generation.activeMessageKey.extractResumeVariantId(),
             )
         } else {
             null
@@ -332,7 +337,7 @@ class ChatViewModel @Inject constructor(
     ) = persistedAnchor?.let { anchor ->
         candidates.firstOrNull { candidate ->
             candidate.conversationId == anchor.conversationId &&
-                candidate.resumeAnchor?.messageId == anchor.messageId
+                candidate.resumeAnchor.matchesPersisted(anchor)
         } ?: candidates.firstOrNull { candidate ->
             candidate.conversationId == anchor.conversationId
         }
@@ -765,6 +770,29 @@ private fun com.vcp.mobile.data.network.HubConversationSummary.isResumeCandidate
     return isRecoverable &&
         generationState.isActiveGenerationState() &&
         resumeAnchor != null
+}
+
+private fun com.vcp.mobile.data.network.HubResumeAnchor?.matchesPersisted(
+    persistedAnchor: RecoveryResumeAnchor,
+): Boolean {
+    val candidate = this ?: return false
+    val hasExplicitAnchor = !persistedAnchor.nodeId.isNullOrBlank() &&
+        !persistedAnchor.variantId.isNullOrBlank()
+
+    return if (hasExplicitAnchor) {
+        candidate.nodeId == persistedAnchor.nodeId &&
+            candidate.variantId == persistedAnchor.variantId
+    } else {
+        candidate.messageId == persistedAnchor.messageId
+    }
+}
+
+private fun String?.extractResumeNodeId(): String? {
+    return this?.substringBefore(":", missingDelimiterValue = "")?.takeIf { it.isNotBlank() }
+}
+
+private fun String?.extractResumeVariantId(): String? {
+    return this?.substringAfter(":", missingDelimiterValue = "")?.takeIf { it.isNotBlank() }
 }
 
 private fun List<RustMessagePart>.toUiMessageParts(): List<UiMessagePart> = map { part ->
