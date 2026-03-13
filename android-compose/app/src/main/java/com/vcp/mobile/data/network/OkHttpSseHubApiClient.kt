@@ -38,6 +38,7 @@ class OkHttpSseHubApiClient(
         const val HUB_CATALOG_PATH = "/api/chat/catalog"
         const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
         const val HUB_AGENTS_PATH = "/api/agents"
+        const val HUB_PROVIDER_CATALOG_PATH = "/api/providers/catalog"
         const val HUB_PROMPT_PREVIEW_PATH = "/api/agents/prompt-preview"
         const val HUB_PAIRING_EXCHANGE_PATH = "/api/pairing/exchange"
         const val CONTENT_TYPE_JSON = "application/json"
@@ -184,6 +185,31 @@ class OkHttpSseHubApiClient(
         return runCatching { requestConversationList(HUB_CATALOG_PATH) }
             .recoverCatching { requestConversationList(HUB_CONVERSATIONS_PATH) }
             .getOrThrow()
+    }
+
+    override suspend fun listProviderCatalog(): List<HubProviderCatalogEntry> {
+        val httpRequest = Request.Builder()
+            .url("$baseUrl$HUB_PROVIDER_CATALOG_PATH")
+            .get()
+            .apply {
+                addHeader("Accept", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            if (!response.isSuccessful) {
+                val errorBody = response.body?.string().orEmpty()
+                throw IllegalStateException(
+                    "Hub provider catalog failed: ${response.code} ${response.message} $errorBody"
+                )
+            }
+
+            val bodyText = response.body?.string().orEmpty()
+            return parseProviderCatalog(bodyText)
+        }
     }
 
     private fun requestConversationList(path: String): List<HubConversationSummary> {
@@ -521,6 +547,44 @@ class OkHttpSseHubApiClient(
         }
     }
 
+    internal fun parseProviderCatalog(raw: String): List<HubProviderCatalogEntry> {
+        return runCatching {
+            val array = JSONArray(raw)
+            buildList {
+                for (index in 0 until array.length()) {
+                    val item = array.optJSONObject(index) ?: continue
+                    val models = item.optJSONArray("models")
+                    add(
+                        HubProviderCatalogEntry(
+                            providerLocalId = item.optString("provider_local_id"),
+                            displayName = item.optString("display_name"),
+                            avatarUri = item.optString("avatar_uri").takeIf { it.isNotBlank() },
+                            adapterKind = item.optString("adapter_kind"),
+                            defaultModelId = item.optString("default_model_id")
+                                .takeIf { it.isNotBlank() },
+                            models = buildList {
+                                for (modelIndex in 0 until (models?.length() ?: 0)) {
+                                    val model = models?.optJSONObject(modelIndex) ?: continue
+                                    add(
+                                        HubProviderCatalogModel(
+                                            modelId = model.optString("model_id"),
+                                            displayName = model.optString("display_name")
+                                                .takeIf { it.isNotBlank() },
+                                            enabled = model.optBoolean("enabled", true),
+                                            isDefault = model.optBoolean("is_default", false),
+                                        )
+                                    )
+                                }
+                            }
+                        )
+                    )
+                }
+            }
+        }.getOrElse {
+            throw IllegalStateException("Hub provider catalog payload malformed", it)
+        }
+    }
+
     internal fun parsePairingExchangeSuccess(raw: String): HubPairingExchangeSuccessResponse {
         return runCatching {
             val body = JSONObject(raw)
@@ -743,10 +807,15 @@ class OkHttpSseHubApiClient(
         }
 
         return JSONObject()
-            .put("model", model)
             .put("stream", stream)
             .put("messages", messagesJson)
             .apply {
+                providerLocalId?.takeIf { it.isNotBlank() }?.let {
+                    put("provider_local_id", it)
+                }
+                modelId?.takeIf { it.isNotBlank() }?.let {
+                    put("model_id", it)
+                }
                 conversationId?.takeIf { it.isNotBlank() }?.let { put("conversation_id", it) }
             }
             .toString()

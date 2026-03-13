@@ -3,6 +3,7 @@ package com.vcp.mobile.ui.chat
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.vcp.mobile.data.network.HubMessage
+import com.vcp.mobile.data.network.HubProviderCatalogEntry
 import com.vcp.mobile.data.network.HubRegenerateRequest
 import com.vcp.mobile.data.network.HubSendMessageRequest
 import com.vcp.mobile.data.network.HubSelectVariantRequest
@@ -42,7 +43,11 @@ class ChatViewModel @Inject constructor(
     private val _draftState = MutableStateFlow(ChatDraftState())
     val draftState: StateFlow<ChatDraftState> = _draftState.asStateFlow()
 
+    private val _providerCatalogState = MutableStateFlow(ChatProviderCatalogState())
+    val providerCatalogState: StateFlow<ChatProviderCatalogState> = _providerCatalogState.asStateFlow()
+
     init {
+        refreshProviderCatalog()
         refreshRecoveryCatalog()
         recoverConversationIfPossible()
     }
@@ -62,8 +67,10 @@ class ChatViewModel @Inject constructor(
         _draftState.value = ChatDraftState()
 
         viewModelScope.launch {
+            val selection = _providerCatalogState.value.selection
             val request = HubSendMessageRequest(
-                model = "vcp-mobile",
+                providerLocalId = selection?.providerLocalId,
+                modelId = selection?.modelId,
                 messages = _detailState.value.messages.map { message ->
                     HubMessage(
                         role = message.sender.toRole(),
@@ -95,6 +102,35 @@ class ChatViewModel @Inject constructor(
                     )
                 )
             }
+        }
+    }
+
+    fun refreshProviderCatalog() {
+        viewModelScope.launch {
+            _providerCatalogState.update { state ->
+                state.copy(
+                    isLoading = true,
+                    errorMessage = null,
+                )
+            }
+
+            runCatching { repository.listProviderCatalog() }
+                .onSuccess { providers ->
+                    val mappedProviders = providers.map { provider -> provider.toChatProviderOption() }
+                    _providerCatalogState.value = ChatProviderCatalogState(
+                        providers = mappedProviders,
+                        selection = mappedProviders.resolvePreferredProviderSelection(),
+                        isLoading = false,
+                    )
+                }
+                .onFailure { error ->
+                    _providerCatalogState.update { state ->
+                        state.copy(
+                            isLoading = false,
+                            errorMessage = "Provider 目录加载失败：${error.message ?: "未知异常"}",
+                        )
+                    }
+                }
         }
     }
 
@@ -465,6 +501,60 @@ class ChatViewModel @Inject constructor(
             dispatchDetail(ChatDetailAction.MessageRemoved(pendingId))
         }
         pendingOptimisticUserMessageId = null
+    }
+
+    private fun HubProviderCatalogEntry.toChatProviderOption(): ChatProviderOption {
+        return ChatProviderOption(
+            providerLocalId = providerLocalId,
+            displayName = displayName,
+            avatarUri = avatarUri,
+            adapterKind = adapterKind,
+            defaultModelId = defaultModelId,
+            models = models.map { model ->
+                ChatProviderModelOption(
+                    modelId = model.modelId,
+                    displayName = model.displayName,
+                    enabled = model.enabled,
+                    isDefault = model.isDefault,
+                )
+            }
+        )
+    }
+
+    private fun List<ChatProviderOption>.resolvePreferredProviderSelection(): ChatProviderSelection? {
+        val providerWithModel = firstNotNullOfOrNull { provider ->
+            provider.resolvePreferredModelId()
+                ?.let { modelId ->
+                    ChatProviderSelection(
+                        providerLocalId = provider.providerLocalId,
+                        modelId = modelId,
+                    )
+                }
+        }
+        if (providerWithModel != null) {
+            return providerWithModel
+        }
+
+        val fallbackProvider = firstOrNull() ?: return null
+        val fallbackModelId = fallbackProvider.models.firstOrNull()?.modelId ?: return null
+        return ChatProviderSelection(
+            providerLocalId = fallbackProvider.providerLocalId,
+            modelId = fallbackModelId,
+        )
+    }
+
+    private fun ChatProviderOption.resolvePreferredModelId(): String? {
+        val defaultModelId = defaultModelId
+            ?.takeIf { it.isNotBlank() }
+            ?.takeIf { defaultId ->
+                models.any { model -> model.modelId == defaultId }
+            }
+        if (defaultModelId != null) {
+            return defaultModelId
+        }
+
+        return models.firstOrNull { it.enabled && it.modelId.isNotBlank() }?.modelId
+            ?: models.firstOrNull { it.modelId.isNotBlank() }?.modelId
     }
 
     private suspend fun collectHubStream(

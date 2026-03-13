@@ -1,6 +1,8 @@
 package com.vcp.mobile.ui.chat
 
 import com.vcp.mobile.data.network.HubConversationSummary
+import com.vcp.mobile.data.network.HubProviderCatalogEntry
+import com.vcp.mobile.data.network.HubProviderCatalogModel
 import com.vcp.mobile.data.network.HubRegenerateRequest
 import com.vcp.mobile.data.network.HubRelayErrorException
 import com.vcp.mobile.data.network.HubResumeAnchor
@@ -456,6 +458,88 @@ class ChatViewModelRecoveryTest {
             assistant.parts
         )
         assertEquals(listOf("reasoning", "markdown_block"), assistant.partTypes)
+    }
+
+    @Test
+    fun `provider catalog state is populated from rust bridge catalog`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            providerCatalog = listOf(
+                HubProviderCatalogEntry(
+                    providerLocalId = "provider-openai",
+                    displayName = "OpenAI",
+                    adapterKind = "openai_compatible",
+                    defaultModelId = "gpt-4.1-mini",
+                    models = listOf(
+                        HubProviderCatalogModel(
+                            modelId = "gpt-4.1-mini",
+                            displayName = "GPT-4.1 mini",
+                            enabled = true,
+                            isDefault = true,
+                        )
+                    )
+                )
+            )
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val state = viewModel.providerCatalogState.value
+        assertEquals(1, state.providers.size)
+        assertEquals("provider-openai", state.providers.single().providerLocalId)
+        assertEquals("gpt-4.1-mini", state.selection?.modelId)
+        assertNull(state.errorMessage)
+    }
+
+    @Test
+    fun `send message uses rust catalog selection instead of hardcoded model fallback`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(
+            providerCatalog = listOf(
+                HubProviderCatalogEntry(
+                    providerLocalId = "provider-openai",
+                    displayName = "OpenAI",
+                    adapterKind = "openai_compatible",
+                    defaultModelId = "gpt-4.1-mini",
+                    models = listOf(
+                        HubProviderCatalogModel(
+                            modelId = "gpt-4.1-mini",
+                            displayName = "GPT-4.1 mini",
+                            enabled = true,
+                            isDefault = true,
+                        )
+                    )
+                )
+            ),
+            streamEvents = emptyFlow(),
+        )
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.onInputChanged("hello provider catalog")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val request = repository.observeStreamRequests.single()
+        assertEquals("provider-openai", request.providerLocalId)
+        assertEquals("gpt-4.1-mini", request.modelId)
+    }
+
+    @Test
+    fun `send message leaves model unset when rust catalog is empty`() = runTest(dispatcher) {
+        val repository = FakeHubChatRepository(streamEvents = emptyFlow())
+        val recoveryStore = FakeConversationRecoveryStore(null)
+        val viewModel = ChatViewModel(repository, recoveryStore)
+        dispatcher.scheduler.advanceUntilIdle()
+
+        viewModel.onInputChanged("hello without provider catalog")
+        viewModel.sendMessage()
+        dispatcher.scheduler.advanceUntilIdle()
+
+        val request = repository.observeStreamRequests.single()
+        assertNull(request.providerLocalId)
+        assertNull(request.modelId)
     }
 
     @Test
@@ -1604,6 +1688,7 @@ class ChatViewModelRecoveryTest {
 
 private class FakeHubChatRepository(
     private val conversations: List<HubConversationSummary> = emptyList(),
+    private val providerCatalog: List<HubProviderCatalogEntry> = emptyList(),
     private val snapshotEnvelope: RustChatEventEnvelope? = null,
     private val failSnapshot: Boolean = false,
     private val streamEvents: Flow<HubStreamEvent> = emptyFlow(),
@@ -1636,6 +1721,8 @@ private class FakeHubChatRepository(
     }
 
     override suspend fun listConversations(): List<HubConversationSummary> = conversations
+
+    override suspend fun listProviderCatalog(): List<HubProviderCatalogEntry> = providerCatalog
 
     override suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope? {
         if (failSnapshot) error("snapshot failure")

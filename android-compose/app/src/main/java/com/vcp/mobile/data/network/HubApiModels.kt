@@ -37,7 +37,8 @@ data class HubMessage(
  * Hub 消息请求体（骨架字段，可按后端契约继续扩展）。
  */
 data class HubSendMessageRequest(
-    val model: String,
+    val providerLocalId: String? = null,
+    val modelId: String? = null,
     val messages: List<HubMessage>,
     val conversationId: String? = null,
     val sessionId: String? = null,
@@ -82,6 +83,22 @@ data class HubResumeAnchor(
     val messageId: String,
     val nodeId: String? = null,
     val variantId: String? = null,
+)
+
+data class HubProviderCatalogModel(
+    val modelId: String,
+    val displayName: String? = null,
+    val enabled: Boolean = true,
+    val isDefault: Boolean = false,
+)
+
+data class HubProviderCatalogEntry(
+    val providerLocalId: String,
+    val displayName: String,
+    val avatarUri: String? = null,
+    val adapterKind: String,
+    val defaultModelId: String? = null,
+    val models: List<HubProviderCatalogModel> = emptyList(),
 )
 
 data class HubPromptPreviewPlaceholder(

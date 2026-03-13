@@ -18,6 +18,8 @@ interface HubApiClient {
 
     suspend fun listConversations(): List<HubConversationSummary>
 
+    suspend fun listProviderCatalog(): List<HubProviderCatalogEntry>
+
     suspend fun fetchConversationSnapshot(conversationId: String): RustChatEventEnvelope?
 
     suspend fun listAgents(): List<HubAgentConfig>
