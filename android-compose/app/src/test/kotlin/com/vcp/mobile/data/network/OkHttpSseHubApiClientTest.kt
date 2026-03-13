@@ -172,6 +172,110 @@ class OkHttpSseHubApiClientTest {
     }
 
     @Test
+    fun `parsePairingExchangeSuccess returns stable token and resume anchor shape`() {
+        val response = client.parsePairingExchangeSuccess(
+            """
+            {
+              "pairing_session_id": "pairing-session-1",
+              "namespace": "workspace-alpha",
+              "status": "paired",
+              "mobile_token": {
+                "access_token": "mobile-token",
+                "token_type": "bearer",
+                "expires_at": "2026-03-13T12:00:00Z"
+              },
+              "trusted_device": {
+                "trusted_device_id": "trusted-device-1",
+                "device_name": "Pixel 9",
+                "device_platform": "android"
+              },
+              "resume_anchor": {
+                "anchor": "resume-anchor-1",
+                "expires_at": "2026-03-20T12:00:00Z"
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("pairing-session-1", response.pairingSessionId)
+        assertEquals("workspace-alpha", response.namespace)
+        assertEquals("paired", response.status)
+        assertEquals("mobile-token", response.mobileToken.accessToken)
+        assertEquals("trusted-device-1", response.trustedDevice.trustedDeviceId)
+        assertEquals("resume-anchor-1", response.resumeAnchor.anchor)
+    }
+
+    @Test
+    fun `parsePairingExchangeFailure returns explicit pairing failure shape`() {
+        val response = client.parsePairingExchangeFailure(
+            """
+            {
+              "pairing_session_id": "pairing-session-1",
+              "namespace": "workspace-alpha",
+              "status": "rejected",
+              "error": {
+                "code": "bootstrap_token_expired",
+                "message": "bootstrap token expired",
+                "retriable": false
+              }
+            }
+            """.trimIndent()
+        )
+
+        assertEquals("pairing-session-1", response.pairingSessionId)
+        assertEquals("workspace-alpha", response.namespace)
+        assertEquals("rejected", response.status)
+        assertEquals("bootstrap_token_expired", response.error.code)
+        assertEquals(false, response.error.retriable)
+    }
+
+    @Test
+    fun `exchangePairing returns failure result for explicit API failure payload`() = runBlocking {
+        val pairingClient = OkHttpSseHubApiClient(
+            okHttpClient = OkHttpClient.Builder()
+                .addInterceptor { chain ->
+                    okhttp3.Response.Builder()
+                        .request(chain.request())
+                        .protocol(Protocol.HTTP_1_1)
+                        .code(501)
+                        .message("Not Implemented")
+                        .body(
+                            """
+                            {
+                              "pairing_session_id": "pairing-session-1",
+                              "namespace": "workspace-alpha",
+                              "status": "rejected",
+                              "error": {
+                                "code": "pairing_exchange_not_ready",
+                                "message": "pairing exchange contract is frozen, but token issuance is implemented in TES-43",
+                                "retriable": true
+                              }
+                            }
+                            """.trimIndent().toResponseBody("application/json".toMediaType())
+                        )
+                        .build()
+                }
+                .build(),
+            baseUrl = "http://localhost:4001"
+        )
+
+        val result = pairingClient.exchangePairing(
+            HubPairingExchangeRequest(
+                pairingSessionId = "pairing-session-1",
+                namespace = "workspace-alpha",
+                bootstrapToken = "bootstrap-secret",
+                deviceName = "Pixel 9",
+                devicePublicKey = "base64-public-key",
+            )
+        )
+
+        assertTrue(result is HubPairingExchangeResult.Failure)
+        val failure = (result as HubPairingExchangeResult.Failure).response
+        assertEquals("pairing_exchange_not_ready", failure.error.code)
+        assertEquals(true, failure.error.retriable)
+    }
+
+    @Test
     fun `fetchConversationSnapshot throws on malformed payload`() = runBlocking {
         val malformedClient = OkHttpSseHubApiClient(
             okHttpClient = OkHttpClient.Builder()

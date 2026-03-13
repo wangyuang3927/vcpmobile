@@ -4,6 +4,7 @@ import com.vcp.mobile.ui.chat.MessageSender
 
 const val HUB_ROLE_USER = "user"
 const val HUB_ROLE_ASSISTANT = "assistant"
+const val HUB_PAIRING_PLATFORM_ANDROID = "android"
 
 /**
  * MessageSender -> Hub role 映射。
@@ -103,6 +104,64 @@ data class HubResolvedPromptPreview(
     val unresolvedTokens: List<String> = emptyList(),
     val partialTokens: List<String> = emptyList(),
 )
+
+data class HubPairingExchangeRequest(
+    val pairingSessionId: String,
+    val namespace: String,
+    val bootstrapToken: String,
+    val deviceName: String,
+    val devicePlatform: String = HUB_PAIRING_PLATFORM_ANDROID,
+    val devicePublicKey: String,
+)
+
+data class HubPairingMobileToken(
+    val accessToken: String,
+    val tokenType: String,
+    val expiresAt: String,
+)
+
+data class HubPairingTrustedDevice(
+    val trustedDeviceId: String,
+    val deviceName: String,
+    val devicePlatform: String,
+)
+
+data class HubPairingResumeAnchor(
+    val anchor: String,
+    val expiresAt: String,
+)
+
+data class HubPairingExchangeSuccessResponse(
+    val pairingSessionId: String,
+    val namespace: String,
+    val status: String,
+    val mobileToken: HubPairingMobileToken,
+    val trustedDevice: HubPairingTrustedDevice,
+    val resumeAnchor: HubPairingResumeAnchor,
+)
+
+data class HubPairingExchangeError(
+    val code: String,
+    val message: String,
+    val retriable: Boolean,
+)
+
+data class HubPairingExchangeFailureResponse(
+    val pairingSessionId: String? = null,
+    val namespace: String? = null,
+    val status: String,
+    val error: HubPairingExchangeError,
+)
+
+sealed interface HubPairingExchangeResult {
+    data class Success(
+        val response: HubPairingExchangeSuccessResponse
+    ) : HubPairingExchangeResult
+
+    data class Failure(
+        val response: HubPairingExchangeFailureResponse
+    ) : HubPairingExchangeResult
+}
 
 /**
  * SSE 流式事件模型。

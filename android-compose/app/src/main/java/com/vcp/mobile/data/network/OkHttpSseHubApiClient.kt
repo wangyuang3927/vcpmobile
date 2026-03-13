@@ -38,6 +38,7 @@ class OkHttpSseHubApiClient(
         const val HUB_CATALOG_PATH = "/api/chat/catalog"
         const val HUB_CHAT_STREAM_PATH = "/api/chat/stream"
         const val HUB_PROMPT_PREVIEW_PATH = "/api/agents/prompt-preview"
+        const val HUB_PAIRING_EXCHANGE_PATH = "/api/pairing/exchange"
         const val CONTENT_TYPE_JSON = "application/json"
         const val ACCEPT_SSE = "text/event-stream"
 
@@ -274,6 +275,36 @@ class OkHttpSseHubApiClient(
         }
     }
 
+    override suspend fun exchangePairing(request: HubPairingExchangeRequest): HubPairingExchangeResult {
+        val httpRequest = Request.Builder()
+            .url("$baseUrl$HUB_PAIRING_EXCHANGE_PATH")
+            .post(request.toUpstreamJsonBody().toRequestBody(CONTENT_TYPE_JSON.toMediaType()))
+            .apply {
+                addHeader("Accept", CONTENT_TYPE_JSON)
+                addHeader("Content-Type", CONTENT_TYPE_JSON)
+                bearerTokenProvider().takeIf { it.isNotBlank() }?.let {
+                    addHeader("Authorization", "Bearer $it")
+                }
+            }
+            .build()
+
+        okHttpClient.newCall(httpRequest).execute().use { response ->
+            val raw = response.body?.string().orEmpty()
+            return if (response.isSuccessful) {
+                HubPairingExchangeResult.Success(parsePairingExchangeSuccess(raw))
+            } else {
+                runCatching { parsePairingExchangeFailure(raw) }
+                    .map { HubPairingExchangeResult.Failure(it) }
+                    .getOrElse {
+                        throw IllegalStateException(
+                            "Hub pairing exchange failed: ${response.code} ${response.message} $raw",
+                            it
+                        )
+                    }
+            }
+        }
+    }
+
     internal fun parseSnapshotEnvelope(raw: String): RustChatEventEnvelope? {
         val payload = raw.lineSequence()
             .filter { it.startsWith("data: ") }
@@ -314,6 +345,59 @@ class OkHttpSseHubApiClient(
             )
         }.getOrElse {
             throw IllegalStateException("Hub prompt preview payload malformed", it)
+        }
+    }
+
+    internal fun parsePairingExchangeSuccess(raw: String): HubPairingExchangeSuccessResponse {
+        return runCatching {
+            val body = JSONObject(raw)
+            val mobileToken = body.optJSONObject("mobile_token")
+                ?: error("missing mobile_token object")
+            val trustedDevice = body.optJSONObject("trusted_device")
+                ?: error("missing trusted_device object")
+            val resumeAnchor = body.optJSONObject("resume_anchor")
+                ?: error("missing resume_anchor object")
+            HubPairingExchangeSuccessResponse(
+                pairingSessionId = body.optString("pairing_session_id"),
+                namespace = body.optString("namespace"),
+                status = body.optString("status"),
+                mobileToken = HubPairingMobileToken(
+                    accessToken = mobileToken.optString("access_token"),
+                    tokenType = mobileToken.optString("token_type"),
+                    expiresAt = mobileToken.optString("expires_at"),
+                ),
+                trustedDevice = HubPairingTrustedDevice(
+                    trustedDeviceId = trustedDevice.optString("trusted_device_id"),
+                    deviceName = trustedDevice.optString("device_name"),
+                    devicePlatform = trustedDevice.optString("device_platform"),
+                ),
+                resumeAnchor = HubPairingResumeAnchor(
+                    anchor = resumeAnchor.optString("anchor"),
+                    expiresAt = resumeAnchor.optString("expires_at"),
+                ),
+            )
+        }.getOrElse {
+            throw IllegalStateException("Hub pairing exchange success payload malformed", it)
+        }
+    }
+
+    internal fun parsePairingExchangeFailure(raw: String): HubPairingExchangeFailureResponse {
+        return runCatching {
+            val body = JSONObject(raw)
+            val errorBody = body.optJSONObject("error")
+                ?: error("missing error object")
+            HubPairingExchangeFailureResponse(
+                pairingSessionId = body.optString("pairing_session_id").takeIf { it.isNotBlank() },
+                namespace = body.optString("namespace").takeIf { it.isNotBlank() },
+                status = body.optString("status"),
+                error = HubPairingExchangeError(
+                    code = errorBody.optString("code"),
+                    message = errorBody.optString("message"),
+                    retriable = errorBody.optBoolean("retriable", false),
+                ),
+            )
+        }.getOrElse {
+            throw IllegalStateException("Hub pairing exchange failure payload malformed", it)
         }
     }
 
@@ -430,6 +514,17 @@ class OkHttpSseHubApiClient(
         return JSONObject()
             .put("raw_prompt", rawPrompt)
             .put("placeholders", placeholdersJson)
+            .toString()
+    }
+
+    private fun HubPairingExchangeRequest.toUpstreamJsonBody(): String {
+        return JSONObject()
+            .put("pairing_session_id", pairingSessionId)
+            .put("namespace", namespace)
+            .put("bootstrap_token", bootstrapToken)
+            .put("device_name", deviceName)
+            .put("device_platform", devicePlatform)
+            .put("device_public_key", devicePublicKey)
             .toString()
     }
 }

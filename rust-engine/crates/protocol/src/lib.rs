@@ -437,6 +437,82 @@ pub struct ResolvePromptPreviewResponse {
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum PairingDevicePlatform {
+    Android,
+    Ios,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingExchangeRequest {
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub bootstrap_token: String,
+    pub device_name: String,
+    pub device_platform: PairingDevicePlatform,
+    pub device_public_key: String,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingExchangeSuccessStatus {
+    Paired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingMobileToken {
+    pub access_token: String,
+    pub token_type: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingTrustedDevice {
+    pub trusted_device_id: String,
+    pub device_name: String,
+    pub device_platform: PairingDevicePlatform,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingResumeAnchor {
+    pub anchor: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingExchangeSuccessResponse {
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub status: PairingExchangeSuccessStatus,
+    pub mobile_token: PairingMobileToken,
+    pub trusted_device: PairingTrustedDevice,
+    pub resume_anchor: PairingResumeAnchor,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PairingExchangeFailureStatus {
+    Rejected,
+    Expired,
+    Revoked,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingExchangeError {
+    pub code: String,
+    pub message: String,
+    pub retriable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PairingExchangeFailureResponse {
+    pub pairing_session_id: Option<String>,
+    pub namespace: Option<String>,
+    pub status: PairingExchangeFailureStatus,
+    pub error: PairingExchangeError,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum AgentEditorGroupKey {
     Identity,
     Prompt,
@@ -700,7 +776,10 @@ mod tests {
     use super::{
         AgentEditorFieldKey, AgentEditorFieldMutability, AgentEditorFieldPersistence,
         AgentEditorGroupKey, AgentEditorSchema, ChatEvent, EventEnvelope, EventError,
-        EventErrorKind, EventSchema, NamedEvent, PromptPreviewRecord, ResolvedPromptPreview,
+        EventErrorKind, EventSchema, NamedEvent, PairingDevicePlatform, PairingExchangeError,
+        PairingExchangeFailureResponse, PairingExchangeFailureStatus, PairingExchangeRequest,
+        PairingExchangeSuccessResponse, PairingExchangeSuccessStatus, PairingMobileToken,
+        PairingResumeAnchor, PairingTrustedDevice, PromptPreviewRecord, ResolvedPromptPreview,
         SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
         UpsertBranch,
     };
@@ -866,6 +945,77 @@ mod tests {
         assert_eq!(serialized["records"][1]["status"], "deferred");
         assert_eq!(serialized["unresolved_tokens"][0], "{{missing_value}}");
         assert_eq!(serialized["partial_tokens"][0], "{{half");
+    }
+
+    #[test]
+    fn pairing_exchange_contract_freezes_request_and_response_shapes() {
+        let now = Utc::now();
+        let request = PairingExchangeRequest {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            bootstrap_token: "bootstrap-secret".to_string(),
+            device_name: "Pixel 9".to_string(),
+            device_platform: PairingDevicePlatform::Android,
+            device_public_key: "base64-public-key".to_string(),
+        };
+        let success = PairingExchangeSuccessResponse {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            status: PairingExchangeSuccessStatus::Paired,
+            mobile_token: PairingMobileToken {
+                access_token: "mobile-token".to_string(),
+                token_type: "bearer".to_string(),
+                expires_at: now,
+            },
+            trusted_device: PairingTrustedDevice {
+                trusted_device_id: "trusted-device-1".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+            },
+            resume_anchor: PairingResumeAnchor {
+                anchor: "resume-anchor-1".to_string(),
+                expires_at: now,
+            },
+        };
+        let failure = PairingExchangeFailureResponse {
+            pairing_session_id: Some("pairing-session-1".to_string()),
+            namespace: Some("workspace-alpha".to_string()),
+            status: PairingExchangeFailureStatus::Rejected,
+            error: PairingExchangeError {
+                code: "bootstrap_token_expired".to_string(),
+                message: "bootstrap token expired".to_string(),
+                retriable: false,
+            },
+        };
+
+        let serialized_request = serde_json::to_value(&request).expect("serialize request");
+        assert_eq!(
+            serialized_request["pairing_session_id"],
+            "pairing-session-1"
+        );
+        assert_eq!(serialized_request["namespace"], "workspace-alpha");
+        assert_eq!(serialized_request["device_platform"], "android");
+        assert_eq!(serialized_request["device_public_key"], "base64-public-key");
+
+        let serialized_success = serde_json::to_value(&success).expect("serialize success");
+        assert_eq!(serialized_success["status"], "paired");
+        assert_eq!(serialized_success["mobile_token"]["token_type"], "bearer");
+        assert_eq!(
+            serialized_success["trusted_device"]["trusted_device_id"],
+            "trusted-device-1"
+        );
+        assert_eq!(
+            serialized_success["resume_anchor"]["anchor"],
+            "resume-anchor-1"
+        );
+
+        let serialized_failure = serde_json::to_value(&failure).expect("serialize failure");
+        assert_eq!(serialized_failure["status"], "rejected");
+        assert_eq!(
+            serialized_failure["error"]["code"],
+            "bootstrap_token_expired"
+        );
+        assert_eq!(serialized_failure["error"]["retriable"], false);
     }
 
     #[test]

@@ -20,10 +20,11 @@ use vcpmobile_domain::{
     ConversationId, DocumentAttachmentInput, GenerationState, ProviderAuthConfig, ProviderConfig,
 };
 use vcpmobile_protocol::{
-    ChatEvent, EditMessageRequest, EventEnvelope, EventError, EventErrorKind,
-    RegenerateNodeRequest, ResolvePromptPreviewRequest, ResolvePromptPreviewResponse,
-    ResolvedPromptPreview, SelectVariantRequest, SnapshotBranch, SnapshotConversation,
-    TransformDocumentPromptRequest, TransformDocumentPromptResponse,
+    ChatEvent, EditMessageRequest, EventEnvelope, EventError, EventErrorKind, PairingExchangeError,
+    PairingExchangeFailureResponse, PairingExchangeFailureStatus, PairingExchangeRequest,
+    PairingExchangeSuccessResponse, RegenerateNodeRequest, ResolvePromptPreviewRequest,
+    ResolvePromptPreviewResponse, ResolvedPromptPreview, SelectVariantRequest, SnapshotBranch,
+    SnapshotConversation, TransformDocumentPromptRequest, TransformDocumentPromptResponse,
 };
 use vcpmobile_session::{
     SessionEditRequest, SessionEngine, SessionRegenerateRequest, SessionSelectVariantRequest,
@@ -252,6 +253,7 @@ fn app(state: AppState) -> Router {
         .route("/api/chat/regenerate", post(chat_regenerate))
         .route("/api/chat/select-variant", post(chat_select_variant))
         .route("/api/chat/document-prompt", post(chat_document_prompt))
+        .route("/api/pairing/exchange", post(pairing_exchange))
         .route("/api/agents/prompt-preview", post(agent_prompt_preview))
         .route("/api/chat/stream/{conversation_id}", get(chat_stream))
         .route("/api/providers", get(provider_list).post(provider_create))
@@ -448,6 +450,30 @@ async fn agent_prompt_preview(
     }))
 }
 
+async fn pairing_exchange(
+    Json(body): Json<PairingExchangeRequest>,
+) -> Result<Json<PairingExchangeSuccessResponse>, (StatusCode, Json<PairingExchangeFailureResponse>)>
+{
+    validate_pairing_exchange_request(&body)
+        .map_err(|failure| (StatusCode::BAD_REQUEST, Json(failure)))?;
+
+    Err((
+        StatusCode::NOT_IMPLEMENTED,
+        Json(PairingExchangeFailureResponse {
+            pairing_session_id: Some(body.pairing_session_id),
+            namespace: Some(body.namespace),
+            status: PairingExchangeFailureStatus::Rejected,
+            error: PairingExchangeError {
+                code: "pairing_exchange_not_ready".to_string(),
+                message:
+                    "pairing exchange contract is frozen, but token issuance is implemented in TES-43"
+                        .to_string(),
+                retriable: true,
+            },
+        }),
+    ))
+}
+
 async fn chat_edit(
     State(state): State<AppState>,
     Json(body): Json<EditMessageRequest>,
@@ -560,9 +586,7 @@ async fn chat_stream(
     Ok(build_event_stream(events))
 }
 
-fn parse_conversation_id(
-    conversation_id: &str,
-) -> Result<ConversationId, (StatusCode, String)> {
+fn parse_conversation_id(conversation_id: &str) -> Result<ConversationId, (StatusCode, String)> {
     Uuid::parse_str(conversation_id)
         .map(ConversationId::from)
         .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))
@@ -782,6 +806,70 @@ fn validate_provider_config(provider: &ProviderConfig) -> Result<(), ApiError> {
     }
 
     Ok(())
+}
+
+fn validate_pairing_exchange_request(
+    request: &PairingExchangeRequest,
+) -> Result<(), PairingExchangeFailureResponse> {
+    if request.pairing_session_id.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            None,
+            Some(request.namespace.clone()),
+            "pairing_session_id_required",
+            "pairing_session_id must not be empty",
+        ));
+    }
+    if request.namespace.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            None,
+            "pairing_namespace_required",
+            "namespace must not be empty",
+        ));
+    }
+    if request.bootstrap_token.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            Some(request.namespace.clone()),
+            "pairing_bootstrap_token_required",
+            "bootstrap_token must not be empty",
+        ));
+    }
+    if request.device_name.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            Some(request.namespace.clone()),
+            "pairing_device_name_required",
+            "device_name must not be empty",
+        ));
+    }
+    if request.device_public_key.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            Some(request.namespace.clone()),
+            "pairing_device_public_key_required",
+            "device_public_key must not be empty",
+        ));
+    }
+    Ok(())
+}
+
+fn pairing_validation_failure(
+    pairing_session_id: Option<String>,
+    namespace: Option<String>,
+    code: &str,
+    message: &str,
+) -> PairingExchangeFailureResponse {
+    PairingExchangeFailureResponse {
+        pairing_session_id,
+        namespace,
+        status: PairingExchangeFailureStatus::Rejected,
+        error: PairingExchangeError {
+            code: code.to_string(),
+            message: message.to_string(),
+            retriable: false,
+        },
+    }
 }
 
 fn reject_duplicate_provider_create(
@@ -1077,6 +1165,55 @@ mod tests {
         assert_eq!(body["preview"]["records"][0]["status"], "applied");
         assert_eq!(body["preview"]["records"][3]["category"], "sticker_media");
         assert_eq!(body["preview"]["records"][3]["status"], "deferred");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_rejects_missing_fields_with_explicit_failure_shape() {
+        let (app, path) = test_app("pairing-validation");
+        let request = json!({
+            "pairing_session_id": "",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["status"], "rejected");
+        assert_eq!(body["error"]["code"], "pairing_session_id_required");
+        assert_eq!(body["error"]["retriable"], false);
+        assert_eq!(body["namespace"], "workspace-alpha");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_freezes_not_ready_failure_shape_after_validation() {
+        let (app, path) = test_app("pairing-not-ready");
+        let request = json!({
+            "pairing_session_id": "pairing-session-1",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(status, StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(body["pairing_session_id"], "pairing-session-1");
+        assert_eq!(body["namespace"], "workspace-alpha");
+        assert_eq!(body["status"], "rejected");
+        assert_eq!(body["error"]["code"], "pairing_exchange_not_ready");
+        assert_eq!(body["error"]["retriable"], true);
 
         fs::remove_file(path).ok();
     }
