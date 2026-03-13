@@ -27,14 +27,11 @@ use vcpmobile_store::{
     StoredPairingSession, StoredPairingSessionStatus, StoredPairingState, StoredTrustedDevice,
 };
 
+pub use vcpmobile_domain::resolve_prompt_preview;
 #[cfg(test)]
 use vcpmobile_domain::{
     PlaceholderCategory, PlaceholderSource, PromptPlaceholderValue, PromptResolutionStatus,
 };
-#[cfg(test)]
-use vcpmobile_protocol::PairingDevicePlatform;
-
-pub use vcpmobile_domain::resolve_prompt_preview;
 
 #[derive(Debug, Clone)]
 pub struct SessionEngine {
@@ -3224,6 +3221,7 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..vcpmobile_store::StoreData::default()
         };
         fs::write(
             &path,
@@ -4089,6 +4087,7 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..vcpmobile_store::StoreData::default()
         };
         fs::write(
             &path,

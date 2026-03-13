@@ -1108,6 +1108,7 @@ mod tests {
             conversations: BTreeMap::new(),
             agent_configs: BTreeMap::from([(agent.id.to_string(), agent.clone())]),
             provider_configs: BTreeMap::new(),
+            ..StoreData::default()
         };
         fs::write(
             &path,
@@ -1468,6 +1469,7 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..StoreData::default()
         };
         fs::write(
             &legacy_path,
@@ -1517,6 +1519,7 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..StoreData::default()
         };
         fs::write(
             &path,
@@ -1577,6 +1580,7 @@ mod tests {
             ]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            ..StoreData::default()
         };
         fs::write(
             &path,
