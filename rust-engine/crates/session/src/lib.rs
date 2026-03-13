@@ -1,0 +1,4697 @@
+use base64::{Engine as _, engine::general_purpose::STANDARD};
+use chrono::{DateTime, Duration, Utc};
+use sha2::{Digest, Sha256};
+use std::{
+    collections::{BTreeMap, BTreeSet, VecDeque},
+    io::{Cursor, Read},
+};
+use thiserror::Error;
+use uuid::Uuid;
+use vcpmobile_domain::{
+    Conversation, ConversationId, DOCUMENT_MIME_APPLICATION_PDF, DOCUMENT_MIME_DOCX,
+    DOCUMENT_MIME_PPTX, DOCUMENT_MIME_TEXT_MARKDOWN, DOCUMENT_MIME_TEXT_PLAIN,
+    DocumentAttachmentInput, DocumentDescriptor, DocumentPromptTransformItem,
+    DocumentPromptTransformOutput, DocumentPromptTransformStatus, GenerationSignal,
+    GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
+    NodeId, TopicId, VariantStatus,
+};
+use vcpmobile_protocol::{
+    ChatEvent, EventEnvelope, NodeBundle, PairingExchangeError, PairingExchangeFailureResponse,
+    PairingExchangeFailureStatus, PairingExchangeRequest, PairingExchangeSuccessResponse,
+    PairingExchangeSuccessStatus, PairingMobileToken, PairingResumeAnchor, PairingTrustedDevice,
+    SnapshotBranch, SnapshotConversation, SnapshotNode, SnapshotPart, SnapshotVariant,
+    UpsertBranch, VariantBundle,
+};
+use vcpmobile_store::{
+    FileStore, StoreError, StoredConversation, StoredConversationCatalogItem, StoredMobileSession,
+    StoredPairingSession, StoredPairingSessionStatus, StoredPairingState, StoredTrustedDevice,
+};
+
+pub use vcpmobile_domain::resolve_prompt_preview;
+#[cfg(test)]
+use vcpmobile_domain::{
+    PlaceholderCategory, PlaceholderSource, PromptPlaceholderValue, PromptResolutionStatus,
+};
+
+#[derive(Debug, Clone)]
+pub struct SessionEngine {
+    store: FileStore,
+    default_topic_id: TopicId,
+    default_agent_id: Uuid,
+    active_streams: BTreeMap<ConversationId, ActiveStreamSession>,
+    pairing_sessions: BTreeMap<String, StoredPairingSession>,
+    trusted_devices: BTreeMap<String, StoredTrustedDevice>,
+    mobile_sessions: BTreeMap<String, StoredMobileSession>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSendRequest {
+    pub conversation_id: Option<ConversationId>,
+    pub text: String,
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionEditRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+    pub text: String,
+    pub attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StreamSessionStart {
+    pub conversation_id: ConversationId,
+    pub initial_events: Vec<EventEnvelope<ChatEvent>>,
+}
+
+#[derive(Debug, Clone)]
+struct ActiveStreamSession {
+    assistant_node_id: NodeId,
+    assistant_variant_id: Uuid,
+    assistant_node: NodeBundle,
+    delta_parts: Vec<MessagePart>,
+    next_step: ActiveStreamStep,
+    pending_events: VecDeque<EventEnvelope<ChatEvent>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ActiveStreamStep {
+    Started,
+    Delta,
+    Complete,
+    Done,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedSendStreamSession {
+    stored: StoredConversation,
+    assistant_node_id: NodeId,
+    assistant_variant_id: Uuid,
+    assistant_node: NodeBundle,
+    delta_parts: Vec<MessagePart>,
+    initial_events: Vec<EventEnvelope<ChatEvent>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionRegenerateRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+}
+
+#[derive(Debug, Clone)]
+pub struct SessionSelectVariantRequest {
+    pub conversation_id: ConversationId,
+    pub node_id: NodeId,
+    pub variant_id: Uuid,
+}
+
+#[derive(Debug, Clone)]
+pub struct PairingBootstrapSeed {
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub bootstrap_token: String,
+    pub expires_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone)]
+struct PreparedDocumentAttachment {
+    descriptor: DocumentDescriptor,
+    bytes: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedMobileSession {
+    pub access_token: String,
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub trusted_device: PairingTrustedDevice,
+    pub issued_at: DateTime<Utc>,
+    pub expires_at: DateTime<Utc>,
+    pub revoked_at: Option<DateTime<Utc>>,
+    pub resume_anchor: PairingResumeAnchor,
+}
+
+const MOBILE_TOKEN_TTL_MINUTES: i64 = 15;
+const RESUME_ANCHOR_TTL_DAYS: i64 = 7;
+
+#[derive(Debug, Error)]
+pub enum DocumentTransformError {
+    #[error("invalid base64 payload for {name}: {reason}")]
+    InvalidBase64 { name: String, reason: String },
+    #[error("unsupported document type for {name}: {mime}")]
+    UnsupportedType { name: String, mime: String },
+    #[error("invalid utf-8 content for {name}: {reason}")]
+    InvalidUtf8 { name: String, reason: String },
+    #[error("pdf extraction failed for {name}: {reason}")]
+    PdfExtract { name: String, reason: String },
+    #[error("zip parse failed for {name}: {reason}")]
+    ZipParse { name: String, reason: String },
+    #[error("xml parse failed for {name}: {reason}")]
+    XmlParse { name: String, reason: String },
+    #[error("document payload missing required path {path} in {name}")]
+    MissingArchivePath { name: String, path: String },
+}
+
+#[derive(Debug, Error)]
+pub enum SessionError {
+    #[error("store error: {0}")]
+    Store(#[from] StoreError),
+    #[error("empty user text")]
+    EmptyText,
+    #[error("conversation not found: {0}")]
+    ConversationNotFound(ConversationId),
+    #[error("node not found in conversation {conversation_id}: {node_id}")]
+    NodeNotFound {
+        conversation_id: ConversationId,
+        node_id: NodeId,
+    },
+    #[error("variant not found in conversation {conversation_id} node {node_id}: {variant_id}")]
+    VariantNotFound {
+        conversation_id: ConversationId,
+        node_id: NodeId,
+        variant_id: Uuid,
+    },
+    #[error("invalid conversation state for {conversation_id}: {reason}")]
+    InvalidConversationState {
+        conversation_id: ConversationId,
+        reason: String,
+    },
+    #[error("generation already active for conversation {conversation_id}")]
+    ActiveGenerationExists { conversation_id: ConversationId },
+    #[error("no active generation for conversation {conversation_id}")]
+    NoActiveGeneration { conversation_id: ConversationId },
+    #[error("document transform error: {0}")]
+    DocumentTransform(#[from] DocumentTransformError),
+}
+
+impl SessionEngine {
+    pub fn new(store: FileStore, default_topic_id: TopicId, default_agent_id: Uuid) -> Self {
+        Self::try_new(store, default_topic_id, default_agent_id)
+            .unwrap_or_else(|error| panic!("restore session engine state: {error}"))
+    }
+
+    pub fn try_new(
+        store: FileStore,
+        default_topic_id: TopicId,
+        default_agent_id: Uuid,
+    ) -> Result<Self, SessionError> {
+        let pairing_state = store.load_pairing_state()?;
+        Ok(Self {
+            store,
+            default_topic_id,
+            default_agent_id,
+            active_streams: BTreeMap::new(),
+            pairing_sessions: pairing_state.pairing_sessions,
+            trusted_devices: pairing_state.trusted_devices,
+            mobile_sessions: pairing_state.mobile_sessions,
+        })
+    }
+
+    pub fn store(&self) -> &FileStore {
+        &self.store
+    }
+
+    pub fn trusted_device(
+        &mut self,
+        trusted_device_id: &str,
+    ) -> Result<Option<StoredTrustedDevice>, SessionError> {
+        self.refresh_pairing_state()?;
+        Ok(self.trusted_devices.get(trusted_device_id).cloned())
+    }
+
+    pub fn resolve_mobile_session_by_resume_anchor(
+        &mut self,
+        resume_anchor: &str,
+    ) -> Result<Option<ResolvedMobileSession>, SessionError> {
+        self.refresh_pairing_state()?;
+        let now = Utc::now();
+        let Some((access_token, session)) = self.mobile_sessions.iter().find(|(_, session)| {
+            session.resume_anchor == resume_anchor
+                && session.revoked_at.is_none()
+                && session.resume_anchor_expires_at > now
+        }) else {
+            return Ok(None);
+        };
+        let Some(trusted_device) = self.trusted_devices.get(&session.trusted_device_id) else {
+            return Ok(None);
+        };
+        if trusted_device.revoked_at.is_some() {
+            return Ok(None);
+        }
+
+        Ok(Some(ResolvedMobileSession {
+            access_token: access_token.clone(),
+            pairing_session_id: session.pairing_session_id.clone(),
+            namespace: session.namespace.clone(),
+            trusted_device: PairingTrustedDevice {
+                trusted_device_id: trusted_device.trusted_device_id.clone(),
+                device_name: trusted_device.device_name.clone(),
+                device_platform: trusted_device.device_platform,
+            },
+            issued_at: session.issued_at,
+            expires_at: session.expires_at,
+            revoked_at: session.revoked_at,
+            resume_anchor: PairingResumeAnchor {
+                anchor: session.resume_anchor.clone(),
+                expires_at: session.resume_anchor_expires_at,
+            },
+        }))
+    }
+
+    fn refresh_pairing_state(&mut self) -> Result<(), SessionError> {
+        let state = self.store.load_pairing_state()?;
+        self.pairing_sessions = state.pairing_sessions;
+        self.trusted_devices = state.trusted_devices;
+        self.mobile_sessions = state.mobile_sessions;
+        Ok(())
+    }
+
+    fn persist_pairing_state(&self) -> Result<(), SessionError> {
+        self.store.save_pairing_state(&StoredPairingState {
+            pairing_sessions: self.pairing_sessions.clone(),
+            trusted_devices: self.trusted_devices.clone(),
+            mobile_sessions: self.mobile_sessions.clone(),
+        })?;
+        Ok(())
+    }
+
+    pub fn ensure_demo_conversation(&self) -> Result<StoredConversation, SessionError> {
+        let (conversation, node_bundle) =
+            demo_conversation(self.default_topic_id, self.default_agent_id);
+        let stored = StoredConversation {
+            conversation,
+            nodes: vec![node_bundle],
+        };
+        self.store.upsert_conversation(stored.clone())?;
+        Ok(stored)
+    }
+
+    pub fn snapshot_for(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<Option<StoredConversation>, SessionError> {
+        Ok(self.store.get_conversation(conversation_id)?)
+    }
+
+    pub fn conversation_catalog(&self) -> Result<Vec<StoredConversationCatalogItem>, SessionError> {
+        Ok(self.store.list_conversation_catalog()?)
+    }
+
+    pub fn transform_document_prompt(
+        &self,
+        attachments: Vec<DocumentAttachmentInput>,
+    ) -> Result<DocumentPromptTransformOutput, SessionError> {
+        transform_document_prompt_output(&attachments).map_err(SessionError::from)
+    }
+
+    pub fn seed_pairing_session(&mut self, seed: PairingBootstrapSeed) -> Result<(), SessionError> {
+        self.refresh_pairing_state()?;
+        if matches!(
+            self.pairing_sessions
+                .get(&seed.pairing_session_id)
+                .map(|session| &session.status),
+            Some(StoredPairingSessionStatus::Paired)
+        ) {
+            return Ok(());
+        }
+
+        self.pairing_sessions.insert(
+            seed.pairing_session_id.clone(),
+            StoredPairingSession {
+                pairing_session_id: seed.pairing_session_id,
+                namespace: seed.namespace,
+                bootstrap_token: seed.bootstrap_token,
+                expires_at: seed.expires_at,
+                status: StoredPairingSessionStatus::Pending,
+                trusted_device_id: None,
+                completed_at: None,
+            },
+        );
+        self.persist_pairing_state()
+    }
+
+    pub fn exchange_pairing(
+        &mut self,
+        request: PairingExchangeRequest,
+    ) -> Result<PairingExchangeSuccessResponse, PairingExchangeFailureResponse> {
+        let pairing_session_id = request.pairing_session_id.clone();
+        let namespace = request.namespace.clone();
+        if let Err(error) = self.refresh_pairing_state() {
+            return Err(pairing_state_failure(
+                Some(pairing_session_id),
+                Some(namespace),
+                "pairing_state_unavailable",
+                format!("pairing state unavailable: {error}"),
+            ));
+        }
+
+        let now = Utc::now();
+        let Some(session) = self.pairing_sessions.get(&request.pairing_session_id) else {
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Rejected,
+                "pairing_session_not_found",
+                "pairing session not found",
+                false,
+            ));
+        };
+
+        if session.namespace != request.namespace {
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Rejected,
+                "pairing_namespace_mismatch",
+                "pairing namespace does not match bootstrap session",
+                false,
+            ));
+        }
+
+        match session.status {
+            StoredPairingSessionStatus::Paired => {
+                return Err(pairing_exchange_failure(
+                    Some(request.pairing_session_id),
+                    Some(request.namespace),
+                    PairingExchangeFailureStatus::Revoked,
+                    "bootstrap_token_replayed",
+                    "bootstrap token already exchanged",
+                    false,
+                ));
+            }
+            StoredPairingSessionStatus::Expired => {
+                return Err(pairing_exchange_failure(
+                    Some(request.pairing_session_id),
+                    Some(request.namespace),
+                    PairingExchangeFailureStatus::Expired,
+                    "bootstrap_token_expired",
+                    "bootstrap token expired",
+                    false,
+                ));
+            }
+            StoredPairingSessionStatus::Pending => {}
+        }
+
+        if session.expires_at <= now {
+            if let Some(session) = self.pairing_sessions.get_mut(&request.pairing_session_id) {
+                session.status = StoredPairingSessionStatus::Expired;
+            }
+            if let Err(error) = self.persist_pairing_state() {
+                return Err(pairing_state_failure(
+                    Some(request.pairing_session_id),
+                    Some(request.namespace),
+                    "pairing_state_persist_failed",
+                    format!("persist pairing expiry failed: {error}"),
+                ));
+            }
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Expired,
+                "bootstrap_token_expired",
+                "bootstrap token expired",
+                false,
+            ));
+        }
+
+        if session.bootstrap_token != request.bootstrap_token {
+            return Err(pairing_exchange_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                PairingExchangeFailureStatus::Rejected,
+                "bootstrap_token_invalid",
+                "bootstrap token invalid",
+                false,
+            ));
+        }
+
+        let trusted_device_id = format!("trusted-device-{}", Uuid::new_v4().simple());
+        let access_token = format!("mobile-token-{}", Uuid::new_v4().simple());
+        let resume_anchor = format!("resume-anchor-{}", Uuid::new_v4().simple());
+        let mobile_expires_at = now + Duration::minutes(MOBILE_TOKEN_TTL_MINUTES);
+        let resume_expires_at = now + Duration::days(RESUME_ANCHOR_TTL_DAYS);
+        let previous_pairing_sessions = self.pairing_sessions.clone();
+        let previous_trusted_devices = self.trusted_devices.clone();
+        let previous_mobile_sessions = self.mobile_sessions.clone();
+        if let Some(session) = self.pairing_sessions.get_mut(&request.pairing_session_id) {
+            session.status = StoredPairingSessionStatus::Paired;
+            session.trusted_device_id = Some(trusted_device_id.clone());
+            session.completed_at = Some(now);
+        }
+        self.trusted_devices.insert(
+            trusted_device_id.clone(),
+            StoredTrustedDevice {
+                trusted_device_id: trusted_device_id.clone(),
+                namespace: request.namespace.clone(),
+                device_name: request.device_name.clone(),
+                device_platform: request.device_platform,
+                device_public_key: request.device_public_key.clone(),
+                paired_at: now,
+                last_seen_at: now,
+                revoked_at: None,
+            },
+        );
+
+        self.mobile_sessions.insert(
+            access_token.clone(),
+            StoredMobileSession {
+                access_token: access_token.clone(),
+                pairing_session_id: request.pairing_session_id.clone(),
+                namespace: request.namespace.clone(),
+                trusted_device_id: trusted_device_id.clone(),
+                issued_at: now,
+                expires_at: mobile_expires_at,
+                revoked_at: None,
+                resume_anchor: resume_anchor.clone(),
+                resume_anchor_expires_at: resume_expires_at,
+            },
+        );
+        if let Err(error) = self.persist_pairing_state() {
+            self.pairing_sessions = previous_pairing_sessions;
+            self.trusted_devices = previous_trusted_devices;
+            self.mobile_sessions = previous_mobile_sessions;
+            return Err(pairing_state_failure(
+                Some(request.pairing_session_id),
+                Some(request.namespace),
+                "pairing_state_persist_failed",
+                format!("persist pairing state failed: {error}"),
+            ));
+        }
+
+        Ok(PairingExchangeSuccessResponse {
+            pairing_session_id: request.pairing_session_id,
+            namespace: request.namespace,
+            status: PairingExchangeSuccessStatus::Paired,
+            mobile_token: PairingMobileToken {
+                access_token,
+                token_type: "bearer".to_string(),
+                expires_at: mobile_expires_at,
+            },
+            trusted_device: PairingTrustedDevice {
+                trusted_device_id,
+                device_name: request.device_name,
+                device_platform: request.device_platform,
+            },
+            resume_anchor: PairingResumeAnchor {
+                anchor: resume_anchor,
+                expires_at: resume_expires_at,
+            },
+        })
+    }
+
+    pub fn start_stream_session(
+        &mut self,
+        request: SessionSendRequest,
+    ) -> Result<StreamSessionStart, SessionError> {
+        let prepared = self.prepare_send_stream_session(request)?;
+        let conversation_id = prepared.stored.conversation.id;
+        self.store.upsert_conversation(prepared.stored.clone())?;
+        self.active_streams.insert(
+            conversation_id,
+            ActiveStreamSession {
+                assistant_node_id: prepared.assistant_node_id,
+                assistant_variant_id: prepared.assistant_variant_id,
+                assistant_node: prepared.assistant_node,
+                delta_parts: prepared.delta_parts,
+                next_step: ActiveStreamStep::Started,
+                pending_events: VecDeque::new(),
+            },
+        );
+
+        Ok(StreamSessionStart {
+            conversation_id,
+            initial_events: prepared.initial_events,
+        })
+    }
+
+    pub fn poll_stream_event(
+        &mut self,
+        conversation_id: ConversationId,
+    ) -> Result<Option<EventEnvelope<ChatEvent>>, SessionError> {
+        loop {
+            let Some((next_step, pending_event)) = self
+                .active_streams
+                .get_mut(&conversation_id)
+                .map(|session| (session.next_step, session.pending_events.pop_front()))
+            else {
+                return Ok(None);
+            };
+
+            if let Some(event) = pending_event {
+                let should_remove = self
+                    .active_streams
+                    .get(&conversation_id)
+                    .map(|session| {
+                        session.next_step == ActiveStreamStep::Done
+                            && session.pending_events.is_empty()
+                    })
+                    .unwrap_or(false);
+                if should_remove {
+                    self.active_streams.remove(&conversation_id);
+                }
+                return Ok(Some(event));
+            }
+
+            let queued_events = match next_step {
+                ActiveStreamStep::Started => {
+                    let session = self
+                        .active_streams
+                        .get(&conversation_id)
+                        .cloned()
+                        .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+                    let events = self.dispatch_started_events(
+                        conversation_id,
+                        session.assistant_node_id,
+                        session.assistant_variant_id,
+                    )?;
+                    if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                        active.next_step = ActiveStreamStep::Delta;
+                    }
+                    events
+                }
+                ActiveStreamStep::Delta => {
+                    let session = self
+                        .active_streams
+                        .get(&conversation_id)
+                        .cloned()
+                        .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+                    let events = self.dispatch_delta_events(
+                        conversation_id,
+                        session.assistant_node_id,
+                        session.assistant_variant_id,
+                        session.delta_parts,
+                    )?;
+                    if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                        active.next_step = ActiveStreamStep::Complete;
+                    }
+                    events
+                }
+                ActiveStreamStep::Complete => {
+                    let session = self
+                        .active_streams
+                        .get(&conversation_id)
+                        .cloned()
+                        .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+                    let events = self.dispatch_terminal_events(
+                        conversation_id,
+                        session.assistant_node_id,
+                        terminal_assistant_node(
+                            &session.assistant_node,
+                            VariantStatus::Completed,
+                            Utc::now(),
+                        ),
+                        ChatEvent::GenerationCompleted {
+                            node_id: session.assistant_node_id,
+                            variant_id: session.assistant_variant_id,
+                        },
+                        GenerationSignal::Complete,
+                    )?;
+                    if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                        active.next_step = ActiveStreamStep::Done;
+                    }
+                    events
+                }
+                ActiveStreamStep::Done => {
+                    self.active_streams.remove(&conversation_id);
+                    return Ok(None);
+                }
+            };
+
+            if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+                active.pending_events.extend(queued_events);
+            }
+        }
+    }
+
+    pub fn cancel_stream_session(
+        &mut self,
+        conversation_id: ConversationId,
+        message: Option<String>,
+    ) -> Result<(), SessionError> {
+        let session = self
+            .active_streams
+            .get(&conversation_id)
+            .cloned()
+            .ok_or(SessionError::NoActiveGeneration { conversation_id })?;
+        let terminal_message = message;
+        let queued_events = self.dispatch_terminal_events(
+            conversation_id,
+            session.assistant_node_id,
+            terminal_assistant_node(
+                &session.assistant_node,
+                VariantStatus::Cancelled,
+                Utc::now(),
+            ),
+            ChatEvent::GenerationCancelled {
+                node_id: session.assistant_node_id,
+                variant_id: session.assistant_variant_id,
+                message: terminal_message.clone(),
+            },
+            GenerationSignal::Cancel,
+        )?;
+
+        if let Some(active) = self.active_streams.get_mut(&conversation_id) {
+            active.pending_events.clear();
+            active.pending_events.extend(queued_events);
+            active.next_step = ActiveStreamStep::Done;
+        }
+        Ok(())
+    }
+
+    pub fn interrupt_stream_session(
+        &mut self,
+        conversation_id: ConversationId,
+        message: Option<String>,
+    ) -> Result<(), SessionError> {
+        self.cancel_stream_session(
+            conversation_id,
+            Some(message.unwrap_or_else(|| "interrupted by client".to_string())),
+        )
+    }
+
+    fn prepare_send_stream_session(
+        &self,
+        request: SessionSendRequest,
+    ) -> Result<PreparedSendStreamSession, SessionError> {
+        let text = request.text.trim();
+        if text.is_empty() && request.attachments.is_empty() {
+            return Err(SessionError::EmptyText);
+        }
+
+        let now = Utc::now();
+        let mut stored = match request.conversation_id {
+            Some(conversation_id) => self
+                .store
+                .get_conversation(conversation_id)?
+                .ok_or(SessionError::ConversationNotFound(conversation_id))?,
+            None => StoredConversation {
+                conversation: Conversation {
+                    id: ConversationId::new_v4(),
+                    topic_id: self.default_topic_id,
+                    agent_id: self.default_agent_id,
+                    title: truncate_title(text, &request.attachments),
+                    summary: Some("Rust session store conversation".to_string()),
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: Vec::new(),
+            },
+        };
+
+        if stored.conversation.generation_state.is_active()
+            || self.active_streams.contains_key(&stored.conversation.id)
+        {
+            return Err(SessionError::ActiveGenerationExists {
+                conversation_id: stored.conversation.id,
+            });
+        }
+
+        let parent_cursor = validated_current_cursor(&stored)?;
+        let user_node = build_user_node(
+            stored.conversation.id,
+            parent_cursor,
+            text,
+            &request.attachments,
+            now,
+        )?;
+        validate_node_bundle_parts(&user_node)?;
+        let user_node_id = user_node.node.id;
+        let assistant_node = build_assistant_node(
+            stored.conversation.id,
+            Some(user_node_id),
+            text,
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+        validate_node_bundle_parts(&assistant_node)?;
+        let assistant_node_id = assistant_node.node.id;
+        let assistant_variant_id = assistant_node.variants[0].variant.id;
+        let delta_parts = streaming_delta_parts(&assistant_node)?;
+
+        stored.conversation.current_cursor = Some(assistant_node_id);
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit);
+        stored.conversation.updated_at = now;
+        stored.nodes.push(user_node);
+        stored.nodes.push(assistant_node.clone());
+
+        let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
+        let initial_events = vec![EventEnvelope::new(
+            Some(stored.conversation.id),
+            ChatEvent::ConversationSnapshot {
+                conversation: SnapshotConversation::from(&stored.conversation),
+                branch: SnapshotBranch {
+                    cursor_node_id: stored.conversation.current_cursor,
+                    nodes: snapshot_nodes,
+                },
+            },
+        )];
+
+        Ok(PreparedSendStreamSession {
+            stored,
+            assistant_node_id,
+            assistant_variant_id,
+            assistant_node,
+            delta_parts,
+            initial_events,
+        })
+    }
+
+    fn dispatch_started_events(
+        &self,
+        conversation_id: ConversationId,
+        assistant_node_id: NodeId,
+        assistant_variant_id: Uuid,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let mut stored = self.load_conversation_strict(conversation_id)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Started);
+        stored.conversation.updated_at = Utc::now();
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::GenerationStarted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationMetaUpdate {
+                    conversation: stored.conversation,
+                },
+            ),
+        ])
+    }
+
+    fn dispatch_delta_events(
+        &self,
+        conversation_id: ConversationId,
+        assistant_node_id: NodeId,
+        assistant_variant_id: Uuid,
+        delta_parts: Vec<MessagePart>,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let mut stored = self.load_conversation_strict(conversation_id)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta);
+        stored.conversation.updated_at = Utc::now();
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::GenerationPartDelta {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                    appended_parts: delta_parts,
+                },
+            ),
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationMetaUpdate {
+                    conversation: stored.conversation,
+                },
+            ),
+        ])
+    }
+
+    fn dispatch_terminal_events(
+        &self,
+        conversation_id: ConversationId,
+        assistant_node_id: NodeId,
+        terminal_node: NodeBundle,
+        terminal_event: ChatEvent,
+        terminal_signal: GenerationSignal,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let mut stored = self.load_conversation_strict(conversation_id)?;
+        replace_node_bundle(&mut stored, assistant_node_id, terminal_node.clone())?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(terminal_signal);
+        stored.conversation.updated_at = Utc::now();
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationNodeUpsert {
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: selected_node_projection(&terminal_node)?,
+                    },
+                },
+            ),
+            EventEnvelope::new(Some(conversation_id), terminal_event),
+            EventEnvelope::new(
+                Some(conversation_id),
+                ChatEvent::ConversationMetaUpdate {
+                    conversation: stored.conversation,
+                },
+            ),
+        ])
+    }
+
+    fn load_conversation_strict(
+        &self,
+        conversation_id: ConversationId,
+    ) -> Result<StoredConversation, SessionError> {
+        self.store
+            .get_conversation(conversation_id)?
+            .ok_or(SessionError::ConversationNotFound(conversation_id))
+    }
+
+    pub fn send_message(
+        &self,
+        request: SessionSendRequest,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let text = request.text.trim();
+        if text.is_empty() && request.attachments.is_empty() {
+            return Err(SessionError::EmptyText);
+        }
+
+        let now = Utc::now();
+        let mut stored = match request.conversation_id {
+            Some(conversation_id) => self
+                .store
+                .get_conversation(conversation_id)?
+                .ok_or(SessionError::ConversationNotFound(conversation_id))?,
+            None => StoredConversation {
+                conversation: Conversation {
+                    id: ConversationId::new_v4(),
+                    topic_id: self.default_topic_id,
+                    agent_id: self.default_agent_id,
+                    title: truncate_title(text, &request.attachments),
+                    summary: Some("Rust session store conversation".to_string()),
+                    pinned: false,
+                    generation_state: GenerationState::Idle,
+                    current_cursor: None,
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: Vec::new(),
+            },
+        };
+
+        let parent_cursor = validated_current_cursor(&stored)?;
+        let user_node = build_user_node(
+            stored.conversation.id,
+            parent_cursor,
+            text,
+            &request.attachments,
+            now,
+        )?;
+        validate_node_bundle_parts(&user_node)?;
+        let user_node_id = user_node.node.id;
+        let assistant_node = build_assistant_node(
+            stored.conversation.id,
+            Some(user_node_id),
+            text,
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+        validate_node_bundle_parts(&assistant_node)?;
+        let assistant_node_id = assistant_node.node.id;
+        let assistant_variant_id = assistant_node.variants[0].variant.id;
+        let completed_assistant_node = finalize_assistant_node(&assistant_node, now);
+
+        stored.conversation.current_cursor = Some(assistant_node_id);
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit)
+            .transition(GenerationSignal::Started);
+        stored.conversation.updated_at = now;
+        stored.nodes.push(user_node);
+        stored.nodes.push(assistant_node.clone());
+
+        let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
+        let assistant_delta_parts = streaming_delta_parts(&assistant_node)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta)
+            .transition(GenerationSignal::Complete);
+        if let Some(last_node) = stored.nodes.last_mut() {
+            *last_node = completed_assistant_node.clone();
+        }
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationSnapshot {
+                    conversation: SnapshotConversation::from(&inflight_conversation_projection(
+                        &stored.conversation,
+                    )),
+                    branch: SnapshotBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        nodes: snapshot_nodes,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationStarted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationPartDelta {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                    appended_parts: assistant_delta_parts,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationNodeUpsert {
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: selected_node_projection(&completed_assistant_node)?,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationCompleted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+        ])
+    }
+
+    pub fn edit_message(
+        &self,
+        request: SessionEditRequest,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let text = request.text.trim();
+        if text.is_empty() && request.attachments.is_empty() {
+            return Err(SessionError::EmptyText);
+        }
+
+        let now = Utc::now();
+        let mut stored = self
+            .store
+            .get_conversation(request.conversation_id)?
+            .ok_or(SessionError::ConversationNotFound(request.conversation_id))?;
+        let branch_node_ids = selected_branch_node_ids(&stored)?;
+        if !branch_node_ids.contains(&request.node_id) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: request.conversation_id,
+                reason: format!(
+                    "node {} is not on the selected branch for edit",
+                    request.node_id
+                ),
+            });
+        }
+
+        let target_index = stored
+            .nodes
+            .iter()
+            .position(|bundle| bundle.node.id == request.node_id)
+            .ok_or(SessionError::NodeNotFound {
+                conversation_id: request.conversation_id,
+                node_id: request.node_id,
+            })?;
+        let target_bundle = stored.nodes[target_index].clone();
+        if target_bundle.node.role != MessageRole::User {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: request.conversation_id,
+                reason: format!("node {} is not a user node", request.node_id),
+            });
+        }
+        if user_parts_match_request(&target_bundle, text, &request.attachments)? {
+            return Ok(Vec::new());
+        }
+
+        let edited_user_node = build_user_node(
+            stored.conversation.id,
+            target_bundle.node.parent_node_id,
+            text,
+            &request.attachments,
+            now,
+        )?;
+        validate_node_bundle_parts(&edited_user_node)?;
+        let edited_user_node_id = edited_user_node.node.id;
+
+        let assistant_node = build_assistant_node(
+            stored.conversation.id,
+            Some(edited_user_node_id),
+            text,
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+        validate_node_bundle_parts(&assistant_node)?;
+        let assistant_node_id = assistant_node.node.id;
+        let assistant_variant_id = assistant_node.variants[0].variant.id;
+        let completed_assistant_node = finalize_assistant_node(&assistant_node, now);
+
+        stored.conversation.current_cursor = Some(assistant_node_id);
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit)
+            .transition(GenerationSignal::Started);
+        stored.conversation.updated_at = now;
+        stored.nodes.push(edited_user_node);
+        stored.nodes.push(assistant_node.clone());
+
+        let snapshot_nodes = selected_branch_snapshot_nodes(&stored)?;
+        let assistant_delta_parts = streaming_delta_parts(&assistant_node)?;
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta)
+            .transition(GenerationSignal::Complete);
+        if let Some(last_node) = stored.nodes.last_mut() {
+            *last_node = completed_assistant_node.clone();
+        }
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationSnapshot {
+                    conversation: SnapshotConversation::from(&inflight_conversation_projection(
+                        &stored.conversation,
+                    )),
+                    branch: SnapshotBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        nodes: snapshot_nodes,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationStarted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationPartDelta {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                    appended_parts: assistant_delta_parts,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationNodeUpsert {
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: selected_node_projection(&completed_assistant_node)?,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationCompleted {
+                    node_id: assistant_node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+        ])
+    }
+
+    pub fn regenerate_message(
+        &self,
+        request: SessionRegenerateRequest,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let now = Utc::now();
+        let mut stored = self
+            .store
+            .get_conversation(request.conversation_id)?
+            .ok_or(SessionError::ConversationNotFound(request.conversation_id))?;
+        let branch_node_ids = selected_branch_node_ids(&stored)?;
+        if !branch_node_ids.contains(&request.node_id) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: request.conversation_id,
+                reason: format!(
+                    "node {} is not on the selected branch for regenerate",
+                    request.node_id
+                ),
+            });
+        }
+
+        let target_index = stored
+            .nodes
+            .iter()
+            .position(|bundle| bundle.node.id == request.node_id)
+            .ok_or(SessionError::NodeNotFound {
+                conversation_id: request.conversation_id,
+                node_id: request.node_id,
+            })?;
+        let prompt_text = regenerate_prompt_text(&stored, request.node_id)?;
+
+        let assistant_delta_parts;
+        let assistant_variant_id;
+        let streaming_projection;
+        {
+            let target_bundle = stored.nodes.get_mut(target_index).expect("target bundle");
+            if target_bundle.node.role != MessageRole::Assistant {
+                return Err(SessionError::InvalidConversationState {
+                    conversation_id: request.conversation_id,
+                    reason: format!("node {} is not an assistant node", request.node_id),
+                });
+            }
+
+            let next_select_index = target_bundle.variants.len();
+            let streaming_variant = build_assistant_variant(
+                target_bundle.node.id,
+                &prompt_text,
+                now,
+                VariantStatus::Streaming,
+                None,
+            );
+            assistant_variant_id = streaming_variant.variant.id;
+            assistant_delta_parts = streaming_variant.parts.clone();
+            target_bundle.variants.push(streaming_variant);
+            target_bundle.node.select_index = next_select_index;
+            target_bundle.node.updated_at = now;
+            validate_node_bundle_parts(target_bundle)?;
+            streaming_projection = selected_node_projection(target_bundle)?;
+        }
+
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Submit)
+            .transition(GenerationSignal::Started);
+        stored.conversation.updated_at = now;
+
+        let completed_projection;
+        {
+            let target_bundle = stored.nodes.get_mut(target_index).expect("target bundle");
+            finalize_selected_variant_in_place(target_bundle, now)?;
+            completed_projection = selected_node_projection(target_bundle)?;
+        }
+        stored.conversation.generation_state = stored
+            .conversation
+            .generation_state
+            .transition(GenerationSignal::Delta)
+            .transition(GenerationSignal::Complete);
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationNodeUpsert {
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: streaming_projection,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationStarted {
+                    node_id: request.node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationPartDelta {
+                    node_id: request.node_id,
+                    variant_id: assistant_variant_id,
+                    appended_parts: assistant_delta_parts,
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::ConversationNodeUpsert {
+                    branch: UpsertBranch {
+                        cursor_node_id: stored.conversation.current_cursor,
+                        node: completed_projection,
+                    },
+                },
+            ),
+            EventEnvelope::new(
+                Some(stored.conversation.id),
+                ChatEvent::GenerationCompleted {
+                    node_id: request.node_id,
+                    variant_id: assistant_variant_id,
+                },
+            ),
+        ])
+    }
+
+    pub fn select_variant(
+        &self,
+        request: SessionSelectVariantRequest,
+    ) -> Result<Vec<EventEnvelope<ChatEvent>>, SessionError> {
+        let now = Utc::now();
+        let mut stored = self
+            .store
+            .get_conversation(request.conversation_id)?
+            .ok_or(SessionError::ConversationNotFound(request.conversation_id))?;
+        let branch_node_ids = selected_branch_node_ids(&stored)?;
+        if !branch_node_ids.contains(&request.node_id) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: request.conversation_id,
+                reason: format!(
+                    "node {} is not on the selected branch for variant selection",
+                    request.node_id
+                ),
+            });
+        }
+
+        let target_index = stored
+            .nodes
+            .iter()
+            .position(|bundle| bundle.node.id == request.node_id)
+            .ok_or(SessionError::NodeNotFound {
+                conversation_id: request.conversation_id,
+                node_id: request.node_id,
+            })?;
+
+        let selected_projection;
+        {
+            let target_bundle = stored.nodes.get_mut(target_index).expect("target bundle");
+            if target_bundle.node.role != MessageRole::Assistant {
+                return Err(SessionError::InvalidConversationState {
+                    conversation_id: request.conversation_id,
+                    reason: format!("node {} is not an assistant node", request.node_id),
+                });
+            }
+
+            let next_select_index = target_bundle
+                .variants
+                .iter()
+                .position(|variant| variant.variant.id == request.variant_id)
+                .ok_or(SessionError::VariantNotFound {
+                    conversation_id: request.conversation_id,
+                    node_id: request.node_id,
+                    variant_id: request.variant_id,
+                })?;
+
+            if target_bundle.node.select_index == next_select_index {
+                return Ok(Vec::new());
+            }
+
+            target_bundle.node.select_index = next_select_index;
+            target_bundle.node.updated_at = now;
+            validate_node_bundle_parts(target_bundle)?;
+            selected_projection = selected_node_projection(target_bundle)?;
+        }
+
+        stored.conversation.updated_at = now;
+        self.store.upsert_conversation(stored.clone())?;
+
+        Ok(vec![EventEnvelope::new(
+            Some(stored.conversation.id),
+            ChatEvent::ConversationNodeUpsert {
+                branch: UpsertBranch {
+                    cursor_node_id: stored.conversation.current_cursor,
+                    node: selected_projection,
+                },
+            },
+        )])
+    }
+}
+
+fn pairing_exchange_failure(
+    pairing_session_id: Option<String>,
+    namespace: Option<String>,
+    status: PairingExchangeFailureStatus,
+    code: &str,
+    message: &str,
+    retriable: bool,
+) -> PairingExchangeFailureResponse {
+    PairingExchangeFailureResponse {
+        pairing_session_id,
+        namespace,
+        status,
+        error: PairingExchangeError {
+            code: code.to_string(),
+            message: message.to_string(),
+            retriable,
+        },
+    }
+}
+
+fn pairing_state_failure(
+    pairing_session_id: Option<String>,
+    namespace: Option<String>,
+    code: &str,
+    message: String,
+) -> PairingExchangeFailureResponse {
+    pairing_exchange_failure(
+        pairing_session_id,
+        namespace,
+        PairingExchangeFailureStatus::Rejected,
+        code,
+        &message,
+        true,
+    )
+}
+
+fn truncate_title(text: &str, attachments: &[DocumentAttachmentInput]) -> String {
+    let source = if text.is_empty() {
+        attachments
+            .first()
+            .map(|attachment| attachment.name.as_str())
+            .unwrap_or("文档输入")
+    } else {
+        text
+    };
+    let mut title = source.chars().take(18).collect::<String>();
+    if source.chars().count() > 18 {
+        title.push('…');
+    }
+    if title.is_empty() {
+        "新对话".to_string()
+    } else {
+        title
+    }
+}
+
+fn assistant_text_reply(user_text: &str) -> String {
+    format!("Rust Engine 已接收你的消息：{user_text}\n\n来源：Rust session engine\n形态：text")
+}
+
+fn transform_document_prompt_output(
+    attachments: &[DocumentAttachmentInput],
+) -> Result<DocumentPromptTransformOutput, DocumentTransformError> {
+    let mut items = Vec::with_capacity(attachments.len());
+
+    for attachment in attachments {
+        let prepared = match prepare_document_attachment(attachment) {
+            Ok(prepared) => prepared,
+            Err(error) => {
+                let document = fallback_document_descriptor(attachment);
+                items.push(DocumentPromptTransformItem {
+                    document: document.clone(),
+                    status: DocumentPromptTransformStatus::ParseFailed,
+                    prompt_text: format_document_prompt_failure(&document, &error.to_string()),
+                    extracted_char_count: 0,
+                    error: Some(error.to_string()),
+                });
+                continue;
+            }
+        };
+        let result = match extract_document_text(&prepared) {
+            Ok(text) => {
+                let prompt_text = format_document_prompt_text(&prepared.descriptor, &text);
+                let extracted_char_count = text.chars().count();
+                DocumentPromptTransformItem {
+                    document: prepared.descriptor,
+                    status: DocumentPromptTransformStatus::Ready,
+                    prompt_text,
+                    extracted_char_count,
+                    error: None,
+                }
+            }
+            Err(error) => {
+                let prompt_text =
+                    format_document_prompt_failure(&prepared.descriptor, &error.to_string());
+                DocumentPromptTransformItem {
+                    document: prepared.descriptor,
+                    status: DocumentPromptTransformStatus::ParseFailed,
+                    prompt_text,
+                    extracted_char_count: 0,
+                    error: Some(error.to_string()),
+                }
+            }
+        };
+        items.push(result);
+    }
+
+    let combined_prompt_text = items
+        .iter()
+        .map(|item| item.prompt_text.as_str())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    Ok(DocumentPromptTransformOutput {
+        items,
+        combined_prompt_text,
+    })
+}
+
+fn fallback_document_descriptor(attachment: &DocumentAttachmentInput) -> DocumentDescriptor {
+    DocumentDescriptor {
+        name: attachment.name.clone(),
+        mime: normalized_document_mime(attachment),
+        size_bytes: 0,
+        sha256: "unavailable".to_string(),
+    }
+}
+
+fn prepare_document_attachment(
+    attachment: &DocumentAttachmentInput,
+) -> Result<PreparedDocumentAttachment, DocumentTransformError> {
+    let bytes = STANDARD
+        .decode(attachment.content_base64.as_bytes())
+        .map_err(|error| DocumentTransformError::InvalidBase64 {
+            name: attachment.name.clone(),
+            reason: error.to_string(),
+        })?;
+    let mime = normalized_document_mime(attachment);
+    let sha256 = format!("{:x}", Sha256::digest(&bytes));
+
+    Ok(PreparedDocumentAttachment {
+        descriptor: DocumentDescriptor {
+            name: attachment.name.clone(),
+            mime,
+            size_bytes: bytes.len(),
+            sha256,
+        },
+        bytes,
+    })
+}
+
+fn normalized_document_mime(attachment: &DocumentAttachmentInput) -> String {
+    if let Some(mime) = attachment.mime.as_deref() {
+        let trimmed = mime.trim().to_ascii_lowercase();
+        if !trimmed.is_empty() {
+            return trimmed;
+        }
+    }
+
+    match attachment
+        .name
+        .rsplit('.')
+        .next()
+        .map(|ext| ext.trim().to_ascii_lowercase())
+        .as_deref()
+    {
+        Some("txt") => DOCUMENT_MIME_TEXT_PLAIN.to_string(),
+        Some("md") | Some("markdown") => DOCUMENT_MIME_TEXT_MARKDOWN.to_string(),
+        Some("pdf") => DOCUMENT_MIME_APPLICATION_PDF.to_string(),
+        Some("docx") => DOCUMENT_MIME_DOCX.to_string(),
+        Some("pptx") => DOCUMENT_MIME_PPTX.to_string(),
+        _ => attachment
+            .mime
+            .as_deref()
+            .map(str::trim)
+            .filter(|mime| !mime.is_empty())
+            .unwrap_or("application/octet-stream")
+            .to_ascii_lowercase(),
+    }
+}
+
+fn extract_document_text(
+    attachment: &PreparedDocumentAttachment,
+) -> Result<String, DocumentTransformError> {
+    match attachment.descriptor.mime.as_str() {
+        DOCUMENT_MIME_TEXT_PLAIN | DOCUMENT_MIME_TEXT_MARKDOWN => {
+            String::from_utf8(attachment.bytes.clone()).map_err(|error| {
+                DocumentTransformError::InvalidUtf8 {
+                    name: attachment.descriptor.name.clone(),
+                    reason: error.to_string(),
+                }
+            })
+        }
+        DOCUMENT_MIME_APPLICATION_PDF => pdf_extract::extract_text_from_mem(&attachment.bytes)
+            .map(normalize_extracted_text)
+            .map_err(|error| DocumentTransformError::PdfExtract {
+                name: attachment.descriptor.name.clone(),
+                reason: error.to_string(),
+            }),
+        DOCUMENT_MIME_DOCX => extract_docx_text(attachment),
+        DOCUMENT_MIME_PPTX => extract_pptx_text(attachment),
+        other => Err(DocumentTransformError::UnsupportedType {
+            name: attachment.descriptor.name.clone(),
+            mime: other.to_string(),
+        }),
+    }
+}
+
+fn extract_docx_text(
+    attachment: &PreparedDocumentAttachment,
+) -> Result<String, DocumentTransformError> {
+    extract_zip_xml_text(
+        attachment,
+        &["word/document.xml", "word/header1.xml", "word/footer1.xml"],
+        &["t"],
+    )
+}
+
+fn extract_pptx_text(
+    attachment: &PreparedDocumentAttachment,
+) -> Result<String, DocumentTransformError> {
+    let cursor = Cursor::new(&attachment.bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| DocumentTransformError::ZipParse {
+            name: attachment.descriptor.name.clone(),
+            reason: error.to_string(),
+        })?;
+    let mut slide_names = archive
+        .file_names()
+        .filter(|name| name.starts_with("ppt/slides/slide") && name.ends_with(".xml"))
+        .map(ToOwned::to_owned)
+        .collect::<Vec<_>>();
+    slide_names.sort();
+    if slide_names.is_empty() {
+        return Err(DocumentTransformError::MissingArchivePath {
+            name: attachment.descriptor.name.clone(),
+            path: "ppt/slides/slide*.xml".to_string(),
+        });
+    }
+
+    let mut slides = Vec::with_capacity(slide_names.len());
+    for slide_name in slide_names {
+        let xml = read_zip_entry(
+            &mut archive,
+            &slide_name,
+            attachment.descriptor.name.as_str(),
+        )?;
+        let text = extract_text_nodes(&xml, &["t"], attachment.descriptor.name.as_str())?;
+        let trimmed = text.trim();
+        if !trimmed.is_empty() {
+            slides.push(trimmed.to_string());
+        }
+    }
+
+    Ok(slides.join("\n\n"))
+}
+
+fn extract_zip_xml_text(
+    attachment: &PreparedDocumentAttachment,
+    candidate_paths: &[&str],
+    tag_suffixes: &[&str],
+) -> Result<String, DocumentTransformError> {
+    let cursor = Cursor::new(&attachment.bytes);
+    let mut archive =
+        zip::ZipArchive::new(cursor).map_err(|error| DocumentTransformError::ZipParse {
+            name: attachment.descriptor.name.clone(),
+            reason: error.to_string(),
+        })?;
+
+    let mut sections = Vec::new();
+    let mut found_any = false;
+    for path in candidate_paths {
+        if archive.by_name(path).is_ok() {
+            found_any = true;
+            let xml = read_zip_entry(&mut archive, path, attachment.descriptor.name.as_str())?;
+            let text = extract_text_nodes(&xml, tag_suffixes, attachment.descriptor.name.as_str())?;
+            let trimmed = text.trim();
+            if !trimmed.is_empty() {
+                sections.push(trimmed.to_string());
+            }
+        }
+    }
+
+    if !found_any {
+        return Err(DocumentTransformError::MissingArchivePath {
+            name: attachment.descriptor.name.clone(),
+            path: candidate_paths.join(", "),
+        });
+    }
+
+    Ok(sections.join("\n\n"))
+}
+
+fn read_zip_entry<R: Read + std::io::Seek>(
+    archive: &mut zip::ZipArchive<R>,
+    path: &str,
+    name: &str,
+) -> Result<String, DocumentTransformError> {
+    let mut file = archive
+        .by_name(path)
+        .map_err(|error| DocumentTransformError::ZipParse {
+            name: name.to_string(),
+            reason: error.to_string(),
+        })?;
+    let mut xml = String::new();
+    file.read_to_string(&mut xml)
+        .map_err(|error| DocumentTransformError::ZipParse {
+            name: name.to_string(),
+            reason: error.to_string(),
+        })?;
+    Ok(xml)
+}
+
+fn extract_text_nodes(
+    xml: &str,
+    tag_suffixes: &[&str],
+    name: &str,
+) -> Result<String, DocumentTransformError> {
+    let document =
+        roxmltree::Document::parse(xml).map_err(|error| DocumentTransformError::XmlParse {
+            name: name.to_string(),
+            reason: error.to_string(),
+        })?;
+    let mut text = String::new();
+
+    for node in document.descendants().filter(|node| node.is_element()) {
+        let tag_name = node.tag_name().name();
+        if tag_suffixes.iter().any(|suffix| tag_name.ends_with(suffix)) {
+            if let Some(content) = node.text() {
+                text.push_str(content);
+            }
+        } else if tag_name == "p" && !text.ends_with('\n') {
+            text.push('\n');
+        }
+    }
+
+    Ok(normalize_extracted_text(text))
+}
+
+fn normalize_extracted_text(text: String) -> String {
+    let mut normalized = String::new();
+    let mut previous_blank = false;
+
+    for line in text.lines() {
+        let trimmed = line.trim_end();
+        if trimmed.is_empty() {
+            if !previous_blank && !normalized.is_empty() {
+                normalized.push('\n');
+            }
+            previous_blank = true;
+            continue;
+        }
+        if !normalized.is_empty() {
+            normalized.push('\n');
+        }
+        normalized.push_str(trimmed);
+        previous_blank = false;
+    }
+
+    normalized.trim().to_string()
+}
+
+fn format_document_prompt_text(document: &DocumentDescriptor, text: &str) -> String {
+    format!(
+        "[Document: {name}]\nMIME: {mime}\nSHA256: {sha256}\n\n{text}",
+        name = document.name,
+        mime = document.mime,
+        sha256 = document.sha256,
+    )
+}
+
+fn format_document_prompt_failure(document: &DocumentDescriptor, error: &str) -> String {
+    format!(
+        "[Document Parse Failure: {name}]\nMIME: {mime}\nSHA256: {sha256}\nReason: {error}",
+        name = document.name,
+        mime = document.mime,
+        sha256 = document.sha256,
+        error = error,
+    )
+}
+
+fn build_user_node(
+    conversation_id: ConversationId,
+    parent_node_id: Option<NodeId>,
+    text: &str,
+    attachments: &[DocumentAttachmentInput],
+    now: chrono::DateTime<Utc>,
+) -> Result<NodeBundle, SessionError> {
+    let node_id = NodeId::new_v4();
+    let variant_id = Uuid::new_v4();
+    let parts = build_user_parts(variant_id, text, attachments)?;
+
+    Ok(NodeBundle {
+        node: MessageNode {
+            id: node_id,
+            conversation_id,
+            parent_node_id,
+            role: MessageRole::User,
+            select_index: 0,
+            created_at: now,
+            updated_at: now,
+        },
+        variants: vec![VariantBundle {
+            variant: MessageVariant {
+                id: variant_id,
+                node_id,
+                status: VariantStatus::Completed,
+                model_id: None,
+                usage_json: None,
+                created_at: now,
+                finished_at: Some(now),
+            },
+            parts,
+        }],
+    })
+}
+
+fn build_user_parts(
+    variant_id: Uuid,
+    text: &str,
+    attachments: &[DocumentAttachmentInput],
+) -> Result<Vec<MessagePart>, SessionError> {
+    let mut parts = Vec::new();
+
+    if !text.is_empty() {
+        parts.push(MessagePart {
+            id: Uuid::new_v4(),
+            variant_id,
+            order_index: 0,
+            payload: MessagePartPayload::Text {
+                text: text.to_string(),
+            },
+        });
+    }
+
+    for attachment in attachments {
+        let prepared = prepare_document_attachment(attachment)?;
+        parts.push(MessagePart {
+            id: Uuid::new_v4(),
+            variant_id,
+            order_index: parts.len() as i32,
+            payload: MessagePartPayload::Document {
+                file_name: prepared.descriptor.name.clone(),
+                url: attachment_document_url(&prepared.descriptor),
+                mime: Some(prepared.descriptor.mime.clone()),
+            },
+        });
+    }
+
+    Ok(parts)
+}
+
+fn attachment_document_url(document: &DocumentDescriptor) -> String {
+    format!("attachment://sha256/{}", document.sha256)
+}
+
+fn build_assistant_node(
+    conversation_id: ConversationId,
+    parent_node_id: Option<NodeId>,
+    text: &str,
+    now: chrono::DateTime<Utc>,
+    status: VariantStatus,
+    finished_at: Option<chrono::DateTime<Utc>>,
+) -> NodeBundle {
+    let node_id = NodeId::new_v4();
+    NodeBundle {
+        node: MessageNode {
+            id: node_id,
+            conversation_id,
+            parent_node_id,
+            role: MessageRole::Assistant,
+            select_index: 0,
+            created_at: now,
+            updated_at: now,
+        },
+        variants: vec![build_assistant_variant(
+            node_id,
+            text,
+            now,
+            status,
+            finished_at,
+        )],
+    }
+}
+
+fn finalize_assistant_node(bundle: &NodeBundle, finished_at: chrono::DateTime<Utc>) -> NodeBundle {
+    terminal_assistant_node(bundle, VariantStatus::Completed, finished_at)
+}
+
+fn terminal_assistant_node(
+    bundle: &NodeBundle,
+    status: VariantStatus,
+    finished_at: chrono::DateTime<Utc>,
+) -> NodeBundle {
+    let mut finalized = bundle.clone();
+    if let Some(selected_variant) = finalized.variants.get_mut(finalized.node.select_index) {
+        selected_variant.variant.status = status;
+        selected_variant.variant.finished_at = Some(finished_at);
+    }
+    finalized
+}
+
+fn build_assistant_variant(
+    node_id: NodeId,
+    text: &str,
+    now: chrono::DateTime<Utc>,
+    status: VariantStatus,
+    finished_at: Option<chrono::DateTime<Utc>>,
+) -> VariantBundle {
+    let variant_id = Uuid::new_v4();
+    VariantBundle {
+        variant: MessageVariant {
+            id: variant_id,
+            node_id,
+            status,
+            model_id: Some("rust-session-engine".to_string()),
+            usage_json: None,
+            created_at: now,
+            finished_at,
+        },
+        parts: vec![
+            MessagePart {
+                id: Uuid::new_v4(),
+                variant_id,
+                order_index: 0,
+                payload: MessagePartPayload::Reasoning {
+                    text: format!("正在基于用户消息生成回复：{}", truncate_title(text, &[])),
+                },
+            },
+            MessagePart {
+                id: Uuid::new_v4(),
+                variant_id,
+                order_index: 1,
+                payload: MessagePartPayload::Text {
+                    text: assistant_text_reply(text),
+                },
+            },
+        ],
+    }
+}
+
+fn finalize_selected_variant_in_place(
+    bundle: &mut NodeBundle,
+    finished_at: chrono::DateTime<Utc>,
+) -> Result<(), SessionError> {
+    let conversation_id = bundle.node.conversation_id;
+    let node_id = bundle.node.id;
+    let select_index = bundle.node.select_index;
+    let variant_len = bundle.variants.len();
+    let selected_variant = bundle.variants.get_mut(select_index).ok_or_else(|| {
+        SessionError::InvalidConversationState {
+            conversation_id,
+            reason: format!(
+                "node {} select_index {} out of range for {} variants",
+                node_id, select_index, variant_len
+            ),
+        }
+    })?;
+    selected_variant.variant.status = VariantStatus::Completed;
+    selected_variant.variant.finished_at = Some(finished_at);
+    Ok(())
+}
+
+fn inflight_conversation_projection(conversation: &Conversation) -> Conversation {
+    let mut projection = conversation.clone();
+    projection.generation_state = GenerationState::Started;
+    projection
+}
+
+pub fn selected_branch_snapshot_nodes(
+    stored: &StoredConversation,
+) -> Result<Vec<SnapshotNode>, SessionError> {
+    let Some(mut current_cursor) = validated_current_cursor(stored)? else {
+        return Ok(Vec::new());
+    };
+    let node_index = stored_node_index(stored);
+    let mut ordered_branch = Vec::new();
+    let mut visited = BTreeSet::new();
+
+    loop {
+        if !visited.insert(current_cursor) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!("cycle detected while resolving branch at node {current_cursor}"),
+            });
+        }
+        let bundle = node_index.get(&current_cursor).ok_or_else(|| {
+            SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!("node {current_cursor} missing from stored conversation"),
+            }
+        })?;
+        if bundle.node.conversation_id != stored.conversation.id {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!(
+                    "node {current_cursor} belongs to conversation {}",
+                    bundle.node.conversation_id
+                ),
+            });
+        }
+        ordered_branch.push(selected_node_projection(bundle)?);
+
+        match bundle.node.parent_node_id {
+            Some(parent_node_id) => current_cursor = parent_node_id,
+            None => break,
+        }
+    }
+
+    ordered_branch.reverse();
+    Ok(ordered_branch)
+}
+
+fn validated_current_cursor(stored: &StoredConversation) -> Result<Option<NodeId>, SessionError> {
+    let Some(current_cursor) = stored.conversation.current_cursor else {
+        return Ok(None);
+    };
+    let node_index = stored_node_index(stored);
+    let Some(bundle) = node_index.get(&current_cursor) else {
+        return Err(SessionError::InvalidConversationState {
+            conversation_id: stored.conversation.id,
+            reason: format!("current_cursor {current_cursor} does not resolve to a stored node"),
+        });
+    };
+    if bundle.node.conversation_id != stored.conversation.id {
+        return Err(SessionError::InvalidConversationState {
+            conversation_id: stored.conversation.id,
+            reason: format!(
+                "current_cursor {current_cursor} resolves to node in conversation {}",
+                bundle.node.conversation_id
+            ),
+        });
+    }
+    let has_child = stored.nodes.iter().any(|candidate| {
+        candidate.node.conversation_id == stored.conversation.id
+            && candidate.node.parent_node_id == Some(current_cursor)
+    });
+    if has_child {
+        return Err(SessionError::InvalidConversationState {
+            conversation_id: stored.conversation.id,
+            reason: format!("current_cursor {current_cursor} is not a leaf node"),
+        });
+    }
+    Ok(Some(current_cursor))
+}
+
+fn selected_branch_node_ids(stored: &StoredConversation) -> Result<BTreeSet<NodeId>, SessionError> {
+    let Some(mut current_cursor) = validated_current_cursor(stored)? else {
+        return Ok(BTreeSet::new());
+    };
+    let node_index = stored_node_index(stored);
+    let mut ordered_branch = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+
+    loop {
+        if !visited.insert(current_cursor) {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!("cycle detected while resolving branch at node {current_cursor}"),
+            });
+        }
+        let bundle = node_index.get(&current_cursor).ok_or_else(|| {
+            SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!("node {current_cursor} missing from stored conversation"),
+            }
+        })?;
+        if bundle.node.conversation_id != stored.conversation.id {
+            return Err(SessionError::InvalidConversationState {
+                conversation_id: stored.conversation.id,
+                reason: format!(
+                    "node {current_cursor} belongs to conversation {}",
+                    bundle.node.conversation_id
+                ),
+            });
+        }
+        ordered_branch.insert(current_cursor);
+
+        match bundle.node.parent_node_id {
+            Some(parent_node_id) => current_cursor = parent_node_id,
+            None => break,
+        }
+    }
+
+    Ok(ordered_branch)
+}
+
+fn stored_node_index(stored: &StoredConversation) -> BTreeMap<NodeId, &NodeBundle> {
+    stored
+        .nodes
+        .iter()
+        .map(|bundle| (bundle.node.id, bundle))
+        .collect()
+}
+
+fn replace_node_bundle(
+    stored: &mut StoredConversation,
+    node_id: NodeId,
+    replacement: NodeBundle,
+) -> Result<(), SessionError> {
+    let position = stored
+        .nodes
+        .iter()
+        .position(|bundle| bundle.node.id == node_id)
+        .ok_or(SessionError::NodeNotFound {
+            conversation_id: stored.conversation.id,
+            node_id,
+        })?;
+    stored.nodes[position] = replacement;
+    Ok(())
+}
+
+fn selected_variant(bundle: &NodeBundle) -> Result<&VariantBundle, SessionError> {
+    bundle
+        .variants
+        .get(bundle.node.select_index)
+        .ok_or_else(|| SessionError::InvalidConversationState {
+            conversation_id: bundle.node.conversation_id,
+            reason: format!(
+                "node {} select_index {} out of range for {} variants",
+                bundle.node.id,
+                bundle.node.select_index,
+                bundle.variants.len()
+            ),
+        })
+}
+
+fn selected_node_projection(bundle: &NodeBundle) -> Result<SnapshotNode, SessionError> {
+    let selected_variant = selected_variant(bundle)?.clone();
+    validate_variant_parts(
+        bundle.node.conversation_id,
+        bundle.node.id,
+        &selected_variant.parts,
+    )?;
+
+    Ok(SnapshotNode {
+        node_id: bundle.node.id,
+        parent_node_id: bundle.node.parent_node_id,
+        role: bundle.node.role,
+        created_at: bundle.node.created_at,
+        updated_at: bundle.node.updated_at,
+        selected_variant: SnapshotVariant {
+            variant_id: selected_variant.variant.id,
+            status: selected_variant.variant.status,
+            model_id: selected_variant.variant.model_id.clone(),
+            usage_json: selected_variant.variant.usage_json.clone(),
+            created_at: selected_variant.variant.created_at,
+            finished_at: selected_variant.variant.finished_at,
+            parts: selected_variant
+                .parts
+                .iter()
+                .map(SnapshotPart::from)
+                .collect(),
+        },
+    })
+}
+
+fn streaming_delta_parts(bundle: &NodeBundle) -> Result<Vec<MessagePart>, SessionError> {
+    let selected_variant = selected_variant(bundle)?;
+    validate_variant_parts(
+        bundle.node.conversation_id,
+        bundle.node.id,
+        &selected_variant.parts,
+    )?;
+
+    Ok(selected_variant.parts.clone())
+}
+
+fn validate_node_bundle_parts(bundle: &NodeBundle) -> Result<(), SessionError> {
+    for variant in &bundle.variants {
+        validate_variant_parts(bundle.node.conversation_id, bundle.node.id, &variant.parts)?;
+    }
+    Ok(())
+}
+
+fn validate_variant_parts(
+    conversation_id: ConversationId,
+    node_id: NodeId,
+    parts: &[MessagePart],
+) -> Result<(), SessionError> {
+    MessagePart::validate_sequence(parts).map_err(|error| SessionError::InvalidConversationState {
+        conversation_id,
+        reason: format!("node {node_id} has invalid part sequence: {error}"),
+    })
+}
+
+fn user_parts_match_request(
+    bundle: &NodeBundle,
+    text: &str,
+    attachments: &[DocumentAttachmentInput],
+) -> Result<bool, SessionError> {
+    let selected_variant = selected_variant(bundle)?;
+    let candidate = build_user_parts(Uuid::nil(), text, attachments)?;
+
+    Ok(selected_variant
+        .parts
+        .iter()
+        .map(message_part_signature)
+        .collect::<Vec<_>>()
+        == candidate
+            .iter()
+            .map(message_part_signature)
+            .collect::<Vec<_>>())
+}
+
+fn regenerate_prompt_text(
+    stored: &StoredConversation,
+    node_id: NodeId,
+) -> Result<String, SessionError> {
+    let node_index = stored_node_index(stored);
+    let assistant_bundle = node_index
+        .get(&node_id)
+        .copied()
+        .ok_or(SessionError::NodeNotFound {
+            conversation_id: stored.conversation.id,
+            node_id,
+        })?;
+    let Some(parent_node_id) = assistant_bundle.node.parent_node_id else {
+        return Ok(String::new());
+    };
+    let parent_bundle = node_index.get(&parent_node_id).copied().ok_or_else(|| {
+        SessionError::InvalidConversationState {
+            conversation_id: stored.conversation.id,
+            reason: format!("assistant node {node_id} parent {parent_node_id} is missing"),
+        }
+    })?;
+    let selected_variant = selected_variant(parent_bundle)?;
+
+    Ok(selected_variant
+        .parts
+        .iter()
+        .filter_map(part_prompt_text)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string())
+}
+
+fn part_prompt_text(part: &MessagePart) -> Option<String> {
+    match &part.payload {
+        MessagePartPayload::Text { text } | MessagePartPayload::Reasoning { text } => {
+            Some(text.clone())
+        }
+        MessagePartPayload::Document {
+            file_name,
+            url,
+            mime,
+        } => Some(
+            [Some(file_name.clone()), Some(url.clone()), mime.clone()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        MessagePartPayload::Image { alt, url, mime } => Some(
+            [alt.clone(), Some(url.clone()), mime.clone()]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("\n"),
+        ),
+        MessagePartPayload::ToolCall {
+            tool_name,
+            arguments_json,
+            ..
+        } => Some(format!("{tool_name}\n{arguments_json}")),
+        MessagePartPayload::ToolResult {
+            tool_name,
+            result_json,
+            ..
+        } => Some(format!("{tool_name}\n{result_json}")),
+        MessagePartPayload::Error { message } => Some(message.clone()),
+        _ => None,
+    }
+    .filter(|text| !text.is_empty())
+}
+
+fn message_part_signature(part: &MessagePart) -> (i32, MessagePartPayload) {
+    (part.order_index, part.payload.clone())
+}
+
+pub fn demo_conversation(topic_id: TopicId, agent_id: Uuid) -> (Conversation, NodeBundle) {
+    let conversation_id = ConversationId::new_v4();
+    let node_id = NodeId::new_v4();
+    let variant_id = Uuid::new_v4();
+    let now = Utc::now();
+
+    let conversation = Conversation {
+        id: conversation_id,
+        topic_id,
+        agent_id,
+        title: "新对话".to_string(),
+        summary: Some("Rust engine demo session".to_string()),
+        pinned: false,
+        generation_state: GenerationState::Streaming,
+        current_cursor: Some(node_id),
+        created_at: now,
+        updated_at: now,
+    };
+
+    let node = MessageNode {
+        id: node_id,
+        conversation_id,
+        parent_node_id: None,
+        role: MessageRole::Assistant,
+        select_index: 0,
+        created_at: now,
+        updated_at: now,
+    };
+
+    let variant = MessageVariant {
+        id: variant_id,
+        node_id,
+        status: VariantStatus::Streaming,
+        model_id: Some("demo-model".to_string()),
+        usage_json: None,
+        created_at: now,
+        finished_at: None,
+    };
+
+    let part = MessagePart {
+        id: Uuid::new_v4(),
+        variant_id,
+        order_index: 0,
+        payload: MessagePartPayload::Reasoning {
+            text: "正在整理回答结构…".to_string(),
+        },
+    };
+
+    let bundle = NodeBundle {
+        node,
+        variants: vec![VariantBundle {
+            variant,
+            parts: vec![part],
+        }],
+    };
+
+    (conversation, bundle)
+}
+
+pub fn demo_stream(
+    conversation: Conversation,
+    node_bundle: NodeBundle,
+) -> Vec<EventEnvelope<ChatEvent>> {
+    let node_id = node_bundle.node.id;
+    let variant_id = node_bundle.variants[0].variant.id;
+
+    vec![
+        EventEnvelope::new(
+            Some(conversation.id),
+            ChatEvent::ConversationSnapshot {
+                conversation: SnapshotConversation::from(&conversation),
+                branch: SnapshotBranch {
+                    cursor_node_id: conversation.current_cursor,
+                    nodes: vec![
+                        selected_node_projection(&node_bundle).expect("demo node projection"),
+                    ],
+                },
+            },
+        ),
+        EventEnvelope::new(
+            Some(conversation.id),
+            ChatEvent::GenerationStarted {
+                node_id,
+                variant_id,
+            },
+        ),
+        EventEnvelope::new(
+            Some(conversation.id),
+            ChatEvent::GenerationPartDelta {
+                node_id,
+                variant_id,
+                appended_parts: vec![MessagePart {
+                    id: Uuid::new_v4(),
+                    variant_id,
+                    order_index: 1,
+                    payload: MessagePartPayload::Text {
+                        text: "你好，这是一条来自 Rust Engine 的 demo 流式消息。".to_string(),
+                    },
+                }],
+            },
+        ),
+        EventEnvelope::new(
+            Some(conversation.id),
+            ChatEvent::GenerationCompleted {
+                node_id,
+                variant_id,
+            },
+        ),
+    ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::{
+        collections::BTreeMap,
+        env, fs,
+        io::{Cursor, Write},
+    };
+    use vcpmobile_domain::AgentId;
+    use vcpmobile_protocol::{
+        PairingDevicePlatform, PairingExchangeFailureStatus, PairingExchangeRequest,
+    };
+
+    fn test_engine() -> SessionEngine {
+        let path = env::temp_dir().join(format!("vcpmobile-session-test-{}.json", Uuid::new_v4()));
+        let store = FileStore::new(path);
+        SessionEngine::new(store, Uuid::new_v4(), Uuid::new_v4())
+    }
+
+    fn seed_pairing(engine: &mut SessionEngine, expires_at: DateTime<Utc>) {
+        engine
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at,
+            })
+            .expect("seed pairing session");
+    }
+
+    #[test]
+    fn start_stream_session_persists_requesting_snapshot_before_dispatch() {
+        let mut engine = test_engine();
+
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+
+        assert_eq!(started.initial_events.len(), 1);
+        assert_eq!(
+            started.initial_events[0].event_name,
+            "conversation_snapshot"
+        );
+
+        let stored = engine
+            .snapshot_for(started.conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.conversation.generation_state,
+            GenerationState::Requesting
+        );
+
+        let snapshot = match &started.initial_events[0].payload {
+            ChatEvent::ConversationSnapshot {
+                conversation,
+                branch,
+            } => (conversation, branch),
+            other => panic!("expected conversation_snapshot, got {other:?}"),
+        };
+        assert_eq!(snapshot.0.generation_state, GenerationState::Requesting);
+        assert_eq!(
+            snapshot.1.cursor_node_id,
+            stored.conversation.current_cursor
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn poll_stream_event_advances_started_streaming_and_completed_deterministically() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+        let conversation_id = started.conversation_id;
+
+        let first = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll started event")
+            .expect("started event");
+        assert_eq!(first.event_name, "generation_started");
+
+        let second = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll started meta")
+            .expect("started meta");
+        match second.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Started);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        let third = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll delta")
+            .expect("delta");
+        assert_eq!(third.event_name, "generation_part_delta");
+
+        let fourth = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll streaming meta")
+            .expect("streaming meta");
+        match fourth.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Streaming);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        let fifth = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll completed upsert")
+            .expect("completed upsert");
+        match fifth.payload {
+            ChatEvent::ConversationNodeUpsert { branch } => {
+                assert_eq!(
+                    branch.node.selected_variant.status,
+                    VariantStatus::Completed
+                );
+            }
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        }
+
+        let sixth = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll completed terminal")
+            .expect("completed terminal");
+        assert_eq!(sixth.event_name, "generation_completed");
+
+        let seventh = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll completed meta")
+            .expect("completed meta");
+        match seventh.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Completed);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        assert!(
+            engine
+                .poll_stream_event(conversation_id)
+                .expect("poll after completion")
+                .is_none(),
+            "stream should be exhausted after terminal meta update"
+        );
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load stored conversation")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.conversation.generation_state,
+            GenerationState::Completed
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn cancel_stream_session_enqueues_cancelled_terminal_events_for_live_stream() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+        let conversation_id = started.conversation_id;
+
+        engine
+            .cancel_stream_session(conversation_id, Some("cancelled by test".to_string()))
+            .expect("cancel active stream");
+
+        let first = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll cancelled upsert")
+            .expect("cancelled upsert");
+        match first.payload {
+            ChatEvent::ConversationNodeUpsert { branch } => {
+                assert_eq!(
+                    branch.node.selected_variant.status,
+                    VariantStatus::Cancelled
+                );
+            }
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        }
+
+        let second = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll cancelled terminal")
+            .expect("cancelled terminal");
+        match second.payload {
+            ChatEvent::GenerationCancelled { message, .. } => {
+                assert_eq!(message.as_deref(), Some("cancelled by test"));
+            }
+            other => panic!("expected generation_cancelled, got {other:?}"),
+        }
+
+        let third = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll cancelled meta")
+            .expect("cancelled meta");
+        match third.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Cancelled);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        assert!(
+            engine
+                .poll_stream_event(conversation_id)
+                .expect("poll after cancellation")
+                .is_none(),
+            "cancelled stream should be exhausted after terminal meta update"
+        );
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load stored conversation")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.conversation.generation_state,
+            GenerationState::Cancelled
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn interrupt_stream_session_uses_default_interrupt_message() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start stream session");
+        let conversation_id = started.conversation_id;
+
+        engine
+            .interrupt_stream_session(conversation_id, None)
+            .expect("interrupt active stream");
+
+        let first = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll interrupted upsert")
+            .expect("interrupted upsert");
+        match first.payload {
+            ChatEvent::ConversationNodeUpsert { branch } => {
+                assert_eq!(
+                    branch.node.selected_variant.status,
+                    VariantStatus::Cancelled
+                );
+            }
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        }
+
+        let second = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll interrupted terminal")
+            .expect("interrupted terminal");
+        match second.payload {
+            ChatEvent::GenerationCancelled { message, .. } => {
+                assert_eq!(message.as_deref(), Some("interrupted by client"));
+            }
+            other => panic!("expected generation_cancelled, got {other:?}"),
+        }
+
+        let third = engine
+            .poll_stream_event(conversation_id)
+            .expect("poll interrupted meta")
+            .expect("interrupted meta");
+        match third.payload {
+            ChatEvent::ConversationMetaUpdate { conversation } => {
+                assert_eq!(conversation.generation_state, GenerationState::Cancelled);
+            }
+            other => panic!("expected conversation_meta_update, got {other:?}"),
+        }
+
+        assert!(
+            engine
+                .poll_stream_event(conversation_id)
+                .expect("poll after interrupt")
+                .is_none(),
+            "interrupted stream should be exhausted after terminal meta update"
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn start_stream_session_rejects_second_send_while_generation_is_active() {
+        let mut engine = test_engine();
+        let started = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("start first stream");
+
+        let error = engine
+            .start_stream_session(SessionSendRequest {
+                conversation_id: Some(started.conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect_err("second send must be rejected while active");
+
+        assert!(matches!(
+            error,
+            SessionError::ActiveGenerationExists { conversation_id }
+                if conversation_id == started.conversation_id
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    fn attachment(name: &str, mime: Option<&str>, bytes: &[u8]) -> DocumentAttachmentInput {
+        DocumentAttachmentInput {
+            name: name.to_string(),
+            mime: mime.map(str::to_string),
+            content_base64: STANDARD.encode(bytes),
+        }
+    }
+
+    fn build_zip(entries: &[(&str, &str)]) -> Vec<u8> {
+        let cursor = Cursor::new(Vec::new());
+        let mut writer = zip::ZipWriter::new(cursor);
+        let options = zip::write::SimpleFileOptions::default()
+            .compression_method(zip::CompressionMethod::Stored);
+
+        for (path, body) in entries {
+            writer.start_file(path, options).expect("start zip file");
+            writer
+                .write_all(body.as_bytes())
+                .expect("write zip file body");
+        }
+
+        writer.finish().expect("finish zip").into_inner()
+    }
+
+    fn cleanup_engine_store(engine: &SessionEngine, legacy_path: Option<&std::path::Path>) {
+        fs::remove_file(engine.store().path()).ok();
+        if let Some(legacy_path) = legacy_path {
+            fs::remove_file(legacy_path).ok();
+        }
+    }
+
+    fn placeholder_resolution_fixture() -> (&'static str, Vec<PromptPlaceholderValue>) {
+        (
+            "{{char}} / {{user}} / {{room}} / {{plugin_room}} / {{app_name}} / {{sticker_wave}} / {{missing}}",
+            vec![
+                PromptPlaceholderValue::new(
+                    "plugin_room",
+                    "plugin room",
+                    PlaceholderCategory::Plugin,
+                    PlaceholderSource::Plugin,
+                ),
+                PromptPlaceholderValue::new(
+                    "sticker_wave",
+                    ":wave:",
+                    PlaceholderCategory::StickerMedia,
+                    PlaceholderSource::StickerPack,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "static user",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "app_name",
+                    "vcpmobile",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "char",
+                    "Analyst",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentProfile,
+                ),
+                PromptPlaceholderValue::new(
+                    "room",
+                    "team room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Conversation,
+                ),
+                PromptPlaceholderValue::new(
+                    "room",
+                    "fallback room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Runtime,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "agent user",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
+                ),
+            ],
+        )
+    }
+
+    #[test]
+    fn resolve_prompt_preview_fixture_preserves_precedence_provenance_and_unresolved_tokens() {
+        let (raw_prompt, placeholders) = placeholder_resolution_fixture();
+        let preview = resolve_prompt_preview(raw_prompt, &placeholders);
+
+        assert_eq!(
+            preview.resolved_prompt,
+            "Analyst / agent user / team room / plugin room / vcpmobile / {{sticker_wave}} / {{missing}}"
+        );
+        assert_eq!(preview.unresolved_tokens, vec!["missing".to_string()]);
+        assert!(preview.partial_tokens.is_empty());
+        assert_eq!(
+            preview
+                .records
+                .iter()
+                .map(|record| {
+                    (
+                        record.key.as_str(),
+                        record.category,
+                        record.source,
+                        record.status,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "char",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentProfile,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "user",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Conversation,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Runtime,
+                    PromptResolutionStatus::Shadowed,
+                ),
+                (
+                    "plugin_room",
+                    PlaceholderCategory::Plugin,
+                    PlaceholderSource::Plugin,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "user",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                    PromptResolutionStatus::Shadowed,
+                ),
+                (
+                    "app_name",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "sticker_wave",
+                    PlaceholderCategory::StickerMedia,
+                    PlaceholderSource::StickerPack,
+                    PromptResolutionStatus::Deferred,
+                ),
+            ]
+        );
+    }
+
+    fn docx_bytes() -> Vec<u8> {
+        build_zip(&[(
+            "word/document.xml",
+            r#"<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"><w:body><w:p><w:r><w:t>Hello DOCX</w:t></w:r></w:p><w:p><w:r><w:t>Second line</w:t></w:r></w:p></w:body></w:document>"#,
+        )])
+    }
+
+    fn pptx_bytes() -> Vec<u8> {
+        build_zip(&[
+            (
+                "ppt/slides/slide1.xml",
+                r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Hello PPTX</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+            (
+                "ppt/slides/slide2.xml",
+                r#"<p:sld xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main"><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:r><a:t>Second slide</a:t></a:r></a:p></p:txBody></p:sp></p:spTree></p:cSld></p:sld>"#,
+            ),
+        ])
+    }
+
+    fn pdf_bytes() -> Vec<u8> {
+        STANDARD
+            .decode("JVBERi0xLjQKMSAwIG9iago8PCAvVHlwZSAvQ2F0YWxvZyAvUGFnZXMgMiAwIFIgPj4KZW5kb2JqCjIgMCBvYmoKPDwgL1R5cGUgL1BhZ2VzIC9LaWRzIFszIDAgUl0gL0NvdW50IDEgPj4KZW5kb2JqCjMgMCBvYmoKPDwgL1R5cGUgL1BhZ2UgL1BhcmVudCAyIDAgUiAvTWVkaWFCb3ggWzAgMCAzMDAgMTQ0XSAvQ29udGVudHMgNCAwIFIgL1Jlc291cmNlcyA8PCAvRm9udCA8PCAvRjEgNSAwIFIgPj4gPj4gPj4KZW5kb2JqCjQgMCBvYmoKPDwgL0xlbmd0aCA0MSA+PgpzdHJlYW0KQlQKL0YxIDI0IFRmCjcyIDEwMCBUZAooSGVsbG8gUERGKSBUagpFVAoKZW5kc3RyZWFtCmVuZG9iago1IDAgb2JqCjw8IC9UeXBlIC9Gb250IC9TdWJ0eXBlIC9UeXBlMSAvQmFzZUZvbnQgL0hlbHZldGljYSA+PgplbmRvYmoKeHJlZgowIDYKMDAwMDAwMDAwMCA2NTUzNSBmIAowMDAwMDAwMDA5IDAwMDAwIG4gCjAwMDAwMDAwNTggMDAwMDAgbiAKMDAwMDAwMDExNSAwMDAwMCBuIAowMDAwMDAwMjQxIDAwMDAwIG4gCjAwMDAwMDAzMzIgMDAwMDAgbiAKdHJhaWxlcgo8PCAvU2l6ZSA2IC9Sb290IDEgMCBSID4+CnN0YXJ0eHJlZgo0MDIKJSVFT0YK")
+            .expect("decode pdf fixture")
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_plain_text_with_file_framing() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "notes.txt",
+                Some(DOCUMENT_MIME_TEXT_PLAIN),
+                b"hello\nworld",
+            )])
+            .expect("transform plain text");
+
+        assert_eq!(output.items.len(), 1);
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert_eq!(
+            output.items[0].extracted_char_count,
+            "hello\nworld".chars().count()
+        );
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("[Document: notes.txt]")
+        );
+        assert!(output.items[0].prompt_text.contains("MIME: text/plain"));
+        assert!(output.items[0].prompt_text.contains("hello\nworld"));
+        assert_eq!(output.combined_prompt_text, output.items[0].prompt_text);
+    }
+
+    #[test]
+    fn transform_document_prompt_surfaces_parse_failures_without_dropping_documents() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![DocumentAttachmentInput {
+                name: "broken.pdf".to_string(),
+                mime: Some(DOCUMENT_MIME_APPLICATION_PDF.to_string()),
+                content_base64: "%%%".to_string(),
+            }])
+            .expect("transform should return parse_failed output");
+
+        assert_eq!(output.items.len(), 1);
+        assert_eq!(
+            output.items[0].status,
+            DocumentPromptTransformStatus::ParseFailed
+        );
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("[Document Parse Failure: broken.pdf]")
+        );
+        assert!(
+            output.items[0]
+                .error
+                .as_deref()
+                .expect("parse failure error")
+                .contains("invalid base64 payload")
+        );
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_docx_body_text() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "notes.docx",
+                Some(DOCUMENT_MIME_DOCX),
+                &docx_bytes(),
+            )])
+            .expect("transform docx");
+
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("Hello DOCX\nSecond line")
+        );
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_pptx_slide_text_in_order() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "slides.pptx",
+                Some(DOCUMENT_MIME_PPTX),
+                &pptx_bytes(),
+            )])
+            .expect("transform pptx");
+
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert!(
+            output.items[0]
+                .prompt_text
+                .contains("Hello PPTX\n\nSecond slide")
+        );
+    }
+
+    #[test]
+    fn transform_document_prompt_extracts_pdf_text() {
+        let engine = test_engine();
+        let output = engine
+            .transform_document_prompt(vec![attachment(
+                "paper.pdf",
+                Some(DOCUMENT_MIME_APPLICATION_PDF),
+                &pdf_bytes(),
+            )])
+            .expect("transform pdf");
+
+        assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
+        assert!(output.items[0].prompt_text.contains("Hello PDF"));
+    }
+
+    #[test]
+    fn send_message_without_conversation_id_creates_and_persists_conversation() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("create conversation");
+
+        let conversation_id = events[0]
+            .conversation_id
+            .expect("conversation id in envelope");
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+
+        assert_eq!(stored.conversation.id, conversation_id);
+        assert_eq!(
+            stored.nodes.len(),
+            2,
+            "user + assistant nodes should persist"
+        );
+        assert_eq!(stored.nodes[0].node.parent_node_id, None);
+        assert_eq!(
+            stored.nodes[1].node.parent_node_id,
+            Some(stored.nodes[0].node.id),
+            "assistant node should branch from the new user node"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(stored.nodes[1].node.id),
+            "conversation cursor should track the assistant leaf"
+        );
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_persists_document_parts_on_user_node() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "see attachment".to_string(),
+                attachments: vec![attachment(
+                    "notes.md",
+                    Some(DOCUMENT_MIME_TEXT_MARKDOWN),
+                    b"# Heading\nbody",
+                )],
+            })
+            .expect("send with document attachment");
+
+        let conversation_id = events[0].conversation_id.expect("conversation id");
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let user_parts = &stored.nodes[0].variants[0].parts;
+
+        assert_eq!(user_parts.len(), 2);
+        assert!(matches!(
+            user_parts[0].payload,
+            MessagePartPayload::Text { .. }
+        ));
+        assert!(matches!(
+            user_parts[1].payload,
+            MessagePartPayload::Document { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_accepts_attachment_only_turns() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: String::new(),
+                attachments: vec![attachment(
+                    "paper.pdf",
+                    Some(DOCUMENT_MIME_APPLICATION_PDF),
+                    &pdf_bytes(),
+                )],
+            })
+            .expect("send attachment only turn");
+
+        let conversation_id = events[0].conversation_id.expect("conversation id");
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+
+        assert_eq!(stored.conversation.title, "paper.pdf");
+        assert!(matches!(
+            stored.nodes[0].variants[0].parts[0].payload,
+            MessagePartPayload::Document { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_with_existing_conversation_id_appends_to_same_conversation() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("resume existing conversation");
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+
+        assert_eq!(stored.conversation.id, conversation_id);
+        assert_eq!(stored.nodes.len(), 4, "two turns should yield four nodes");
+        let first_assistant_id = stored.nodes[1].node.id;
+        let second_user = &stored.nodes[2].node;
+        let second_assistant = &stored.nodes[3].node;
+        assert_eq!(
+            second_user.parent_node_id,
+            Some(first_assistant_id),
+            "follow-up user turn should branch from the previous cursor"
+        );
+        assert_eq!(
+            second_assistant.parent_node_id,
+            Some(second_user.id),
+            "assistant reply should branch from the new user node"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(second_assistant.id),
+            "cursor should advance to the latest assistant leaf"
+        );
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_with_missing_conversation_id_fails_strictly() {
+        let engine = test_engine();
+        let missing = ConversationId::new_v4();
+
+        let error = engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(missing),
+                text: "resume".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect_err("missing conversation must fail");
+
+        assert!(matches!(error, SessionError::ConversationNotFound(id) if id == missing));
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_resumes_conversation_migrated_from_legacy_json_store() {
+        let path =
+            env::temp_dir().join(format!("vcpmobile-session-legacy-{}.json", Uuid::new_v4()));
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let user_node_id = NodeId::new_v4();
+        let assistant_node_id = NodeId::new_v4();
+        let user_variant_id = Uuid::new_v4();
+        let assistant_variant_id = Uuid::new_v4();
+        let legacy = vcpmobile_store::StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: TopicId::new_v4(),
+                        agent_id: AgentId::new_v4(),
+                        title: "legacy conversation".to_string(),
+                        summary: Some("resume me".to_string()),
+                        pinned: false,
+                        generation_state: GenerationState::Completed,
+                        current_cursor: Some(assistant_node_id),
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    nodes: vec![
+                        NodeBundle {
+                            node: MessageNode {
+                                id: user_node_id,
+                                conversation_id,
+                                parent_node_id: None,
+                                role: MessageRole::User,
+                                select_index: 0,
+                                created_at: now,
+                                updated_at: now,
+                            },
+                            variants: vec![VariantBundle {
+                                variant: MessageVariant {
+                                    id: user_variant_id,
+                                    node_id: user_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: None,
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: user_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "before resume".to_string(),
+                                    },
+                                }],
+                            }],
+                        },
+                        NodeBundle {
+                            node: MessageNode {
+                                id: assistant_node_id,
+                                conversation_id,
+                                parent_node_id: Some(user_node_id),
+                                role: MessageRole::Assistant,
+                                select_index: 0,
+                                created_at: now,
+                                updated_at: now,
+                            },
+                            variants: vec![VariantBundle {
+                                variant: MessageVariant {
+                                    id: assistant_variant_id,
+                                    node_id: assistant_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: Some("gpt-4.1-mini".to_string()),
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: assistant_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "ready".to_string(),
+                                    },
+                                }],
+                            }],
+                        },
+                    ],
+                },
+            )]),
+            agent_configs: BTreeMap::new(),
+            provider_configs: BTreeMap::new(),
+            ..vcpmobile_store::StoreData::default()
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy store"),
+        )
+        .expect("write legacy store");
+
+        let engine = SessionEngine::new(FileStore::new(&path), Uuid::new_v4(), Uuid::new_v4());
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "resume".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("resume migrated conversation");
+
+        fs::remove_file(&path).ok();
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load sqlite-backed snapshot")
+            .expect("conversation exists");
+        assert_eq!(stored.nodes.len(), 4, "legacy turn should resume in sqlite");
+        assert_eq!(
+            stored.nodes[2].node.parent_node_id,
+            Some(assistant_node_id),
+            "new user turn should continue from migrated cursor"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(stored.nodes[3].node.id),
+            "current cursor should advance on resumed conversation"
+        );
+
+        cleanup_engine_store(&engine, Some(&path));
+    }
+
+    #[test]
+    fn edit_message_creates_new_branch_and_preserves_prior_truth() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("follow-up message");
+
+        let before_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_user_node = before_edit.nodes[2].node.clone();
+        let original_assistant_node = before_edit.nodes[3].node.clone();
+        let original_user_parts = before_edit.nodes[2].variants[0].parts.clone();
+
+        let events = engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: original_user_node.id,
+                text: "second edited".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("edit message");
+
+        let snapshot_nodes = match &events[0].payload {
+            ChatEvent::ConversationSnapshot { branch, .. } => &branch.nodes,
+            other => panic!("expected conversation snapshot, got {other:?}"),
+        };
+        assert_eq!(snapshot_nodes.len(), 4);
+        assert_eq!(
+            snapshot_nodes[2].parent_node_id, original_user_node.parent_node_id,
+            "edited user node should branch from the original parent"
+        );
+        assert_eq!(
+            snapshot_nodes[2].selected_variant.parts[0].payload,
+            MessagePartPayload::Text {
+                text: "second edited".to_string(),
+            }
+        );
+        assert_eq!(
+            snapshot_nodes[3].parent_node_id,
+            Some(snapshot_nodes[2].node_id),
+            "replacement assistant should branch from edited user node"
+        );
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load edited snapshot")
+            .expect("stored conversation");
+        assert_eq!(
+            stored.nodes.len(),
+            6,
+            "edit should add a user+assistant branch"
+        );
+        assert_eq!(
+            stored.nodes[2].variants[0].parts, original_user_parts,
+            "original edited turn must remain unchanged"
+        );
+        assert_eq!(
+            stored.nodes[3].node.parent_node_id,
+            Some(original_user_node.id),
+            "old assistant branch should remain attached to the old user node"
+        );
+        assert_eq!(
+            stored.nodes[3].node.id, original_assistant_node.id,
+            "prior assistant node should be preserved"
+        );
+        assert_eq!(
+            stored.conversation.current_cursor,
+            Some(stored.nodes[5].node.id),
+            "selected branch should move to the replacement assistant leaf"
+        );
+
+        let branch_text = selected_branch_snapshot_nodes(&stored)
+            .expect("selected branch")
+            .into_iter()
+            .flat_map(|node| node.selected_variant.parts.into_iter())
+            .filter_map(|part| match part.payload {
+                MessagePartPayload::Text { text } => Some(text),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            branch_text,
+            vec![
+                "first".to_string(),
+                "Rust Engine 已接收你的消息：first\n\n来源：Rust session engine\n形态：text"
+                    .to_string(),
+                "second edited".to_string(),
+                "Rust Engine 已接收你的消息：second edited\n\n来源：Rust session engine\n形态：text"
+                    .to_string(),
+            ]
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn edit_message_rejects_nodes_outside_selected_branch() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("follow-up message");
+
+        let before_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_user_node_id = before_edit.nodes[2].node.id;
+
+        engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: original_user_node_id,
+                text: "second edited".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first edit");
+
+        let error = engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: original_user_node_id,
+                text: "second edited again".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect_err("old branch node should no longer be editable");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState {
+                conversation_id: id,
+                reason,
+            } if id == conversation_id && reason.contains("is not on the selected branch")
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn edit_message_noop_does_not_create_sibling_branch() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        let before_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_node_count = before_edit.nodes.len();
+        let user_node_id = before_edit.nodes[0].node.id;
+
+        let events = engine
+            .edit_message(SessionEditRequest {
+                conversation_id,
+                node_id: user_node_id,
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("noop edit should succeed");
+
+        assert!(
+            events.is_empty(),
+            "noop edit should not emit mutation events"
+        );
+        let after_edit = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        assert_eq!(after_edit.nodes.len(), original_node_count);
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn regenerate_message_appends_new_variant_and_preserves_prior_variant_for_resume() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        let assistant_node_id = match &first_events[3].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.node_id,
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        };
+        let original_snapshot = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+        let original_bundle = original_snapshot
+            .nodes
+            .iter()
+            .find(|bundle| bundle.node.id == assistant_node_id)
+            .expect("assistant node");
+        let original_variant = original_bundle.variants[0].clone();
+        let store_path = engine.store().path().to_path_buf();
+
+        let events = engine
+            .regenerate_message(SessionRegenerateRequest {
+                conversation_id,
+                node_id: assistant_node_id,
+            })
+            .expect("regenerate assistant node");
+
+        assert_eq!(events.len(), 5);
+        let streaming_upsert = match &events[0].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => &branch.node,
+            other => panic!("expected regenerate upsert, got {other:?}"),
+        };
+        let regenerated_variant_id = streaming_upsert.selected_variant.variant_id;
+        assert_ne!(regenerated_variant_id, original_variant.variant.id);
+        assert_eq!(streaming_upsert.node_id, assistant_node_id);
+        assert_eq!(
+            streaming_upsert.selected_variant.status,
+            VariantStatus::Streaming
+        );
+        assert!(matches!(
+            events[1].payload,
+            ChatEvent::GenerationStarted {
+                node_id,
+                variant_id,
+            } if node_id == assistant_node_id && variant_id == regenerated_variant_id
+        ));
+        assert!(matches!(
+            events[2].payload,
+            ChatEvent::GenerationPartDelta {
+                node_id,
+                variant_id,
+                ..
+            } if node_id == assistant_node_id && variant_id == regenerated_variant_id
+        ));
+        assert!(matches!(
+            events[4].payload,
+            ChatEvent::GenerationCompleted {
+                node_id,
+                variant_id,
+            } if node_id == assistant_node_id && variant_id == regenerated_variant_id
+        ));
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load regenerated snapshot")
+            .expect("stored conversation");
+        let assistant_bundle = stored
+            .nodes
+            .iter()
+            .find(|bundle| bundle.node.id == assistant_node_id)
+            .expect("assistant bundle");
+        assert_eq!(assistant_bundle.variants.len(), 2);
+        assert_eq!(assistant_bundle.node.select_index, 1);
+        assert_eq!(
+            assistant_bundle.variants[0].variant,
+            original_variant.variant
+        );
+        assert_eq!(assistant_bundle.variants[0].parts, original_variant.parts);
+        assert_eq!(
+            assistant_bundle.variants[1].variant.id,
+            regenerated_variant_id
+        );
+        assert_eq!(
+            assistant_bundle.variants[1].variant.status,
+            VariantStatus::Completed
+        );
+        assert_eq!(stored.conversation.current_cursor, Some(assistant_node_id));
+
+        let resumed_engine = SessionEngine::new(
+            FileStore::new(store_path.clone()),
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+        );
+        let resumed = resumed_engine
+            .snapshot_for(conversation_id)
+            .expect("reload snapshot")
+            .expect("reloaded conversation");
+        let resumed_bundle = resumed
+            .nodes
+            .iter()
+            .find(|bundle| bundle.node.id == assistant_node_id)
+            .expect("resumed assistant bundle");
+        assert_eq!(resumed_bundle.variants.len(), 2);
+        assert_eq!(resumed_bundle.node.select_index, 1);
+        assert_eq!(
+            selected_branch_snapshot_nodes(&resumed)
+                .expect("selected branch")
+                .last()
+                .expect("assistant row")
+                .selected_variant
+                .variant_id,
+            regenerated_variant_id
+        );
+
+        fs::remove_file(store_path).ok();
+    }
+
+    #[test]
+    fn select_variant_after_regenerate_keeps_follow_up_on_same_branch_cursor() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+        let assistant_node_id = match &first_events[3].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.node_id,
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        };
+        let original_variant_id = match &first_events[3].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.selected_variant.variant_id,
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        };
+
+        let regenerate_events = engine
+            .regenerate_message(SessionRegenerateRequest {
+                conversation_id,
+                node_id: assistant_node_id,
+            })
+            .expect("regenerate");
+        let regenerated_variant_id = match &regenerate_events[0].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => branch.node.selected_variant.variant_id,
+            other => panic!("expected regenerate upsert, got {other:?}"),
+        };
+        assert_ne!(original_variant_id, regenerated_variant_id);
+
+        let select_events = engine
+            .select_variant(SessionSelectVariantRequest {
+                conversation_id,
+                node_id: assistant_node_id,
+                variant_id: original_variant_id,
+            })
+            .expect("select original variant");
+        assert_eq!(select_events.len(), 1);
+        assert!(matches!(
+            &select_events[0].payload,
+            ChatEvent::ConversationNodeUpsert { branch }
+                if branch.node.node_id == assistant_node_id
+                    && branch.node.selected_variant.variant_id == original_variant_id
+        ));
+
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "after select".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("follow up after variant selection");
+
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load selected snapshot")
+            .expect("stored conversation");
+        let branch = selected_branch_snapshot_nodes(&stored).expect("selected branch");
+        assert_eq!(branch[1].node_id, assistant_node_id);
+        assert_eq!(branch[1].selected_variant.variant_id, original_variant_id);
+        assert_eq!(branch[2].parent_node_id, Some(assistant_node_id));
+        assert_eq!(branch[3].parent_node_id, Some(branch[2].node_id));
+
+        let stored_assistant_bundle = stored
+            .nodes
+            .iter()
+            .find(|bundle| bundle.node.id == assistant_node_id)
+            .expect("assistant bundle");
+        assert_eq!(stored_assistant_bundle.variants.len(), 2);
+        assert_eq!(stored_assistant_bundle.node.select_index, 0);
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn selected_node_projection_keeps_selected_variant_full_parts() {
+        let now = Utc::now();
+        let bundle = build_assistant_node(
+            ConversationId::new_v4(),
+            None,
+            "projection",
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+
+        let projected = selected_node_projection(&bundle).expect("projection");
+        let parts = &projected.selected_variant.parts;
+
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(
+            parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Text { .. }));
+    }
+
+    #[test]
+    fn selected_node_projection_surfaces_only_the_selected_variant() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let first_variant_id = Uuid::new_v4();
+        let second_variant_id = Uuid::new_v4();
+        let bundle = NodeBundle {
+            node: MessageNode {
+                id: node_id,
+                conversation_id,
+                parent_node_id: None,
+                role: MessageRole::Assistant,
+                select_index: 1,
+                created_at: now,
+                updated_at: now,
+            },
+            variants: vec![
+                VariantBundle {
+                    variant: MessageVariant {
+                        id: first_variant_id,
+                        node_id,
+                        status: VariantStatus::Completed,
+                        model_id: Some("rust-session-engine".to_string()),
+                        usage_json: None,
+                        created_at: now,
+                        finished_at: Some(now),
+                    },
+                    parts: vec![MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id: first_variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Text {
+                            text: "old".to_string(),
+                        },
+                    }],
+                },
+                VariantBundle {
+                    variant: MessageVariant {
+                        id: second_variant_id,
+                        node_id,
+                        status: VariantStatus::Completed,
+                        model_id: Some("rust-session-engine".to_string()),
+                        usage_json: None,
+                        created_at: now,
+                        finished_at: Some(now),
+                    },
+                    parts: vec![MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id: second_variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Text {
+                            text: "selected".to_string(),
+                        },
+                    }],
+                },
+            ],
+        };
+
+        let projected = selected_node_projection(&bundle).expect("projection");
+
+        assert_eq!(projected.node_id, node_id);
+        assert_eq!(projected.selected_variant.variant_id, second_variant_id);
+        assert_eq!(projected.selected_variant.parts.len(), 1);
+        assert_eq!(projected.selected_variant.parts[0].order_index, 0);
+    }
+
+    #[test]
+    fn streaming_delta_parts_keep_reasoning_and_text_from_selected_variant() {
+        let now = Utc::now();
+        let bundle = build_assistant_node(
+            ConversationId::new_v4(),
+            None,
+            "projection",
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+
+        let parts = streaming_delta_parts(&bundle).expect("streaming delta");
+
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(
+            parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Text { .. }));
+    }
+
+    #[test]
+    fn streaming_delta_parts_keep_tool_parts_typed() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+        let bundle = NodeBundle {
+            node: MessageNode {
+                id: node_id,
+                conversation_id,
+                parent_node_id: None,
+                role: MessageRole::Assistant,
+                select_index: 0,
+                created_at: now,
+                updated_at: now,
+            },
+            variants: vec![VariantBundle {
+                variant: MessageVariant {
+                    id: variant_id,
+                    node_id,
+                    status: VariantStatus::Streaming,
+                    model_id: Some("rust-session-engine".to_string()),
+                    usage_json: None,
+                    created_at: now,
+                    finished_at: None,
+                },
+                parts: vec![
+                    MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Reasoning {
+                            text: "thinking".to_string(),
+                        },
+                    },
+                    MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 1,
+                        payload: MessagePartPayload::Tool {
+                            tool_call_id: Some("tool-call-1".to_string()),
+                            tool_name: "search".to_string(),
+                            input_json: "{\"query\":\"rust\"}".to_string(),
+                            output_json: Some("{\"hits\":1}".to_string()),
+                            error_message: None,
+                            state: vcpmobile_domain::ToolPartState::Completed,
+                        },
+                    },
+                    MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 2,
+                        payload: MessagePartPayload::Text {
+                            text: "hello".to_string(),
+                        },
+                    },
+                ],
+            }],
+        };
+
+        let parts = streaming_delta_parts(&bundle).expect("streaming delta");
+
+        assert_eq!(parts.len(), 3);
+        assert!(matches!(
+            parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(parts[1].payload, MessagePartPayload::Tool { .. }));
+        assert!(matches!(parts[2].payload, MessagePartPayload::Text { .. }));
+    }
+
+    #[test]
+    fn assistant_node_uses_text_for_final_content() {
+        let now = Utc::now();
+        let bundle = build_assistant_node(
+            ConversationId::new_v4(),
+            None,
+            "text projection",
+            now,
+            VariantStatus::Streaming,
+            None,
+        );
+        let parts = &bundle.variants[0].parts;
+
+        assert_eq!(parts.len(), 2);
+        assert!(matches!(parts[1].payload, MessagePartPayload::Text { .. }));
+    }
+
+    #[test]
+    fn send_message_streams_reasoning_and_text_delta_for_assistant_content() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("send message");
+
+        let delta_parts = match &events[2].payload {
+            ChatEvent::GenerationPartDelta { appended_parts, .. } => appended_parts,
+            other => panic!("expected generation_part_delta, got {other:?}"),
+        };
+
+        assert_eq!(delta_parts.len(), 2);
+        assert!(matches!(
+            delta_parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(
+            delta_parts[1].payload,
+            MessagePartPayload::Text { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_snapshot_carries_new_user_and_assistant_nodes() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("send message");
+
+        let snapshot_nodes = match &events[0].payload {
+            ChatEvent::ConversationSnapshot { branch, .. } => &branch.nodes,
+            other => panic!("expected conversation_snapshot, got {other:?}"),
+        };
+
+        assert_eq!(
+            snapshot_nodes.len(),
+            2,
+            "send snapshot should materialize both new nodes"
+        );
+        assert_eq!(snapshot_nodes[0].role, MessageRole::User);
+        assert_eq!(snapshot_nodes[0].parent_node_id, None);
+        assert!(matches!(
+            snapshot_nodes[0].selected_variant.parts[0].payload,
+            MessagePartPayload::Text { .. }
+        ));
+        assert_eq!(snapshot_nodes[1].role, MessageRole::Assistant);
+        assert_eq!(
+            snapshot_nodes[1].parent_node_id,
+            Some(snapshot_nodes[0].node_id),
+            "assistant snapshot should preserve the persisted user-node edge"
+        );
+        assert_eq!(
+            snapshot_nodes[1].selected_variant.status,
+            VariantStatus::Streaming
+        );
+        assert_eq!(snapshot_nodes[1].selected_variant.parts.len(), 2);
+        assert!(matches!(
+            snapshot_nodes[1].selected_variant.parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(
+            snapshot_nodes[1].selected_variant.parts[1].payload,
+            MessagePartPayload::Text { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_snapshot_for_follow_up_turn_carries_full_selected_branch() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+
+        let second_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("second message");
+
+        let snapshot_nodes = match &second_events[0].payload {
+            ChatEvent::ConversationSnapshot { branch, .. } => &branch.nodes,
+            other => panic!("expected conversation_snapshot, got {other:?}"),
+        };
+
+        assert_eq!(snapshot_nodes.len(), 4);
+        assert_eq!(snapshot_nodes[0].role, MessageRole::User);
+        assert_eq!(snapshot_nodes[0].parent_node_id, None);
+        assert_eq!(snapshot_nodes[1].role, MessageRole::Assistant);
+        assert_eq!(
+            snapshot_nodes[1].parent_node_id,
+            Some(snapshot_nodes[0].node_id)
+        );
+        assert_eq!(snapshot_nodes[2].role, MessageRole::User);
+        assert_eq!(
+            snapshot_nodes[2].parent_node_id,
+            Some(snapshot_nodes[1].node_id)
+        );
+        assert_eq!(snapshot_nodes[3].role, MessageRole::Assistant);
+        assert_eq!(
+            snapshot_nodes[3].parent_node_id,
+            Some(snapshot_nodes[2].node_id)
+        );
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_emits_node_upsert_with_full_selected_variant() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "hello rust".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("send message");
+
+        let upserted_parts = match &events[3].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => &branch.node.selected_variant.parts,
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        };
+
+        assert_eq!(upserted_parts.len(), 2);
+        assert!(matches!(
+            upserted_parts[0].payload,
+            MessagePartPayload::Reasoning { .. }
+        ));
+        assert!(matches!(
+            upserted_parts[1].payload,
+            MessagePartPayload::Text { .. }
+        ));
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_rejects_broken_current_cursor_state() {
+        let path =
+            env::temp_dir().join(format!("vcpmobile-session-broken-{}.json", Uuid::new_v4()));
+        let store = FileStore::new(&path);
+        let engine = SessionEngine::new(store, Uuid::new_v4(), Uuid::new_v4());
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+
+        let legacy = vcpmobile_store::StoreData {
+            conversations: BTreeMap::from([(
+                conversation_id.to_string(),
+                StoredConversation {
+                    conversation: Conversation {
+                        id: conversation_id,
+                        topic_id: Uuid::new_v4(),
+                        agent_id: Uuid::new_v4(),
+                        title: "broken".to_string(),
+                        summary: None,
+                        pinned: false,
+                        generation_state: GenerationState::Idle,
+                        current_cursor: Some(NodeId::new_v4()),
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    nodes: vec![NodeBundle {
+                        node: MessageNode {
+                            id: node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::Assistant,
+                            select_index: 0,
+                            created_at: now,
+                            updated_at: now,
+                        },
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: variant_id,
+                                node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![MessagePart {
+                                id: Uuid::new_v4(),
+                                variant_id,
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "old".to_string(),
+                                },
+                            }],
+                        }],
+                    }],
+                },
+            )]),
+            agent_configs: BTreeMap::new(),
+            provider_configs: BTreeMap::new(),
+            ..vcpmobile_store::StoreData::default()
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize broken legacy store"),
+        )
+        .expect("write broken legacy store");
+
+        let error = engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "resume".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect_err("broken cursor must fail");
+
+        assert!(matches!(error, SessionError::Store(StoreError::Sqlite(_))));
+        cleanup_engine_store(&engine, Some(&path));
+    }
+
+    #[test]
+    fn selected_branch_snapshot_nodes_reject_cross_conversation_ancestor() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let foreign_conversation_id = ConversationId::new_v4();
+        let parent_node_id = NodeId::new_v4();
+        let current_cursor = NodeId::new_v4();
+        let parent_variant_id = Uuid::new_v4();
+        let child_variant_id = Uuid::new_v4();
+        let stored = StoredConversation {
+            conversation: Conversation {
+                id: conversation_id,
+                topic_id: Uuid::new_v4(),
+                agent_id: Uuid::new_v4(),
+                title: "broken ancestry".to_string(),
+                summary: None,
+                pinned: false,
+                generation_state: GenerationState::Idle,
+                current_cursor: Some(current_cursor),
+                created_at: now,
+                updated_at: now,
+            },
+            nodes: vec![
+                NodeBundle {
+                    node: MessageNode {
+                        id: parent_node_id,
+                        conversation_id: foreign_conversation_id,
+                        parent_node_id: None,
+                        role: MessageRole::User,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: parent_variant_id,
+                            node_id: parent_node_id,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![MessagePart {
+                            id: Uuid::new_v4(),
+                            variant_id: parent_variant_id,
+                            order_index: 0,
+                            payload: MessagePartPayload::Text {
+                                text: "foreign".to_string(),
+                            },
+                        }],
+                    }],
+                },
+                NodeBundle {
+                    node: MessageNode {
+                        id: current_cursor,
+                        conversation_id,
+                        parent_node_id: Some(parent_node_id),
+                        role: MessageRole::Assistant,
+                        select_index: 0,
+                        created_at: now,
+                        updated_at: now,
+                    },
+                    variants: vec![VariantBundle {
+                        variant: MessageVariant {
+                            id: child_variant_id,
+                            node_id: current_cursor,
+                            status: VariantStatus::Completed,
+                            model_id: None,
+                            usage_json: None,
+                            created_at: now,
+                            finished_at: Some(now),
+                        },
+                        parts: vec![MessagePart {
+                            id: Uuid::new_v4(),
+                            variant_id: child_variant_id,
+                            order_index: 0,
+                            payload: MessagePartPayload::Text {
+                                text: "child".to_string(),
+                            },
+                        }],
+                    }],
+                },
+            ],
+        };
+
+        let error = selected_branch_snapshot_nodes(&stored)
+            .expect_err("cross-conversation ancestry must fail");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState { conversation_id: id, .. } if id == conversation_id
+        ));
+    }
+
+    #[test]
+    fn selected_node_projection_rejects_invalid_select_index() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let node_id = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+        let bundle = NodeBundle {
+            node: MessageNode {
+                id: node_id,
+                conversation_id,
+                parent_node_id: None,
+                role: MessageRole::Assistant,
+                select_index: 1,
+                created_at: now,
+                updated_at: now,
+            },
+            variants: vec![VariantBundle {
+                variant: MessageVariant {
+                    id: variant_id,
+                    node_id,
+                    status: VariantStatus::Completed,
+                    model_id: None,
+                    usage_json: None,
+                    created_at: now,
+                    finished_at: Some(now),
+                },
+                parts: vec![MessagePart {
+                    id: Uuid::new_v4(),
+                    variant_id,
+                    order_index: 0,
+                    payload: MessagePartPayload::Text {
+                        text: "only".to_string(),
+                    },
+                }],
+            }],
+        };
+
+        let error = selected_node_projection(&bundle)
+            .expect_err("invalid select_index must degrade to invalid state");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState { conversation_id: id, .. } if id == conversation_id
+        ));
+    }
+
+    #[test]
+    fn selected_branch_snapshot_nodes_reject_invalid_select_index_on_selected_branch() {
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let current_cursor = NodeId::new_v4();
+        let variant_id = Uuid::new_v4();
+        let stored = StoredConversation {
+            conversation: Conversation {
+                id: conversation_id,
+                topic_id: Uuid::new_v4(),
+                agent_id: Uuid::new_v4(),
+                title: "broken select index".to_string(),
+                summary: None,
+                pinned: false,
+                generation_state: GenerationState::Idle,
+                current_cursor: Some(current_cursor),
+                created_at: now,
+                updated_at: now,
+            },
+            nodes: vec![NodeBundle {
+                node: MessageNode {
+                    id: current_cursor,
+                    conversation_id,
+                    parent_node_id: None,
+                    role: MessageRole::Assistant,
+                    select_index: 1,
+                    created_at: now,
+                    updated_at: now,
+                },
+                variants: vec![VariantBundle {
+                    variant: MessageVariant {
+                        id: variant_id,
+                        node_id: current_cursor,
+                        status: VariantStatus::Completed,
+                        model_id: None,
+                        usage_json: None,
+                        created_at: now,
+                        finished_at: Some(now),
+                    },
+                    parts: vec![MessagePart {
+                        id: Uuid::new_v4(),
+                        variant_id,
+                        order_index: 0,
+                        payload: MessagePartPayload::Text {
+                            text: "only".to_string(),
+                        },
+                    }],
+                }],
+            }],
+        };
+
+        let error = selected_branch_snapshot_nodes(&stored)
+            .expect_err("invalid select_index on selected branch must fail cleanly");
+
+        assert!(matches!(
+            error,
+            SessionError::InvalidConversationState { conversation_id: id, .. } if id == conversation_id
+        ));
+    }
+
+    #[test]
+    fn conversation_catalog_tracks_latest_turn_for_same_conversation() {
+        let engine = test_engine();
+
+        let first_events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "first".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("first message");
+        let conversation_id = first_events[0].conversation_id.expect("conversation id");
+
+        engine
+            .send_message(SessionSendRequest {
+                conversation_id: Some(conversation_id),
+                text: "second".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("second message");
+
+        let catalog = engine.conversation_catalog().expect("catalog");
+        let stored = engine
+            .snapshot_for(conversation_id)
+            .expect("load snapshot")
+            .expect("stored conversation");
+
+        let item = catalog
+            .iter()
+            .find(|item| item.conversation_id == conversation_id)
+            .expect("catalog item for conversation");
+
+        assert_eq!(catalog.len(), 1, "same conversation should project once");
+        assert_eq!(item.updated_at, stored.conversation.updated_at);
+        assert_eq!(item.current_cursor, stored.conversation.current_cursor);
+        assert_eq!(item.generation_state, stored.conversation.generation_state);
+        assert_eq!(item.generation_state, GenerationState::Completed);
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn send_message_upsert_finalizes_assistant_variant_status() {
+        let engine = test_engine();
+
+        let events = engine
+            .send_message(SessionSendRequest {
+                conversation_id: None,
+                text: "finalize".to_string(),
+                attachments: Vec::new(),
+            })
+            .expect("send message");
+
+        let upsert = match &events[3].payload {
+            ChatEvent::ConversationNodeUpsert { branch } => branch,
+            other => panic!("expected conversation_node_upsert, got {other:?}"),
+        };
+
+        assert_eq!(upsert.cursor_node_id, Some(upsert.node.node_id));
+        assert_eq!(
+            upsert.node.selected_variant.status,
+            VariantStatus::Completed
+        );
+        assert!(upsert.node.selected_variant.finished_at.is_some());
+
+        fs::remove_file(engine.store().path()).ok();
+    }
+
+    #[test]
+    fn restart_recovery_keeps_selected_variant_from_store_truth() {
+        let path = env::temp_dir().join(format!(
+            "vcpmobile-session-variant-recovery-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = FileStore::new(&path);
+        let engine = SessionEngine::new(store.clone(), Uuid::new_v4(), Uuid::new_v4());
+        let now = Utc::now();
+        let conversation_id = ConversationId::new_v4();
+        let user_node_id = NodeId::new_v4();
+        let assistant_node_id = NodeId::new_v4();
+        let user_variant_id = Uuid::new_v4();
+        let first_variant_id = Uuid::new_v4();
+        let second_variant_id = Uuid::new_v4();
+
+        store
+            .upsert_conversation(StoredConversation {
+                conversation: Conversation {
+                    id: conversation_id,
+                    topic_id: TopicId::new_v4(),
+                    agent_id: Uuid::new_v4(),
+                    title: "restart recovery".to_string(),
+                    summary: Some("selected variant survives restart".to_string()),
+                    pinned: false,
+                    generation_state: GenerationState::Completed,
+                    current_cursor: Some(assistant_node_id),
+                    created_at: now,
+                    updated_at: now,
+                },
+                nodes: vec![
+                    NodeBundle {
+                        node: MessageNode {
+                            id: user_node_id,
+                            conversation_id,
+                            parent_node_id: None,
+                            role: MessageRole::User,
+                            select_index: 0,
+                            created_at: now,
+                            updated_at: now,
+                        },
+                        variants: vec![VariantBundle {
+                            variant: MessageVariant {
+                                id: user_variant_id,
+                                node_id: user_node_id,
+                                status: VariantStatus::Completed,
+                                model_id: None,
+                                usage_json: None,
+                                created_at: now,
+                                finished_at: Some(now),
+                            },
+                            parts: vec![MessagePart {
+                                id: Uuid::new_v4(),
+                                variant_id: user_variant_id,
+                                order_index: 0,
+                                payload: MessagePartPayload::Text {
+                                    text: "prompt".to_string(),
+                                },
+                            }],
+                        }],
+                    },
+                    NodeBundle {
+                        node: MessageNode {
+                            id: assistant_node_id,
+                            conversation_id,
+                            parent_node_id: Some(user_node_id),
+                            role: MessageRole::Assistant,
+                            select_index: 0,
+                            created_at: now,
+                            updated_at: now,
+                        },
+                        variants: vec![
+                            VariantBundle {
+                                variant: MessageVariant {
+                                    id: first_variant_id,
+                                    node_id: assistant_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: Some("rust-session-engine".to_string()),
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: first_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "old".to_string(),
+                                    },
+                                }],
+                            },
+                            VariantBundle {
+                                variant: MessageVariant {
+                                    id: second_variant_id,
+                                    node_id: assistant_node_id,
+                                    status: VariantStatus::Completed,
+                                    model_id: Some("rust-session-engine".to_string()),
+                                    usage_json: None,
+                                    created_at: now,
+                                    finished_at: Some(now),
+                                },
+                                parts: vec![MessagePart {
+                                    id: Uuid::new_v4(),
+                                    variant_id: second_variant_id,
+                                    order_index: 0,
+                                    payload: MessagePartPayload::Text {
+                                        text: "selected".to_string(),
+                                    },
+                                }],
+                            },
+                        ],
+                    },
+                ],
+            })
+            .expect("persist restart fixture");
+        assert!(
+            store
+                .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
+                .expect("select second variant")
+        );
+
+        let recovered = engine
+            .snapshot_for(conversation_id)
+            .expect("load recovered conversation")
+            .expect("stored conversation");
+        let snapshot_nodes =
+            selected_branch_snapshot_nodes(&recovered).expect("recover selected branch");
+
+        assert_eq!(snapshot_nodes.len(), 2);
+        assert_eq!(
+            snapshot_nodes[1].selected_variant.variant_id, second_variant_id,
+            "recovery should honor the persisted selected variant"
+        );
+        assert_eq!(
+            snapshot_nodes[1].selected_variant.parts[0].payload,
+            MessagePartPayload::Text {
+                text: "selected".to_string(),
+            }
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_issues_short_lived_mobile_token_and_resume_anchor() {
+        let mut engine = test_engine();
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let response = engine
+            .exchange_pairing(PairingExchangeRequest {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+                device_public_key: "base64-public-key".to_string(),
+            })
+            .expect("pairing exchange succeeds");
+
+        assert_eq!(response.status, PairingExchangeSuccessStatus::Paired);
+        assert_eq!(response.mobile_token.token_type, "bearer");
+        assert!(
+            response
+                .mobile_token
+                .access_token
+                .starts_with("mobile-token-")
+        );
+        assert!(response.resume_anchor.anchor.starts_with("resume-anchor-"));
+        assert_eq!(response.trusted_device.device_name, "Pixel 9");
+        assert!(response.mobile_token.expires_at > Utc::now());
+        assert!(response.resume_anchor.expires_at > response.mobile_token.expires_at);
+
+        fs::remove_file(engine.store().path()).ok();
+        fs::remove_file(engine.store().path().with_extension("json")).ok();
+    }
+
+    #[test]
+    fn pairing_state_survives_restart_and_restores_mobile_session_from_explicit_anchor() {
+        let path = env::temp_dir().join(format!(
+            "vcpmobile-session-pairing-restart-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = FileStore::new(&path);
+        let mut engine = SessionEngine::try_new(store.clone(), Uuid::new_v4(), Uuid::new_v4())
+            .expect("create engine");
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let response = engine
+            .exchange_pairing(PairingExchangeRequest {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+                device_public_key: "base64-public-key".to_string(),
+            })
+            .expect("pairing exchange succeeds");
+
+        let mut restarted =
+            SessionEngine::try_new(FileStore::new(&path), Uuid::new_v4(), Uuid::new_v4())
+                .expect("restart engine");
+        let trusted_device = restarted
+            .trusted_device(&response.trusted_device.trusted_device_id)
+            .expect("load trusted device")
+            .expect("trusted device exists");
+        let resumed = restarted
+            .resolve_mobile_session_by_resume_anchor(&response.resume_anchor.anchor)
+            .expect("resolve resume anchor")
+            .expect("resume anchor should restore session");
+
+        assert_eq!(trusted_device.device_name, "Pixel 9");
+        assert_eq!(
+            trusted_device.device_platform,
+            PairingDevicePlatform::Android
+        );
+        assert_eq!(trusted_device.namespace, "workspace-alpha");
+        assert_eq!(resumed.pairing_session_id, "pairing-session-1");
+        assert_eq!(resumed.namespace, "workspace-alpha");
+        assert_eq!(
+            resumed.trusted_device.trusted_device_id,
+            response.trusted_device.trusted_device_id
+        );
+        assert_eq!(resumed.resume_anchor.anchor, response.resume_anchor.anchor);
+
+        fs::remove_file(store.path()).ok();
+        fs::remove_file(store.path().with_extension("json")).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_rejects_replay_after_restart() {
+        let path = env::temp_dir().join(format!(
+            "vcpmobile-session-pairing-replay-{}.json",
+            Uuid::new_v4()
+        ));
+        let store = FileStore::new(&path);
+        let mut engine = SessionEngine::try_new(store.clone(), Uuid::new_v4(), Uuid::new_v4())
+            .expect("create engine");
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let request = PairingExchangeRequest {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            bootstrap_token: "bootstrap-secret".to_string(),
+            device_name: "Pixel 9".to_string(),
+            device_platform: PairingDevicePlatform::Android,
+            device_public_key: "base64-public-key".to_string(),
+        };
+
+        engine
+            .exchange_pairing(request.clone())
+            .expect("first exchange succeeds");
+
+        let mut restarted =
+            SessionEngine::try_new(FileStore::new(&path), Uuid::new_v4(), Uuid::new_v4())
+                .expect("restart engine");
+        let failure = restarted
+            .exchange_pairing(request)
+            .expect_err("replayed bootstrap should stay rejected after restart");
+
+        assert_eq!(failure.status, PairingExchangeFailureStatus::Revoked);
+        assert_eq!(failure.error.code, "bootstrap_token_replayed");
+
+        fs::remove_file(store.path()).ok();
+        fs::remove_file(store.path().with_extension("json")).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_rejects_replay_after_successful_exchange() {
+        let mut engine = test_engine();
+        seed_pairing(&mut engine, Utc::now() + Duration::minutes(5));
+
+        let request = PairingExchangeRequest {
+            pairing_session_id: "pairing-session-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            bootstrap_token: "bootstrap-secret".to_string(),
+            device_name: "Pixel 9".to_string(),
+            device_platform: PairingDevicePlatform::Android,
+            device_public_key: "base64-public-key".to_string(),
+        };
+
+        engine
+            .exchange_pairing(request.clone())
+            .expect("first exchange succeeds");
+        let failure = engine
+            .exchange_pairing(request)
+            .expect_err("second exchange should be rejected");
+
+        assert_eq!(failure.status, PairingExchangeFailureStatus::Revoked);
+        assert_eq!(failure.error.code, "bootstrap_token_replayed");
+        assert!(!failure.error.retriable);
+
+        fs::remove_file(engine.store().path()).ok();
+        fs::remove_file(engine.store().path().with_extension("json")).ok();
+    }
+
+    #[test]
+    fn exchange_pairing_rejects_expired_bootstrap_token() {
+        let mut engine = test_engine();
+        seed_pairing(&mut engine, Utc::now() - Duration::seconds(1));
+
+        let failure = engine
+            .exchange_pairing(PairingExchangeRequest {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                device_name: "Pixel 9".to_string(),
+                device_platform: PairingDevicePlatform::Android,
+                device_public_key: "base64-public-key".to_string(),
+            })
+            .expect_err("expired bootstrap should fail");
+
+        assert_eq!(failure.status, PairingExchangeFailureStatus::Expired);
+        assert_eq!(failure.error.code, "bootstrap_token_expired");
+        assert!(!failure.error.retriable);
+
+        fs::remove_file(engine.store().path()).ok();
+        fs::remove_file(engine.store().path().with_extension("json")).ok();
+    }
+}

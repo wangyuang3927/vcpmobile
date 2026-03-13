@@ -1,0 +1,20 @@
+[package]
+name = "vcpmobile-session"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+chrono.workspace = true
+uuid.workspace = true
+thiserror.workspace = true
+base64.workspace = true
+sha2.workspace = true
+zip.workspace = true
+roxmltree.workspace = true
+pdf-extract.workspace = true
+serde_json.workspace = true
+vcpmobile-domain = { path = "../domain" }
+vcpmobile-protocol = { path = "../protocol" }
+vcpmobile-store = { path = "../store" }

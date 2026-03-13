@@ -1,0 +1,981 @@
+/* Promptmodules/prompt-modules.css */
+/* 提示词模块样式 */
+
+/* 模式选择器 */
+.prompt-mode-selector {
+    display: flex;
+    gap: 0;
+    margin-bottom: 20px;
+    border-radius: 8px;
+    overflow: hidden;
+    border: 1px solid var(--border-color);
+}
+
+.prompt-mode-button {
+    flex: 1;
+    padding: 10px 15px;
+    background-color: var(--secondary-bg);
+    border: none;
+    color: var(--secondary-text);
+    cursor: pointer;
+    font-size: 0.95em;
+    transition: all 0.2s ease;
+    border-right: 1px solid var(--border-color);
+}
+
+.prompt-mode-button:last-child {
+    border-right: none;
+}
+
+.prompt-mode-button:hover {
+    background-color: var(--accent-bg);
+    color: var(--highlight-text);
+}
+
+.prompt-mode-button.active {
+    background-color: var(--user-bubble-bg);
+    color: white;
+    font-weight: 500;
+}
+
+/* 内容容器 */
+.prompt-content-container {
+    min-height: 200px;
+}
+
+/* 通用标签样式 */
+.prompt-label {
+    display: block;
+    font-weight: 500;
+    color: var(--secondary-text);
+    font-size: 0.9em;
+    margin-bottom: 8px;
+}
+
+/* 通用文本域样式 */
+.prompt-textarea {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.95em;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 120px;
+    line-height: 1.5;
+}
+
+.prompt-textarea:focus {
+    outline: none;
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.3);
+}
+
+/* ===== 原始富文本模块样式 ===== */
+.original-prompt-textarea {
+    min-height: 150px;
+}
+
+/* ===== 模块化系统提示词模块样式 ===== */
+.modular-prompt-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+/* 工具栏 */
+.modular-toolbar {
+    display: flex;
+    gap: 10px;
+    padding: 10px;
+    background-color: var(--secondary-bg);
+    border-radius: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+}
+
+/* 工具栏右侧控制组 */
+.toolbar-controls-group {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    margin-left: auto;
+}
+
+.toolbar-btn {
+    padding: 8px 12px;
+    background-color: var(--button-bg);
+    border: 1px solid var(--button-bg);
+    color: var(--primary-text);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    transition: all 0.2s ease;
+}
+
+.toolbar-btn:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+}
+
+.toolbar-btn svg {
+    width: 16px;
+    height: 16px;
+}
+
+.toolbar-toggle {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 0.9em;
+    color: var(--secondary-text);
+    cursor: pointer;
+    user-select: none;
+}
+
+.toolbar-toggle input[type="checkbox"] {
+    width: 16px;
+    height: 16px;
+    cursor: pointer;
+    accent-color: var(--user-bubble-bg);
+}
+
+/* 积木块容器 */
+.blocks-container {
+    min-height: 200px;
+    padding: 15px;
+    background-color: var(--input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    align-content: flex-start;
+}
+
+.blocks-container.no-tile-mode {
+    flex-direction: column;
+    flex-wrap: nowrap;
+}
+
+.blocks-hint {
+    width: 100%;
+    text-align: center;
+    color: var(--secondary-text);
+    padding: 40px 20px;
+    font-size: 0.95em;
+}
+
+/* 积木块 */
+.prompt-block {
+    display: inline-flex;
+    align-items: center;
+    padding: 6px 10px;
+    border-radius: 6px;
+    cursor: move;
+    transition: all 0.2s ease;
+    position: relative;
+}
+
+.prompt-block.text-block {
+    background-color: var(--button-bg);
+    border: 2px solid var(--button-bg);
+    max-width: 100%;
+}
+
+/* 有自定义名称的积木块 - 格子背景（更明显的样式） */
+.prompt-block.has-custom-name {
+    background-image:
+        linear-gradient(45deg, rgba(0, 0, 0, 0.12) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(0, 0, 0, 0.12) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.12) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.12) 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0px;
+}
+
+/* 禁用状态下的格子背景也要显示 */
+.prompt-block.has-custom-name.disabled {
+    background-image:
+        linear-gradient(45deg, rgba(0, 0, 0, 0.08) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(0, 0, 0, 0.08) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.08) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.08) 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 0 6px, 6px -6px, -6px 0px;
+}
+
+.prompt-block.text-block:hover {
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.prompt-block.text-block.disabled {
+    opacity: 0.4;
+    background-color: var(--secondary-bg);
+    border-color: var(--border-color);
+}
+
+.prompt-block.newline-block {
+    background-color: var(--accent-bg);
+    border: 2px solid var(--accent-bg);
+    opacity: 0.6;
+    border-radius: 50%;
+    padding: 8px 12px;
+    flex-shrink: 0;
+    display: inline-flex !important;
+    height: 20px; /* 固定高度 */
+    min-height: 20px;
+    max-height: 20px;
+    align-items: center;
+    justify-content: center;
+    box-sizing: content-box;
+}
+
+/* 换行标记：强制换行 */
+.line-break-marker {
+    width: 100%;
+    height: 0;
+    margin: 0;
+    padding: 0;
+    border: none;
+    flex-basis: 100%;
+    flex-shrink: 0;
+    flex-grow: 0;
+}
+
+.prompt-block.dragging {
+    opacity: 0.5;
+    transform: scale(0.95);
+}
+
+/* 拖拽目标指示 */
+.prompt-block.drop-target {
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 0 0 3px rgba(61, 90, 128, 0.3);
+    background-color: var(--accent-bg);
+}
+
+.prompt-block.drop-target.text-block {
+    transform: scale(1.05);
+}
+
+/* 拖拽插入指示器 */
+.prompt-block.drop-target-left::before,
+.prompt-block.drop-target-right::after {
+    content: '';
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    width: 4px;
+    background-color: var(--user-bubble-bg);
+    box-shadow: 0 0 8px rgba(61, 90, 128, 0.6);
+    animation: drop-indicator-pulse 0.8s ease-in-out infinite;
+    z-index: 10;
+}
+
+.prompt-block.drop-target-left::before {
+    left: -6px;
+    border-radius: 4px 0 0 4px;
+}
+
+.prompt-block.drop-target-right::after {
+    right: -6px;
+    border-radius: 0 4px 4px 0;
+}
+
+@keyframes drop-indicator-pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scaleY(1);
+    }
+    50% {
+        opacity: 0.6;
+        transform: scaleY(0.95);
+    }
+}
+
+.block-content {
+    min-width: 20px;
+    max-width: 400px;
+    outline: none;
+    color: var(--primary-text);
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.9em;
+    line-height: 1.4;
+    cursor: text;
+    transition: background-color 0.2s ease;
+}
+
+.block-content[contenteditable="false"] {
+    cursor: pointer;
+}
+
+.block-content[contenteditable="true"] {
+    background-color: var(--input-bg);
+    padding: 2px 4px;
+    border-radius: 3px;
+    cursor: text;
+}
+
+.block-content:empty:before {
+    content: '输入内容...';
+    color: var(--secondary-text);
+    opacity: 0.5;
+}
+
+.newline-label {
+    font-family: monospace;
+    color: var(--secondary-text);
+    font-size: 0.85em;
+    font-weight: bold;
+}
+
+/* 轮换文本指示器（圆点样式） */
+.variant-indicator {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    width: 8px;
+    height: 8px;
+    background-color: var(--user-bubble-bg);
+    border-radius: 50%;
+    opacity: 0.8;
+    cursor: help;
+    box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.2);
+}
+
+.variant-indicator:hover {
+    opacity: 1;
+    transform: scale(1.2);
+    transition: all 0.2s ease;
+}
+
+/* 右键菜单分隔线 */
+.context-menu-separator {
+    height: 1px;
+    background-color: var(--border-color);
+    margin: 4px 0;
+}
+
+/* 轮换文本菜单项 */
+.context-menu-item.variant-item {
+    font-style: italic;
+    padding-left: 20px;
+}
+
+/* 编辑对话框中的内容条目列表 */
+.variants-edit-container {
+    margin-bottom: 16px;
+}
+
+.variants-edit-container > label {
+    display: block;
+    font-weight: 500;
+    color: var(--secondary-text);
+    font-size: 0.9em;
+    margin-bottom: 8px;
+}
+
+.variants-list {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.variant-item-edit {
+    position: relative;
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+}
+
+.variant-content-input {
+    flex: 1;
+    padding: 8px 10px;
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.9em;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 60px;
+    line-height: 1.4;
+}
+
+.variant-content-input:focus {
+    outline: none;
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.3);
+}
+
+.remove-variant-btn {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+    border: 1px solid var(--border-color);
+    background-color: var(--secondary-bg);
+    color: var(--danger-color);
+    font-size: 1.2em;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.2s ease;
+    flex-shrink: 0;
+}
+
+.remove-variant-btn:hover {
+    background-color: var(--danger-color);
+    color: white;
+    border-color: var(--danger-color);
+}
+
+.add-variant-btn {
+    padding: 8px 12px;
+    background-color: var(--button-bg);
+    border: 1px solid var(--button-bg);
+    color: var(--primary-text);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: all 0.2s ease;
+    width: fit-content;
+}
+
+.add-variant-btn:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+}
+
+/* 右键菜单 */
+.block-context-menu {
+    position: fixed;
+    background-color: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+    z-index: 10000;
+    min-width: 150px;
+    overflow: hidden;
+}
+
+.context-menu-item {
+    padding: 10px 15px;
+    cursor: pointer;
+    color: var(--primary-text);
+    font-size: 0.9em;
+    transition: background-color 0.2s ease;
+}
+
+.context-menu-item:hover {
+    background-color: var(--accent-bg);
+}
+
+.context-menu-item.danger {
+    color: var(--danger-color);
+}
+
+.context-menu-item.danger:hover {
+    background-color: var(--danger-color);
+    color: white;
+}
+
+/* 小仓 */
+.warehouse-container {
+    padding: 15px;
+    background-color: var(--secondary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.warehouse-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 10px;
+}
+
+.warehouse-header h4 {
+    margin: 0;
+    color: var(--highlight-text);
+    font-size: 1em;
+}
+
+.add-warehouse-btn {
+    padding: 6px 10px;
+    background-color: var(--button-bg);
+    border: 1px solid var(--button-bg);
+    color: var(--primary-text);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.9em;
+    display: flex;
+    align-items: center;
+    transition: all 0.2s ease;
+}
+
+.add-warehouse-btn:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+}
+
+.warehouse-selector {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+}
+
+.warehouse-item {
+    display: inline-flex;
+    align-items: center;
+    position: relative;
+    transition: all 0.2s ease;
+}
+
+.warehouse-item.active .warehouse-btn {
+    background-color: var(--user-bubble-bg);
+    color: white;
+}
+
+.warehouse-item.dragging {
+    opacity: 0.5;
+}
+
+.warehouse-btn {
+    padding: 6px 12px;
+    background-color: var(--button-bg);
+    border: 1px solid var(--button-bg);
+    color: var(--primary-text);
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s ease;
+}
+
+.warehouse-btn:hover {
+    background-color: var(--button-hover-bg);
+}
+
+.hidden-blocks-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    min-height: 60px;
+    padding: 10px;
+    border-radius: 6px;
+    transition: all 0.2s ease;
+}
+
+.warehouse-empty {
+    width: 100%;
+    text-align: center;
+    color: var(--secondary-text);
+    padding: 20px;
+    font-size: 0.9em;
+    line-height: 1.6;
+}
+
+.hidden-block {
+    padding: 6px 10px;
+    background-color: var(--input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
+    cursor: move;
+    font-size: 0.85em;
+    color: var(--primary-text);
+    max-width: 200px;
+    transition: all 0.2s ease;
+    height: auto;
+    align-self: flex-start;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-line-clamp: 3;
+    -webkit-box-orient: vertical;
+    position: relative;
+}
+
+/* 小仓中有自定义名称的积木块 - 格子背景（更明显的样式） */
+.hidden-block.has-custom-name {
+    background-image:
+        linear-gradient(45deg, rgba(0, 0, 0, 0.15) 25%, transparent 25%),
+        linear-gradient(-45deg, rgba(0, 0, 0, 0.15) 25%, transparent 25%),
+        linear-gradient(45deg, transparent 75%, rgba(0, 0, 0, 0.15) 75%),
+        linear-gradient(-45deg, transparent 75%, rgba(0, 0, 0, 0.15) 75%);
+    background-size: 10px 10px;
+    background-position: 0 0, 0 5px, 5px -5px, -5px 0px;
+    background-color: var(--input-bg);
+}
+
+.hidden-block:hover {
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+}
+
+.hidden-block.dragging {
+    opacity: 0.5;
+}
+
+/* 小仓积木块拖拽排序指示器 */
+.hidden-block.warehouse-drop-left::before,
+.hidden-block.warehouse-drop-right::after {
+    content: '';
+    position: absolute;
+    top: -2px;
+    bottom: -2px;
+    width: 3px;
+    background-color: var(--user-bubble-bg);
+    box-shadow: 0 0 6px rgba(61, 90, 128, 0.5);
+    animation: warehouse-indicator-pulse 0.6s ease-in-out infinite;
+    z-index: 10;
+}
+
+.hidden-block.warehouse-drop-left::before {
+    left: -4px;
+    border-radius: 3px 0 0 3px;
+}
+
+.hidden-block.warehouse-drop-right::after {
+    right: -4px;
+    border-radius: 0 3px 3px 0;
+}
+
+@keyframes warehouse-indicator-pulse {
+    0%, 100% {
+        opacity: 1;
+        transform: scaleY(1);
+    }
+    50% {
+        opacity: 0.7;
+        transform: scaleY(0.95);
+    }
+}
+
+/* 小仓列表拖拽悬停效果 */
+.hidden-blocks-list.warehouse-drag-over {
+    background-color: var(--accent-bg);
+    border: 2px dashed var(--user-bubble-bg);
+    border-radius: 6px;
+}
+
+/* 预览模式 */
+.preview-container {
+    padding: 15px;
+    background-color: var(--input-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+}
+
+.preview-label {
+    font-weight: 500;
+    color: var(--secondary-text);
+    margin-bottom: 10px;
+    font-size: 0.9em;
+}
+
+.preview-text {
+    background-color: var(--secondary-bg);
+    padding: 12px;
+    border-radius: 6px;
+    color: var(--primary-text);
+    font-family: monospace;
+    font-size: 0.9em;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    word-break: break-word;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+/* ===== 临时与预制系统提示词模块样式 ===== */
+.preset-prompt-container {
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.preset-path-section,
+.preset-selector-section,
+.preset-editor-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.path-input-container {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+}
+
+.preset-path-input {
+    flex: 1;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.95em;
+}
+
+.preset-browse-btn,
+.preset-refresh-btn {
+    padding: 9px 15px;
+    background-color: var(--button-bg);
+    border: 1px solid var(--button-bg);
+    color: var(--primary-text);
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.95em;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+}
+
+.preset-refresh-btn {
+    padding: 9px 12px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.preset-browse-btn:hover,
+.preset-refresh-btn:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+}
+
+.preset-select {
+    width: 100%;
+    padding: 9px 10px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.95em;
+    cursor: pointer;
+}
+
+.preset-select:focus {
+    outline: none;
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.3);
+}
+
+.preset-prompt-textarea {
+    min-height: 200px;
+}
+
+/* 响应式设计 */
+@media (max-width: 768px) {
+    .prompt-mode-selector {
+        flex-direction: column;
+    }
+
+    .prompt-mode-button {
+        border-right: none;
+        border-bottom: 1px solid var(--border-color);
+    }
+
+    .prompt-mode-button:last-child {
+        border-bottom: none;
+    }
+
+    .modular-toolbar {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .toolbar-controls-group {
+        margin-left: 0;
+        width: 100%;
+        justify-content: flex-start;
+    }
+
+    .toolbar-btn {
+        justify-content: center;
+    }
+
+    .blocks-container {
+        flex-direction: column;
+    }
+
+    .block-content {
+        max-width: 100%;
+    }
+
+    .path-input-container {
+        flex-direction: column;
+    }
+
+    .preset-browse-btn,
+    .preset-refresh-btn {
+        width: 100%;
+    }
+}
+
+/* 窄侧边栏优化 */
+@media (max-width: 500px) {
+    .modular-toolbar {
+        gap: 8px;
+    }
+    
+    .toolbar-btn {
+        font-size: 0.85em;
+        padding: 6px 10px;
+    }
+    
+    .toolbar-controls-group {
+        flex-wrap: wrap;
+    }
+}
+
+/* 亮色主题适配 */
+body.light-theme .prompt-mode-button.active {
+    background-color: var(--user-bubble-bg);
+    color: white;
+}
+
+body.light-theme .block-context-menu {
+    background-color: var(--secondary-bg);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+}
+
+body.light-theme .preview-text {
+    background-color: var(--input-bg);
+}
+
+/* 编辑隐藏积木块对话框 */
+.edit-hidden-block-dialog {
+    position: fixed;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    z-index: 10000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.dialog-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+}
+
+.dialog-content {
+    position: relative;
+    background-color: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 12px;
+    padding: 24px;
+    width: 90%;
+    max-width: 500px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.2);
+    z-index: 1;
+}
+
+.dialog-content h3 {
+    margin: 0 0 20px 0;
+    color: var(--highlight-text);
+    font-size: 1.2em;
+}
+
+.dialog-field {
+    margin-bottom: 16px;
+}
+
+.dialog-field label {
+    display: block;
+    font-weight: 500;
+    color: var(--secondary-text);
+    font-size: 0.9em;
+    margin-bottom: 6px;
+}
+
+.block-name-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 9px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.95em;
+}
+
+.block-name-input:focus {
+    outline: none;
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.3);
+}
+
+.block-content-input {
+    width: 100%;
+    box-sizing: border-box;
+    padding: 10px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--border-color);
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.95em;
+    font-family: inherit;
+    resize: vertical;
+    min-height: 120px;
+    line-height: 1.5;
+}
+
+.block-content-input:focus {
+    outline: none;
+    border-color: var(--user-bubble-bg);
+    box-shadow: 0 0 0 2px rgba(61, 90, 128, 0.3);
+}
+
+.dialog-buttons {
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+    margin-top: 20px;
+}
+
+.dialog-btn {
+    padding: 9px 18px;
+    border-radius: 8px;
+    border: none;
+    font-size: 0.95em;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+.dialog-btn-cancel {
+    background-color: var(--secondary-bg);
+    color: var(--primary-text);
+}
+
+.dialog-btn-cancel:hover {
+    background-color: var(--accent-bg);
+}
+
+.dialog-btn-save {
+    background-color: var(--user-bubble-bg);
+    color: white;
+}
+
+.dialog-btn-save:hover {
+    opacity: 0.9;
+}

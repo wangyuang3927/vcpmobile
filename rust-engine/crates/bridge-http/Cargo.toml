@@ -1,0 +1,24 @@
+[package]
+name = "vcpmobile-bridge-http"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+axum.workspace = true
+chrono.workspace = true
+futures-util.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+uuid.workspace = true
+vcpmobile-domain = { path = "../domain" }
+vcpmobile-protocol = { path = "../protocol" }
+vcpmobile-session = { path = "../session" }
+vcpmobile-store = { path = "../store" }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }

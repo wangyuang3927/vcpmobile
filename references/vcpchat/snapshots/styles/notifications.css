@@ -1,0 +1,632 @@
+/* styles/notifications.css */
+
+.notifications-header {
+    padding: 10px 15px;
+    /* 关键修改：这里也应该使用磨砂玻璃效果 */
+    background-color: var(--panel-bg-dark);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: none;
+    flex-shrink: 0;
+    padding: 10px 6px 10px 17px; /* 整体向右移动2px */
+}
+/* 为亮色主题添加对应样式 */
+body.light-theme .notifications-header {
+    background-color: var(--panel-bg-light) !important;
+}
+#clearNotificationsBtn,
+#doNotDisturbBtn,
+.notifications-header .header-button {
+    background-color: var(--button-bg);
+    color: var(--secondary-text);
+    border: 1px solid var(--button-bg);
+    padding: 0 8px;
+    height: 29px; /* 高度做小1像素 */
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.2s, border-color 0.2s, color 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    margin-right: -1px; /* 尝试 */
+    position: relative; /* 为文字上移做准备 */
+    top: 0px; /* 清空文字下挪1px */
+}
+
+#clearNotificationsBtn:hover,
+#doNotDisturbBtn:hover,
+.notifications-header .header-button:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+    color: var(--primary-text);
+}
+
+body.light-theme #clearNotificationsBtn, body.light-theme #doNotDisturbBtn, body.light-theme .notifications-header .header-button {
+    background-color: var(--button-bg-light);
+    color: var(--button-bg);
+}
+body.light-theme #clearNotificationsBtn:hover, body.light-theme #doNotDisturbBtn:hover, body.light-theme .notifications-header .header-button:hover {
+    color: #ffffff;
+}
+
+.notifications-header #openMailboxTestPanelBtn {
+    margin-left: -1px; /* 向左移动 1px */
+    top: -1px; /* 向上移动 1px */
+}
+
+.notifications-header .header-button#openAdminPanelBtn {
+    width: 30px;
+    padding: 0;
+    position: relative;
+    top: 1px;
+}
+
+#doNotDisturbBtn.active {
+    background-color: var(--highlight-text) !important;
+    color: var(--text-on-accent) !important;
+    border-color: var(--highlight-text) !important;
+}
+
+#doNotDisturbBtn.active:hover {
+    background-color: var(--highlight-text) !important;
+    border-color: var(--highlight-text) !important;
+    color: var(--text-on-accent) !important;
+}
+.notifications-header .header-button svg {
+    stroke: currentColor;
+    width: 18px;
+    height: 18px;
+    position: relative;
+    top: 2.5px; /* 小齿轮下挪1像素 */
+}
+
+.notifications-status {
+    padding: 8px 15px;
+    font-size: 0.85em;
+    background-color: var(--tertiary-bg);
+    color: var(--secondary-text);
+    border-bottom: 1px solid var(--border-color);
+    text-align: center;
+    flex-shrink: 0; /* Prevent status bar from shrinking */
+}
+.notifications-status.status-open { background-color: #2e7d32; color: white;}
+.notifications-status.status-closed { background-color: #c62828; color: white;}
+.notifications-status.status-error { background-color: #b71c1c; color: white;}
+.notifications-status.status-connecting { background-color: #f9a825; color: black;}
+
+
+.notifications-list {
+    list-style-type: none;
+    padding: 0;
+    margin: 0;
+    overflow-y: auto;
+    overflow-x: hidden;
+    flex-grow: 1;
+}
+.notification-item {
+    padding: 10px 15px;
+    border-bottom: 1px solid var(--border-color);
+    font-size: 0.9em;
+    background-color: var(--notification-bg);
+    color: var(--primary-text); 
+}
+.notification-item:last-child {
+    border-bottom: none;
+}
+.notification-item strong {
+    color: var(--highlight-text);
+    display: block;
+    margin-bottom: 4px;
+}
+.notification-item pre {
+    background-color: rgba(0,0,0,0.2);
+    padding: 6px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    margin-top: 5px;
+    max-height: 100px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+.notification-timestamp {
+    font-size: 0.75em;
+    color: var(--secondary-text);
+    opacity: 0.7;
+    display: block;
+    text-align: right;
+    margin-top: 5px;
+}
+ 
+.notes-section {
+    padding: 10px 8px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    padding: 10px 8px;
+    display: flex;
+    justify-content: flex-end;
+    align-items: center;
+    /* 关键修改：这里也需要是透明或半透明的，并应用模糊 */
+    background-color: transparent; /* 直接设为透明，因为它位于 notifications-sidebar 内，继承其模糊效果 */
+    padding-top: 10px;
+    padding-bottom: 10px;
+    flex-shrink: 0;
+}
+
+body.light-theme .notes-section {
+    background-color: transparent;
+}
+
+.notifications-sidebar > .section-divider { 
+    border: none;
+    margin: 0; 
+    width: 100%;
+    box-sizing: border-box; 
+    padding: 0 15px; 
+}
+
+.notes-section #openTranslatorBtn,
+.notes-section #openNotesBtn,
+.notes-section #openMusicBtn,
+.notes-section #openDiceBtn,
+.notes-section #openCanvasBtn {
+    background-color: var(--button-bg);
+    color: var(--secondary-text);
+    border: 1px solid var(--button-bg);
+    padding: 0 5px;
+    height: 32px;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 0.9em;
+    transition: background-color 0.2s, border-color 0.2s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+    margin-left: 5px; /* Reduced margin */
+    width: auto;
+}
+
+.notes-section #openTranslatorBtn:hover,
+.notes-section #openNotesBtn:hover,
+.notes-section #openMusicBtn:hover,
+.notes-section #openDiceBtn:hover,
+.notes-section #openCanvasBtn:hover {
+    background-color: var(--button-hover-bg);
+    border-color: var(--button-hover-bg);
+    color: var(--primary-text);
+}
+
+.notes-section #openTranslatorBtn svg,
+.notes-section #openNotesBtn svg,
+.notes-section #openMusicBtn svg,
+.notes-section #openDiceBtn svg,
+.notes-section #openCanvasBtn svg {
+    stroke: currentColor;
+    width: 18px;
+    height: 18px;
+    margin-right: 2px; /* Reduce space between icon and text */
+}
+
+body.light-theme .notes-section #openTranslatorBtn,
+body.light-theme .notes-section #openNotesBtn,
+body.light-theme .notes-section #openMusicBtn,
+body.light-theme .notes-section #openDiceBtn,
+body.light-theme .notes-section #openCanvasBtn {
+    color: #ffffff;
+    border: 1px solid var(--button-bg-light);
+}
+
+body.light-theme .notes-section #openTranslatorBtn:hover,
+body.light-theme .notes-section #openNotesBtn:hover,
+body.light-theme .notes-section #openMusicBtn:hover,
+body.light-theme .notes-section #openDiceBtn:hover,
+body.light-theme .notes-section #openCanvasBtn:hover {
+    color: #ffffff;
+    border-color: var(--button-hover-bg-light);
+}
+
+.notification-item {
+    position: relative;
+    background-color: var(--notification-bg);
+    color: var(--primary-text);
+    padding: 10px 15px;
+    padding-right: 40px;
+    border-bottom: 1px solid var(--border-color);
+    border-radius: 0;
+    margin: 0;
+    font-size: 0.9em;
+    box-shadow: none;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: opacity 0.5s ease, transform 0.5s ease;
+    width: 100%;
+    box-sizing: border-box;
+    cursor: pointer;
+    overflow: hidden;
+    max-width: 100%;
+
+    background-image: linear-gradient(
+        110deg,
+        var(--notification-bg) 0%,
+        var(--notification-bg) 40%,
+        var(--accent-bg) 50%,
+        var(--notification-bg) 60%,
+        var(--notification-bg) 100%
+    );
+    background-size: 250% 100%;
+    /* 移除通知项的持续流光动画，减少空闲时的重绘 */
+    /* animation: vcp-shimmer-bg 7s linear infinite; */
+}
+
+.notification-item.visible {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.notification-item:last-child {
+    border-bottom: 1px solid var(--border-color);
+}
+
+
+.notification-item strong {
+    color: var(--highlight-text);
+    display: block;
+    margin-bottom: 4px;
+    position: relative;
+    z-index: 1;
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-break: break-all;
+}
+
+.notification-item .notification-content {
+    position: relative;
+    z-index: 1;
+    max-width: 100%;
+    overflow-wrap: break-word;
+    word-break: break-all;
+}
+
+.notification-item pre {
+    background-color: rgba(0,0,0,0.2);
+    padding: 6px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    margin-top: 5px;
+    max-height: 100px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+    position: relative;
+    z-index: 1;
+}
+
+.notification-copy-btn {
+    position: absolute;
+    top: 5px;
+    right: 5px;
+    background: rgba(255,255,255,0.1);
+    color: var(--primary-text);
+    border: 1px solid rgba(255,255,255,0.3);
+    border-radius: 4px;
+    padding: 2px 5px;
+    font-size: 0.8em;
+    cursor: pointer;
+    opacity: 0.7;
+    transition: opacity 0.2s, background-color 0.2s;
+    z-index: 2;
+}
+.notification-copy-btn:hover {
+    opacity: 1;
+    background: rgba(255,255,255,0.2);
+}
+
+.notification-timestamp {
+    font-size: 0.75em;
+    color: #444444;
+    opacity: 0.9;
+    display: block;
+    text-align: right;
+    margin-top: 5px;
+    position: relative;
+    z-index: 1;
+    max-width: 100%;
+    overflow-wrap: break-word;
+}
+
+body.light-theme .notification-item {
+    color: #000000;
+}
+
+#floating-toast-notifications-container {
+    position: fixed;
+    top: 40px;
+    right: 20px;
+    width: 320px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+.floating-toast-notification {
+    background-color: rgba(var(--rgb-secondary-bg-dark, 40, 40, 44), 0.85);
+    color: var(--primary-text);
+    padding: 12px 15px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.25);
+    font-size: 0.9em;
+    position: relative;
+    opacity: 0;
+    transform: translateX(100%);
+    transition: opacity 0.4s ease-out, transform 0.4s ease-out, background-color 0.3s ease;
+    cursor: pointer;
+    overflow: hidden;
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+
+    background-image: linear-gradient(
+        110deg,
+        transparent 0%,
+        transparent 35%,
+        var(--accent-bg) 50%,
+        transparent 65%,
+        transparent 100%
+    );
+    background-size: 300% 100%;
+    /* 移除悬浮通知的持续流光动画，减少空闲时的重绘 */
+    /* animation: vcp-shimmer-bg 5s linear infinite; */
+}
+
+body.dark-theme .floating-toast-notification {
+    background-color: rgba(40, 40, 44, 0.85);
+}
+
+body.light-theme .floating-toast-notification {
+    background-color: rgba(240, 244, 248, 0.85);
+    color: var(--primary-text-light);
+    box-shadow: 0 4px 12px rgba(0,0,0,0.1);
+}
+
+
+.floating-toast-notification.visible {
+    opacity: 1;
+    transform: translateX(0);
+}
+
+.floating-toast-notification.exiting {
+    opacity: 0;
+    transform: translateX(110%);
+}
+
+
+.floating-toast-notification strong {
+    color: var(--highlight-text);
+    display: block;
+    margin-bottom: 5px;
+    font-size: 1.05em;
+}
+
+.floating-toast-notification .notification-content p {
+    margin: 0;
+    line-height: 1.4;
+}
+.floating-toast-notification .notification-content pre {
+    background-color: rgba(0,0,0,0.1);
+    padding: 6px 8px;
+    border-radius: 4px;
+    font-size: 0.85em;
+    margin-top: 6px;
+    max-height: 80px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    word-break: break-all;
+}
+
+.floating-toast-notification .notification-timestamp {
+    font-size: 0.75em;
+    color: var(--secondary-text);
+    opacity: 0.8;
+    display: block;
+    text-align: right;
+    margin-top: 8px;
+}
+
+/* Filter Rules Management Styles */
+.filter-rules-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.filter-rules-list {
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.filter-rule-item {
+    background-color: var(--tertiary-bg);
+    border: 1px solid var(--border-color);
+    border-radius: 8px;
+    margin-bottom: 10px;
+    padding: 12px;
+    transition: all 0.2s ease;
+}
+
+.filter-rule-item.enabled {
+    border-left: 4px solid var(--success-color, #28a745);
+    background-color: rgba(40, 167, 69, 0.05);
+}
+
+.filter-rule-item.disabled {
+    border-left: 4px solid var(--danger-color, #dc3545);
+    opacity: 0.6;
+}
+
+.filter-rule-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 8px;
+}
+
+.filter-rule-title {
+    display: flex;
+    flex-direction: column;
+    gap: 5px;
+}
+
+.filter-rule-title strong {
+    color: var(--primary-text);
+    font-size: 1em;
+}
+
+.rule-type {
+    font-size: 0.8em;
+    padding: 2px 6px;
+    border-radius: 12px;
+    background-color: var(--secondary-bg);
+    color: var(--secondary-text);
+    align-self: flex-start;
+}
+
+.rule-type.whitelist {
+    background-color: rgba(40, 167, 69, 0.2);
+    color: var(--success-color, #28a745);
+}
+
+
+.filter-rule-actions {
+    display: flex;
+    gap: 5px;
+    flex-shrink: 0;
+}
+
+.filter-rule-actions .small-button {
+    padding: 4px 8px;
+    font-size: 0.8em;
+    min-width: auto;
+}
+
+.filter-rule-details {
+    font-size: 0.85em;
+    color: var(--secondary-text);
+    line-height: 1.4;
+}
+
+.rule-pattern, .rule-positions, .rule-duration {
+    margin: 2px 0;
+}
+
+.rule-pattern {
+    font-weight: 500;
+}
+
+/* Filter Rule Editor Styles */
+#filterRuleEditorModal .modal-content {
+    max-width: 500px;
+}
+
+.form-fieldset {
+    margin: 15px 0;
+    padding: 10px;
+    background-color: var(--secondary-bg);
+    border-radius: 6px;
+    border: 1px solid var(--border-color);
+}
+
+.form-fieldset label {
+    display: block;
+    margin-bottom: 8px;
+    font-weight: 500;
+    color: var(--primary-text);
+}
+
+.checkbox-group, .radio-group {
+    display: flex;
+    gap: 15px;
+    flex-wrap: wrap;
+}
+
+.checkbox-group label, .radio-group label {
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    margin: 0;
+    font-weight: normal;
+    cursor: pointer;
+}
+
+.checkbox-group input[type="checkbox"],
+.radio-group input[type="radio"] {
+    margin: 0;
+}
+
+#filterRuleEditorModal input[type="text"],
+#filterRuleEditorModal input[type="number"],
+#filterRuleEditorModal select,
+#filterRuleEditorModal textarea {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid var(--border-color);
+    border-radius: 4px;
+    background-color: var(--input-bg);
+    color: var(--primary-text);
+    font-size: 0.9em;
+    box-sizing: border-box;
+}
+
+#filterRuleEditorModal input[type="text"]:focus,
+#filterRuleEditorModal input[type="number"]:focus,
+#filterRuleEditorModal select:focus,
+#filterRuleEditorModal textarea:focus {
+    outline: none;
+    border-color: var(--highlight-text);
+    box-shadow: 0 0 0 2px rgba(var(--highlight-text-rgb, 0, 123, 255), 0.25);
+}
+
+#filterRuleEditorModal textarea {
+    resize: vertical;
+    min-height: 60px;
+}
+
+#filterRuleEditorModal .form-actions {
+    margin-top: 20px;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+/* Modal specific adjustments */
+#filterRulesModal .modal-content {
+    padding: 20px;
+}
+
+#filterRulesModal h2 {
+    margin-top: 0;
+    margin-bottom: 15px;
+    color: var(--primary-text);
+}
+
+/* Status display styling */
+#filterStatus {
+    font-size: 0.9em;
+    padding: 2px 8px;
+    border-radius: 12px;
+    background-color: var(--secondary-bg);
+}
+
+.notifications-header #openForumBtn {
+    position: relative;
+    top: 1px;
+}

@@ -1,0 +1,17 @@
+[
+  {"type":"heading","depth":2,"text":"Parity floor"},
+  {"type":"paragraph","text":"Markdown fixtures stay observable."},
+  {"type":"quote","text":"quoted context"},
+  {"type":"task_list_item","text":"ship android parity","checked":true},
+  {"type":"list_item","text":"document prompt smoke","ordered":true},
+  {"type":"list_item","text":"render smoke","ordered":true},
+  {"type":"link","text":"spec","url":"https://example.com/spec"},
+  {"type":"inline_code","text":"println(1)"},
+  {"type":"math_block","text":"x^2 + y^2 = z^2"},
+  {"type":"code_block","text":"println(\"fixture\")","lang":"kotlin"},
+  {
+    "type":"table",
+    "headers":["Type","Observable"],
+    "rows":[["markdown","yes"],["document","yes"]]
+  }
+]

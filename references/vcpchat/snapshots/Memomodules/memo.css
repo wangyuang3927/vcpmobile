@@ -1,0 +1,510 @@
+/* Memomodules/memo.css */
+
+:root {
+    --sidebar-width: 260px;
+}
+
+body {
+    margin: 0;
+    padding: 0;
+    height: 100vh;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    background-color: var(--main-bg-color, #1a1a1a);
+    color: var(--text-primary);
+    font-family: 'Segoe UI', system-ui, sans-serif;
+}
+
+/* --- Layout --- */
+.app-layout {
+    display: flex;
+    flex: 1;
+    height: calc(100vh - 60px);
+    margin-top: 60px;
+}
+
+/* --- Sidebar --- */
+.sidebar {
+    width: var(--sidebar-width);
+    background: rgba(0, 0, 0, 0.2);
+    backdrop-filter: blur(10px);
+    border-right: 1px solid var(--glass-border);
+    display: flex;
+    flex-direction: column;
+    transition: all 0.3s ease;
+}
+
+.sidebar-header {
+    padding: 20px;
+    font-size: 0.9rem;
+    font-weight: bold;
+    color: var(--accent-color);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.folder-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 10px;
+}
+
+.folder-item {
+    padding: 12px 15px;
+    border-radius: 10px;
+    margin-bottom: 5px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: all 0.2s ease;
+    color: var(--text-secondary);
+}
+
+.folder-item.dragging {
+    opacity: 0.5;
+    background: rgba(var(--accent-color-rgb, 74, 144, 226), 0.2);
+    border: 1px dashed var(--accent-color);
+}
+
+.folder-item.drag-over {
+    border-top: 2px solid var(--accent-color);
+    background: rgba(255, 255, 255, 0.05);
+}
+
+.folder-item:hover {
+    background: rgba(255, 255, 255, 0.05);
+    color: var(--text-primary);
+}
+
+.folder-item.active {
+    background: var(--accent-color);
+    color: var(--text-on-accent);
+    box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+}
+
+.folder-item svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* --- Main Content --- */
+.main-content {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    position: relative;
+}
+
+.content-header {
+    padding: 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+.folder-title {
+    font-size: 1.5rem;
+    font-weight: 600;
+}
+
+/* --- Memo Grid --- */
+.memo-grid {
+    flex: 1;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+    grid-auto-rows: min-content;
+    gap: 20px;
+    overflow-y: auto;
+}
+
+.memo-card {
+    padding: 20px;
+    border-radius: 15px;
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    cursor: pointer;
+    animation: fadeIn 0.5s ease backwards;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+.memo-card h3 {
+    margin: 0 0 10px 0;
+    font-size: 1.1rem;
+    color: var(--accent-color);
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.memo-card .preview {
+    font-size: 0.9rem;
+    color: var(--text-secondary);
+    line-height: 1.6;
+    display: -webkit-box;
+    -webkit-line-clamp: 4;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+}
+
+.memo-card .meta {
+    margin-top: 15px;
+    font-size: 0.75rem;
+    color: var(--text-secondary);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-top: 1px solid var(--glass-border);
+    padding-top: 10px;
+}
+
+.memo-card.selectable {
+    position: relative;
+}
+
+.memo-card.selectable::before {
+    content: '';
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    width: 20px;
+    height: 20px;
+    border: 2px solid var(--glass-border);
+    border-radius: 50%;
+    background: rgba(0,0,0,0.2);
+    transition: all 0.2s;
+}
+
+.memo-card.selected {
+    border-color: var(--accent-color);
+    background: rgba(var(--accent-color-rgb, 74, 144, 226), 0.1);
+}
+
+.memo-card.selected::before {
+    background: var(--accent-color);
+    border-color: var(--accent-color);
+    box-shadow: 0 0 10px var(--accent-color);
+}
+
+/* --- Editor Overlay --- */
+.editor-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(20px);
+    z-index: 2000;
+    display: none;
+    justify-content: center;
+    align-items: center;
+    padding: 40px;
+}
+
+.editor-overlay.active {
+    display: flex;
+}
+
+.editor-container {
+    width: 100%;
+    max-width: 1000px;
+    height: 100%;
+    display: flex;
+    flex-direction: column;
+    background: var(--glass-bg);
+    border: 1px solid var(--glass-border);
+    border-radius: 25px;
+    overflow: hidden;
+    box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
+}
+
+.editor-header {
+    padding: 15px 25px;
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.editor-title-input {
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 1.2rem;
+    font-weight: bold;
+    flex: 1;
+    outline: none;
+}
+
+.editor-body {
+    flex: 1;
+    display: flex;
+    overflow: hidden;
+}
+
+.editor-textarea {
+    flex: 1;
+    padding: 25px;
+    background: transparent;
+    border: none;
+    color: var(--text-primary);
+    font-size: 1rem;
+    line-height: 1.7;
+    resize: none;
+    outline: none;
+    font-family: 'Consolas', 'Monaco', monospace;
+    border-right: 1px solid var(--glass-border);
+}
+
+.editor-preview {
+    flex: 1;
+    padding: 25px;
+    overflow-y: auto;
+    color: var(--text-primary);
+    line-height: 1.7;
+}
+
+.editor-footer {
+    padding: 15px 25px;
+    border-top: 1px solid var(--glass-border);
+    display: flex;
+    justify-content: flex-end;
+    gap: 15px;
+}
+
+/* --- Scrollbar --- */
+::-webkit-scrollbar {
+    width: 6px;
+}
+::-webkit-scrollbar-track {
+    background: transparent;
+}
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.1);
+    border-radius: 10px;
+}
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+}
+
+/* --- Utilities --- */
+.glass-btn {
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--text-primary);
+    padding: 8px 15px;
+    border-radius: 8px;
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.9rem;
+    transition: all 0.2s;
+    height: 36px;
+}
+
+.glass-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    transform: translateY(-1px);
+}
+
+.glass-btn.primary {
+    background: var(--accent-color);
+    color: var(--text-on-accent);
+    border: none;
+}
+
+.glass-btn.danger {
+    color: var(--danger-color);
+}
+
+.glass-btn.danger:hover {
+    background: rgba(229, 115, 115, 0.1);
+}
+
+/* --- Search Scope Toggle Button --- */
+.scope-toggle-btn {
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 50%;
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid var(--glass-border);
+    color: var(--text-secondary);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    transition: all 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.scope-toggle-btn:hover {
+    background: rgba(255, 255, 255, 0.1);
+    color: var(--text-primary);
+    transform: scale(1.1) rotate(5deg);
+}
+
+.scope-toggle-btn.active {
+    background: var(--accent-color);
+    color: var(--text-on-accent);
+    border-color: transparent;
+    box-shadow: 0 0 15px var(--accent-color);
+}
+
+.scope-toggle-btn svg {
+    width: 18px;
+    height: 18px;
+}
+
+/* Ensure search input height matches buttons */
+.search-glass {
+    height: 36px;
+    padding: 0 15px;
+    display: flex;
+    align-items: center;
+}
+
+/* --- Context Menu --- */
+.context-menu {
+    background: rgba(30, 30, 30, 0.9);
+    backdrop-filter: blur(15px);
+    border: 1px solid var(--glass-border);
+    overflow: hidden;
+}
+
+.context-menu-item {
+    padding: 10px 15px;
+    font-size: 0.9rem;
+    color: var(--text-primary);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    transition: background 0.2s;
+}
+
+.context-menu-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+}
+
+.context-menu-item.danger {
+    color: var(--danger-color);
+}
+
+.context-menu-item.danger:hover {
+    background: rgba(229, 115, 115, 0.1);
+}
+
+.context-menu-item svg {
+    width: 14px;
+    height: 14px;
+}
+
+/* --- Batch Floating Bar --- */
+.batch-floating-bar {
+    position: fixed;
+    bottom: 20px;
+    right: 20px;
+    width: 260px;
+    max-height: 300px;
+    background: rgba(25, 25, 25, 0.85);
+    backdrop-filter: blur(25px);
+    border: 1px solid var(--glass-border);
+    border-radius: 16px;
+    display: none;
+    flex-direction: column;
+    box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5);
+    z-index: 1500;
+    animation: slideUp 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+@keyframes slideUp {
+    from { transform: translateY(50px); opacity: 0; }
+    to { transform: translateY(0); opacity: 1; }
+}
+
+.batch-bar-header {
+    padding: 10px 12px;
+    border-bottom: 1px solid var(--glass-border);
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 0.8rem;
+    font-weight: bold;
+    color: var(--accent-color);
+}
+
+.batch-bar-items {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.batch-item-tag {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid var(--glass-border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+    position: relative;
+    transition: all 0.2s;
+}
+
+.batch-item-tag:hover {
+    background: rgba(255, 255, 255, 0.08);
+}
+
+.batch-item-tag .item-name {
+    font-size: 0.8rem;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding-right: 18px;
+}
+
+.batch-item-tag .item-folder {
+    font-size: 0.65rem;
+    color: var(--text-secondary);
+    opacity: 0.6;
+}
+
+.batch-item-remove {
+    position: absolute;
+    top: 50%;
+    right: 8px;
+    transform: translateY(-50%);
+    width: 20px;
+    height: 20px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    color: var(--text-secondary);
+    border-radius: 50%;
+    transition: all 0.2s;
+}
+
+.batch-item-remove:hover {
+    background: var(--danger-color);
+    color: white;
+}

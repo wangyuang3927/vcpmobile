@@ -1,0 +1,146 @@
+/*
+ * styles/themes.css
+ * Curated by Gemini for Professor Ryan
+ * New Palette Set 3: "Midnight Neon" and "Artisan Coffee"
+ * Elegance and Atmosphere are the core principles of this design.
+ */
+
+/* * =================================================================
+ * Dark Theme (Default): Midnight Neon Palette (午夜霓虹)
+ * Inspired by neon lights reflecting through a rain-streaked window at night.
+ * A mysterious, focused, and high-fashion theme.
+ * =================================================================
+ */
+:root {
+    /* --- Wallpaper Interface --- */
+    /*
+     * For the frosted glass effect on chat bubbles to be prominent,
+     * it's recommended to set a wallpaper.
+     * 使用方法: 将 'none' 替换为 url('您的图片链接')
+     */
+    --chat-wallpaper-dark: url('../assets/wallpaper/sakuranight.png');
+
+    /* --- Base Colors --- */
+    --primary-bg: #101116;      /* 主背景 - 带微弱紫调的午夜蓝 */
+    --secondary-bg: #1a1b22;    /* 侧边栏/面板背景 - 深石板色 */
+    --tertiary-bg: #0b0c10;     /* 聊天区背景 - 近乎纯黑 */
+    --accent-bg: #3a324b;       /* 悬停/选中背景 - 柔和的霓虹紫 */
+    --border-color: #3a324b;    /* 边框颜色 */
+    --input-bg: #1a1b22;        /* 输入框背景 */
+
+--panel-bg-dark: rgba(26, 27, 34, 0.75); /* 基于--secondary-bg，增加75%不透明度 */
+
+    /* --- Text Colors --- */
+    --primary-text: #e8e9ed;    /* 主要文字 - 柔和的银灰色 */
+    --secondary-text: #d1d1db;  /* 次要/标题文字 - 中性灰 */
+    --highlight-text: #ff4785;  /* 高亮文字 - 赛博粉 */
+    --text-on-accent: #ffffff;  /* 在强调色背景上的文字 */
+    --placeholder-text: #6c6d75; /* 输入框占位文字 */
+    --quoted-text: #ff4785;     /* 引用文本颜色 */
+    --user-text: #e0f2f7;       /* 用户气泡文字 - 很浅的淡蓝色 */
+    --agent-text: #e8e9ed;      /* Agent气泡文字 - 柔和的银灰色 */
+
+    /* --- Bubble Colors (Frosted Glass Ready) --- */
+    --user-bubble-bg: rgba(255, 71, 133, 0.15); /* 用户气泡 - 半透明赛博粉 */
+    --assistant-bubble-bg: rgba(219, 220, 225, 0.1); /* AI气泡 - 半透明银灰色 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #ff4785;           /* 按钮背景 - 赛博粉 */
+    --button-hover-bg: #ff6b9c;      /* 按钮悬停 */
+    --danger-color: #e74c3c;        /* 危险操作 - 经典红 */
+    --danger-hover-bg: #c0392b;
+    --success-color: #00cec9;       /* 成功操作 - 薄荷青 */
+    --notification-bg: #1a1b22;
+    --notification-header-bg: #101116;
+    --notification-border: #ff4785;
+    --tool-bubble-bg: rgba(219, 220, 225, 0.15);
+    --tool-bubble-border: #ff4785;
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(26, 27, 34, 0.5);
+    --scrollbar-thumb: rgba(58, 50, 75, 0.7);
+    --scrollbar-thumb-hover: rgba(255, 71, 133, 0.6);
+
+    /* --- 流式输出动画光晕 Shimmer Effect for Loading --- */
+    --shimmer-color-transparent: rgba(220, 221, 225, 0.721);
+    --shimmer-color-highlight: rgb(255, 78, 146);
+
+    /* --- Text Shadow for Frosted Panels --- */
+    --panel-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.4);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-dark);
+}
+
+body {
+    background-image: var(--chat-wallpaper-dark);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}
+
+/* * =================================================================
+ * Light Theme: Golden Dawn Palette (温暖晨曦)
+ * Inspired by the first light of sunrise over wheat fields
+ * Warm, nurturing, and gently energizing
+ * =================================================================
+ */
+body.light-theme {
+    /* Wallpaper and background properties */
+    background-image: var(--chat-wallpaper-light);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+
+    /* --- Wallpaper Interface --- */
+    --chat-wallpaper-light: url('../assets/wallpaper/wincoffee.png');
+
+    /* --- Base Colors --- */
+    --primary-bg: #faf8f5;      /* 主背景 - 晨曦米白 */
+    --secondary-bg: #fff9f0;    /* 侧边栏 - 暖阳白 */
+    --tertiary-bg: #f5f0e8;     /* 聊天区 - 麦田米色 */
+    --accent-bg: #e8ddd4;       /* 悬停背景 - 温润土色 */
+    --border-color: #d4c4b0;    /* 边框 - 秋叶金棕 */
+    --input-bg: #ffffff;        /* 输入框 */
+
+--panel-bg-light: rgba(255, 249, 240, 0.8); /* 基于--secondary-bg，增加80%不透明度 */
+
+    /* --- Text Colors --- */
+    --primary-text: #2d2922;    /* 主要文字 - 深咖啡色 */
+    --secondary-text: #6b5d4f;  /* 次要文字 - 暖棕色 */
+    --highlight-text: #8b4513;  /* 高亮文字 - 赤褐色 */
+    --text-on-accent: #2d2922;  /* 强调背景文字 */
+    --placeholder-text: #a0927f; /* 占位文字 - 暖灰褐 */
+    --quoted-text: #228b22;     /* 引用文字 - 森林绿 */
+    --user-text: #854914;       /* 用户气泡文字 - 米黄色 */
+    --agent-text: #2d2922;      /* Agent气泡文字 - 深咖啡色 */
+
+    /* --- Bubble Colors --- */
+    --user-bubble-bg: rgba(139, 69, 19, 0.08);     /* 用户气泡 - 赤褐透明 */
+    --assistant-bubble-bg: rgba(45, 41, 34, 0.05); /* AI气泡 - 深咖啡透明 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #8b4513;           /* 按钮 - 赤褐色 */
+    --button-hover-bg: #a0522d;     /* 按钮悬停 */
+    --danger-color: #cd853f;        /* 危险色 - 温和橙棕 */
+    --danger-hover-bg: #d2691e;
+    --success-color: #6b8e23;       /* 成功色 - 橄榄绿 */
+    --notification-bg: #f5f0e8;
+    --notification-header-bg: #faf8f5;
+    --notification-border: #8b4513;
+    --tool-bubble-bg: rgba(107, 142, 35, 0.08);
+    --tool-bubble-border: #6b8e23;
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(245, 240, 232, 0.7);
+    --scrollbar-thumb: rgba(212, 196, 176, 0.8);
+    --scrollbar-thumb-hover: rgba(139, 69, 19, 0.6);
+
+    /* --- 流式输出动画光晕 Shimmer Effect --- */
+    --shimmer-color-transparent: rgba(254, 250, 244, 0.892);
+    --shimmer-color-highlight: rgba(255, 174, 35, 0.973);
+    
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-light);
+}
+

@@ -1,0 +1,1827 @@
+use std::{convert::Infallible, net::SocketAddr, path::PathBuf, sync::Arc, time::Duration};
+
+use anyhow::Context;
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::StatusCode,
+    response::{
+        IntoResponse,
+        sse::{Event, KeepAlive, Sse},
+    },
+    routing::{get, post},
+};
+use futures_util::stream;
+use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
+use tokio_stream::StreamExt;
+use uuid::Uuid;
+use vcpmobile_domain::{
+    AgentConfig, ConversationId, DocumentAttachmentInput, GenerationState, ProviderAuthConfig,
+    ProviderConfig,
+};
+use vcpmobile_protocol::{
+    ChatEvent, EditMessageRequest, EventEnvelope, EventError, EventErrorKind, PairingExchangeError,
+    PairingExchangeFailureResponse, PairingExchangeFailureStatus, PairingExchangeRequest,
+    PairingExchangeSuccessResponse, RegenerateNodeRequest, ResolvePromptPreviewRequest,
+    ResolvePromptPreviewResponse, ResolvedPromptPreview, SelectVariantRequest, SnapshotBranch,
+    SnapshotConversation, TransformDocumentPromptRequest, TransformDocumentPromptResponse,
+};
+use vcpmobile_session::{
+    SessionEditRequest, SessionEngine, SessionRegenerateRequest, SessionSelectVariantRequest,
+    SessionSendRequest, StreamSessionStart, demo_conversation, resolve_prompt_preview,
+    selected_branch_snapshot_nodes,
+};
+use vcpmobile_store::{FileStore, StoredConversationResumeAnchor};
+
+#[derive(Clone)]
+struct AppState {
+    engine: Arc<Mutex<SessionEngine>>,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiErrorResponse {
+    error: ApiErrorBody,
+}
+
+#[derive(Debug, Serialize)]
+struct ApiErrorBody {
+    kind: &'static str,
+    code: &'static str,
+    message: String,
+    retriable: bool,
+}
+
+#[derive(Debug)]
+struct ApiError {
+    status: StatusCode,
+    kind: &'static str,
+    code: &'static str,
+    message: String,
+    retriable: bool,
+}
+
+impl ApiError {
+    fn validation(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::BAD_REQUEST,
+            kind: "validation",
+            code,
+            message: message.into(),
+            retriable: false,
+        }
+    }
+
+    fn not_found(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::NOT_FOUND,
+            kind: "validation",
+            code,
+            message: message.into(),
+            retriable: false,
+        }
+    }
+
+    fn conflict(code: &'static str, message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
+            kind: "validation",
+            code,
+            message: message.into(),
+            retriable: false,
+        }
+    }
+
+    fn internal(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::INTERNAL_SERVER_ERROR,
+            kind: "internal",
+            code: "store_error",
+            message: message.into(),
+            retriable: false,
+        }
+    }
+}
+
+impl IntoResponse for ApiError {
+    fn into_response(self) -> axum::response::Response {
+        (
+            self.status,
+            Json(ApiErrorResponse {
+                error: ApiErrorBody {
+                    kind: self.kind,
+                    code: self.code,
+                    message: self.message,
+                    retriable: self.retriable,
+                },
+            }),
+        )
+            .into_response()
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeChatMessage {
+    role: String,
+    content: String,
+    #[serde(default)]
+    attachments: Vec<DocumentAttachmentInput>,
+}
+
+#[derive(Debug, Deserialize)]
+struct BridgeChatRequest {
+    messages: Vec<BridgeChatMessage>,
+    #[serde(default)]
+    conversation_id: Option<ConversationId>,
+    #[serde(default, alias = "providerLocalId")]
+    provider_local_id: Option<String>,
+    #[serde(default, alias = "model", alias = "modelId")]
+    model_id: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConversationListItem {
+    conversation_id: ConversationId,
+    title: String,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    generation_state: GenerationState,
+    /// Selected branch leaf in Rust truth.
+    ///
+    /// This mirrors `Conversation.current_cursor` and is always a node identity.
+    current_cursor: Option<uuid::Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+struct ConversationCatalogItem {
+    conversation_id: ConversationId,
+    title: String,
+    summary: Option<String>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+    generation_state: GenerationState,
+    pinned: bool,
+    /// Selected branch leaf in Rust truth.
+    ///
+    /// This mirrors `Conversation.current_cursor` and is always a node identity.
+    current_cursor: Option<uuid::Uuid>,
+    is_recoverable: bool,
+    resume_anchor: Option<StoredConversationResumeAnchor>,
+    node_count: usize,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ProviderAuthView {
+    None,
+    BearerToken {
+        has_token: bool,
+    },
+    ApiKey {
+        header_name: String,
+        has_value: bool,
+    },
+    Basic {
+        username: String,
+        has_password: bool,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+struct ProviderConfigView {
+    local_id: String,
+    adapter_kind: vcpmobile_domain::ProviderAdapterKind,
+    display_name: String,
+    avatar_uri: Option<String>,
+    base_url: String,
+    auth: ProviderAuthView,
+    model_catalog: vcpmobile_domain::ProviderModelCatalog,
+    custom_headers: Vec<vcpmobile_domain::ProviderHeader>,
+    custom_body_fragments: Vec<vcpmobile_domain::ProviderBodyFragment>,
+    presets: Vec<vcpmobile_domain::ProviderPreset>,
+    default_preset_local_id: Option<String>,
+    reference_aliases: Vec<String>,
+    created_at: chrono::DateTime<chrono::Utc>,
+    updated_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProviderCatalogModelView {
+    model_id: String,
+    display_name: Option<String>,
+    enabled: bool,
+    is_default: bool,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+struct ProviderCatalogItemView {
+    provider_local_id: String,
+    display_name: String,
+    avatar_uri: Option<String>,
+    adapter_kind: vcpmobile_domain::ProviderAdapterKind,
+    default_model_id: Option<String>,
+    models: Vec<ProviderCatalogModelView>,
+}
+
+impl From<ProviderConfig> for ProviderConfigView {
+    fn from(provider: ProviderConfig) -> Self {
+        Self {
+            local_id: provider.local_id,
+            adapter_kind: provider.adapter_kind,
+            display_name: provider.display_name,
+            avatar_uri: provider.avatar_uri,
+            base_url: provider.base_url,
+            auth: ProviderAuthView::from(provider.auth),
+            model_catalog: provider.model_catalog,
+            custom_headers: provider.custom_headers,
+            custom_body_fragments: provider.custom_body_fragments,
+            presets: provider.presets,
+            default_preset_local_id: provider.default_preset_local_id,
+            reference_aliases: provider.reference_aliases,
+            created_at: provider.created_at,
+            updated_at: provider.updated_at,
+        }
+    }
+}
+
+impl From<ProviderConfig> for ProviderCatalogItemView {
+    fn from(provider: ProviderConfig) -> Self {
+        let default_model_id = provider
+            .model_catalog
+            .default_model
+            .clone()
+            .filter(|model_id| !model_id.trim().is_empty());
+        let models = provider
+            .model_catalog
+            .entries
+            .into_iter()
+            .map(|entry| ProviderCatalogModelView {
+                is_default: default_model_id
+                    .as_ref()
+                    .is_some_and(|default_model_id| default_model_id == &entry.model_id),
+                model_id: entry.model_id,
+                display_name: entry.display_name,
+                enabled: entry.enabled,
+            })
+            .collect();
+
+        Self {
+            provider_local_id: provider.local_id,
+            display_name: provider.display_name,
+            avatar_uri: provider.avatar_uri,
+            adapter_kind: provider.adapter_kind,
+            default_model_id,
+            models,
+        }
+    }
+}
+
+impl From<ProviderAuthConfig> for ProviderAuthView {
+    fn from(auth: ProviderAuthConfig) -> Self {
+        match auth {
+            ProviderAuthConfig::None => Self::None,
+            ProviderAuthConfig::BearerToken { token } => Self::BearerToken {
+                has_token: !token.trim().is_empty(),
+            },
+            ProviderAuthConfig::ApiKey { header_name, value } => Self::ApiKey {
+                header_name,
+                has_value: !value.trim().is_empty(),
+            },
+            ProviderAuthConfig::Basic { username, password } => Self::Basic {
+                username,
+                has_password: !password.trim().is_empty(),
+            },
+        }
+    }
+}
+
+fn app(state: AppState) -> Router {
+    Router::new()
+        .route("/health", get(health))
+        .route("/api/chat/demo", get(chat_demo))
+        .route("/api/chat/conversations", get(chat_conversations))
+        .route("/api/chat/catalog", get(chat_catalog))
+        .route("/api/chat", post(chat_send))
+        .route("/api/chat/cancel/{conversation_id}", post(chat_cancel))
+        .route(
+            "/api/chat/interrupt/{conversation_id}",
+            post(chat_interrupt),
+        )
+        .route("/api/chat/edit", post(chat_edit))
+        .route("/api/chat/regenerate", post(chat_regenerate))
+        .route("/api/chat/select-variant", post(chat_select_variant))
+        .route("/api/chat/document-prompt", post(chat_document_prompt))
+        .route("/api/pairing/exchange", post(pairing_exchange))
+        .route("/api/agents", get(agent_list).post(agent_create))
+        .route(
+            "/api/agents/{agent_id}",
+            get(agent_get).put(agent_update).delete(agent_delete),
+        )
+        .route("/api/agents/prompt-preview", post(agent_prompt_preview))
+        .route("/api/chat/stream/{conversation_id}", get(chat_stream))
+        .route("/api/providers/catalog", get(provider_catalog))
+        .route("/api/providers", get(provider_list).post(provider_create))
+        .route(
+            "/api/providers/{provider_local_id}",
+            get(provider_get)
+                .put(provider_update)
+                .delete(provider_delete),
+        )
+        .with_state(state)
+}
+
+async fn health(State(state): State<AppState>) -> impl IntoResponse {
+    let engine = state.engine.lock().await;
+    Json(serde_json::json!({
+        "status": "ok",
+        "service": "vcpmobile-bridge-http",
+        "store_path": engine.store().path(),
+    }))
+}
+
+async fn chat_demo() -> impl IntoResponse {
+    let topic_id = Uuid::new_v4();
+    let agent_id = Uuid::new_v4();
+    let (conversation, node_bundle) = demo_conversation(topic_id, agent_id);
+
+    Json(serde_json::json!({
+        "conversation": conversation,
+        "node": node_bundle,
+    }))
+}
+
+async fn chat_conversations(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ConversationListItem>>, (StatusCode, String)> {
+    let engine = state.engine.lock().await;
+    let conversations = engine
+        .conversation_catalog()
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .into_iter()
+        .map(|item| ConversationListItem {
+            conversation_id: item.conversation_id,
+            title: item.title,
+            updated_at: item.updated_at,
+            generation_state: item.generation_state,
+            current_cursor: item.current_cursor,
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(conversations))
+}
+
+async fn chat_catalog(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ConversationCatalogItem>>, (StatusCode, String)> {
+    let engine = state.engine.lock().await;
+    let catalog = engine
+        .conversation_catalog()
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .into_iter()
+        .map(|item| ConversationCatalogItem {
+            conversation_id: item.conversation_id,
+            title: item.title,
+            summary: item.summary,
+            updated_at: item.updated_at,
+            generation_state: item.generation_state,
+            pinned: item.pinned,
+            current_cursor: item.current_cursor,
+            is_recoverable: item.is_recoverable,
+            resume_anchor: item.resume_anchor,
+            node_count: item.node_count,
+        })
+        .collect::<Vec<_>>();
+    Ok(Json(catalog))
+}
+
+async fn chat_send(
+    State(state): State<AppState>,
+    Json(body): Json<BridgeChatRequest>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)>
+{
+    let latest_user_message = body
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.role.trim().eq_ignore_ascii_case("user"))
+        .ok_or((
+            StatusCode::BAD_REQUEST,
+            "missing latest user message".to_string(),
+        ))?;
+    let user_text = latest_user_message.content.trim().to_string();
+    if user_text.is_empty() && latest_user_message.attachments.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "latest user message must include text or attachments".to_string(),
+        ));
+    }
+
+    let engine_handle = Arc::clone(&state.engine);
+    let mut engine = engine_handle.lock().await;
+    let started = engine
+        .start_stream_session(SessionSendRequest {
+            conversation_id: body.conversation_id,
+            text: user_text,
+            attachments: latest_user_message.attachments.clone(),
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_) => {
+                (StatusCode::NOT_FOUND, error.to_string())
+            }
+            vcpmobile_session::SessionError::ActiveGenerationExists { .. } => {
+                (StatusCode::CONFLICT, error.to_string())
+            }
+            vcpmobile_session::SessionError::EmptyText => {
+                (StatusCode::BAD_REQUEST, error.to_string())
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        })?;
+    drop(engine);
+
+    Ok(build_live_session_stream(state, started))
+}
+
+async fn chat_document_prompt(
+    State(state): State<AppState>,
+    Json(body): Json<TransformDocumentPromptRequest>,
+) -> Result<Json<TransformDocumentPromptResponse>, (StatusCode, String)> {
+    let engine = state.engine.lock().await;
+    let output = engine
+        .transform_document_prompt(body.attachments)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))?;
+
+    Ok(Json(TransformDocumentPromptResponse { output }))
+}
+
+async fn chat_cancel(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let conversation_id = parse_conversation_id(&conversation_id)?;
+    let mut engine = state.engine.lock().await;
+    engine
+        .cancel_stream_session(conversation_id, Some("cancelled by client".to_string()))
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::NoActiveGeneration { .. } => {
+                (StatusCode::CONFLICT, error.to_string())
+            }
+            vcpmobile_session::SessionError::ConversationNotFound(_) => {
+                (StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "conversation_id": conversation_id,
+        "status": "cancelling"
+    })))
+}
+
+async fn chat_interrupt(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+) -> Result<Json<serde_json::Value>, (StatusCode, String)> {
+    let conversation_id = parse_conversation_id(&conversation_id)?;
+    let mut engine = state.engine.lock().await;
+    engine
+        .interrupt_stream_session(conversation_id, None)
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::NoActiveGeneration { .. } => {
+                (StatusCode::CONFLICT, error.to_string())
+            }
+            vcpmobile_session::SessionError::ConversationNotFound(_) => {
+                (StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()),
+        })?;
+
+    Ok(Json(serde_json::json!({
+        "conversation_id": conversation_id,
+        "status": "interrupting"
+    })))
+}
+
+async fn agent_prompt_preview(
+    Json(body): Json<ResolvePromptPreviewRequest>,
+) -> Result<Json<ResolvePromptPreviewResponse>, ApiError> {
+    let placeholders = body
+        .placeholders
+        .into_iter()
+        .map(Into::into)
+        .collect::<Vec<_>>();
+    let preview = resolve_prompt_preview(&body.raw_prompt, &placeholders);
+
+    Ok(Json(ResolvePromptPreviewResponse {
+        preview: ResolvedPromptPreview::from(preview),
+    }))
+}
+
+async fn agent_list(State(state): State<AppState>) -> Result<Json<Vec<AgentConfig>>, ApiError> {
+    let engine = state.engine.lock().await;
+    let agents = engine
+        .store()
+        .list_agents()
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(agents))
+}
+
+async fn agent_get(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AgentConfig>, ApiError> {
+    let agent_id = parse_agent_id(&agent_id)?;
+    let engine = state.engine.lock().await;
+    let agent = engine
+        .store()
+        .get_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("agent_not_found", "agent not found"))?;
+    Ok(Json(agent))
+}
+
+async fn agent_create(
+    State(state): State<AppState>,
+    Json(agent): Json<AgentConfig>,
+) -> Result<(StatusCode, Json<AgentConfig>), ApiError> {
+    validate_agent_config(&agent)?;
+    let agent_id = agent.id.to_string();
+    let engine = state.engine.lock().await;
+    if engine
+        .store()
+        .get_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .is_some()
+    {
+        return Err(ApiError::conflict(
+            "agent_already_exists",
+            format!("agent `{agent_id}` already exists"),
+        ));
+    }
+
+    let saved = engine
+        .store()
+        .upsert_agent(agent)
+        .map_err(|error| match error {
+            vcpmobile_store::StoreError::Validation(message) => {
+                ApiError::validation("agent_config_invalid", message)
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+    Ok((StatusCode::CREATED, Json(saved)))
+}
+
+async fn agent_update(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+    Json(mut agent): Json<AgentConfig>,
+) -> Result<Json<AgentConfig>, ApiError> {
+    let agent_id = parse_agent_id(&agent_id)?;
+    validate_agent_config(&agent)?;
+    let engine = state.engine.lock().await;
+    let existing = engine
+        .store()
+        .get_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("agent_not_found", "agent not found"))?;
+    agent.id = existing.id;
+
+    let saved = engine
+        .store()
+        .upsert_agent(agent)
+        .map_err(|error| match error {
+            vcpmobile_store::StoreError::Validation(message) => {
+                ApiError::validation("agent_config_invalid", message)
+            }
+            other => ApiError::internal(other.to_string()),
+        })?;
+    Ok(Json(saved))
+}
+
+async fn agent_delete(
+    State(state): State<AppState>,
+    Path(agent_id): Path<String>,
+) -> Result<Json<AgentConfig>, ApiError> {
+    let agent_id = parse_agent_id(&agent_id)?;
+    let engine = state.engine.lock().await;
+    let removed = engine
+        .store()
+        .delete_agent(&agent_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("agent_not_found", "agent not found"))?;
+    Ok(Json(removed))
+}
+
+async fn pairing_exchange(
+    State(state): State<AppState>,
+    Json(body): Json<PairingExchangeRequest>,
+) -> Result<Json<PairingExchangeSuccessResponse>, (StatusCode, Json<PairingExchangeFailureResponse>)>
+{
+    validate_pairing_exchange_request(&body)
+        .map_err(|failure| (StatusCode::BAD_REQUEST, Json(failure)))?;
+    let mut engine = state.engine.lock().await;
+    engine
+        .exchange_pairing(body)
+        .map(Json)
+        .map_err(|failure| (pairing_failure_status_code(&failure), Json(failure)))
+}
+
+async fn chat_edit(
+    State(state): State<AppState>,
+    Json(body): Json<EditMessageRequest>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)>
+{
+    let user_text = body.text.trim().to_string();
+    if user_text.is_empty() && body.attachments.is_empty() {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            "edited message must include text or attachments".to_string(),
+        ));
+    }
+
+    let engine = state.engine.lock().await;
+    let events = engine
+        .edit_message(SessionEditRequest {
+            conversation_id: body.conversation_id,
+            node_id: body.node_id,
+            text: user_text,
+            attachments: body.attachments,
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_)
+            | vcpmobile_session::SessionError::NodeNotFound { .. } => {
+                (StatusCode::NOT_FOUND, error.to_string())
+            }
+            vcpmobile_session::SessionError::EmptyText => {
+                (StatusCode::BAD_REQUEST, error.to_string())
+            }
+            _ => (StatusCode::BAD_REQUEST, error.to_string()),
+        })?;
+
+    Ok(build_event_stream(events))
+}
+
+async fn chat_regenerate(
+    State(state): State<AppState>,
+    Json(body): Json<RegenerateNodeRequest>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (axum::http::StatusCode, String),
+> {
+    let engine = state.engine.lock().await;
+    let events = engine
+        .regenerate_message(SessionRegenerateRequest {
+            conversation_id: body.conversation_id,
+            node_id: body.node_id,
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_)
+            | vcpmobile_session::SessionError::NodeNotFound { .. } => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (axum::http::StatusCode::BAD_REQUEST, error.to_string()),
+        })?;
+
+    Ok(build_event_stream(events))
+}
+
+async fn chat_select_variant(
+    State(state): State<AppState>,
+    Json(body): Json<SelectVariantRequest>,
+) -> Result<
+    Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>,
+    (axum::http::StatusCode, String),
+> {
+    let engine = state.engine.lock().await;
+    let events = engine
+        .select_variant(SessionSelectVariantRequest {
+            conversation_id: body.conversation_id,
+            node_id: body.node_id,
+            variant_id: body.variant_id,
+        })
+        .map_err(|error| match error {
+            vcpmobile_session::SessionError::ConversationNotFound(_)
+            | vcpmobile_session::SessionError::NodeNotFound { .. }
+            | vcpmobile_session::SessionError::VariantNotFound { .. } => {
+                (axum::http::StatusCode::NOT_FOUND, error.to_string())
+            }
+            _ => (axum::http::StatusCode::BAD_REQUEST, error.to_string()),
+        })?;
+
+    Ok(build_event_stream(events))
+}
+
+async fn chat_stream(
+    State(state): State<AppState>,
+    Path(conversation_id): Path<String>,
+) -> Result<Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>>, (StatusCode, String)>
+{
+    let conversation_id = parse_conversation_id(&conversation_id)?;
+    let engine = state.engine.lock().await;
+    let stored = engine
+        .snapshot_for(conversation_id)
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .ok_or((StatusCode::NOT_FOUND, "conversation not found".to_string()))?;
+
+    let events = vec![EventEnvelope::new(
+        Some(stored.conversation.id),
+        ChatEvent::ConversationSnapshot {
+            conversation: SnapshotConversation::from(&stored.conversation),
+            branch: SnapshotBranch {
+                cursor_node_id: stored.conversation.current_cursor,
+                nodes: selected_branch_snapshot_nodes(&stored)
+                    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?,
+            },
+        },
+    )];
+
+    Ok(build_event_stream(events))
+}
+
+fn parse_conversation_id(conversation_id: &str) -> Result<ConversationId, (StatusCode, String)> {
+    Uuid::parse_str(conversation_id)
+        .map(ConversationId::from)
+        .map_err(|error| (StatusCode::BAD_REQUEST, error.to_string()))
+}
+
+fn parse_agent_id(agent_id: &str) -> Result<String, ApiError> {
+    Uuid::parse_str(agent_id)
+        .map(|value| value.to_string())
+        .map_err(|error| ApiError::validation("agent_id_invalid", error.to_string()))
+}
+
+async fn provider_list(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ProviderConfigView>>, ApiError> {
+    let engine = state.engine.lock().await;
+    let providers = engine
+        .store()
+        .list_providers()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .into_iter()
+        .map(ProviderConfigView::from)
+        .collect::<Vec<_>>();
+    Ok(Json(providers))
+}
+
+async fn provider_catalog(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<ProviderCatalogItemView>>, ApiError> {
+    let engine = state.engine.lock().await;
+    let providers = engine
+        .store()
+        .list_providers()
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .into_iter()
+        .map(ProviderCatalogItemView::from)
+        .collect::<Vec<_>>();
+    Ok(Json(providers))
+}
+
+async fn provider_get(
+    State(state): State<AppState>,
+    Path(provider_local_id): Path<String>,
+) -> Result<Json<ProviderConfigView>, ApiError> {
+    let engine = state.engine.lock().await;
+    let provider = engine
+        .store()
+        .get_provider(&provider_local_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("provider_not_found", "provider not found"))?;
+    Ok(Json(ProviderConfigView::from(provider)))
+}
+
+async fn provider_create(
+    State(state): State<AppState>,
+    Json(provider): Json<ProviderConfig>,
+) -> Result<(StatusCode, Json<ProviderConfigView>), ApiError> {
+    validate_provider_config(&provider)?;
+    let engine = state.engine.lock().await;
+    reject_duplicate_provider_create(engine.store(), &provider)?;
+    let saved = engine
+        .store()
+        .upsert_provider(provider)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok((StatusCode::CREATED, Json(ProviderConfigView::from(saved))))
+}
+
+async fn provider_update(
+    State(state): State<AppState>,
+    Path(provider_local_id): Path<String>,
+    Json(mut provider): Json<ProviderConfig>,
+) -> Result<Json<ProviderConfigView>, ApiError> {
+    validate_provider_config(&provider)?;
+    let engine = state.engine.lock().await;
+    let existing = engine
+        .store()
+        .get_provider(&provider_local_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("provider_not_found", "provider not found"))?;
+    provider.local_id = existing.local_id;
+    let saved = engine
+        .store()
+        .upsert_provider(provider)
+        .map_err(|error| ApiError::internal(error.to_string()))?;
+    Ok(Json(ProviderConfigView::from(saved)))
+}
+
+async fn provider_delete(
+    State(state): State<AppState>,
+    Path(provider_local_id): Path<String>,
+) -> Result<Json<ProviderConfigView>, ApiError> {
+    let engine = state.engine.lock().await;
+    let removed = engine
+        .store()
+        .delete_provider(&provider_local_id)
+        .map_err(|error| ApiError::internal(error.to_string()))?
+        .ok_or_else(|| ApiError::not_found("provider_not_found", "provider not found"))?;
+    Ok(Json(ProviderConfigView::from(removed)))
+}
+
+fn validate_provider_config(provider: &ProviderConfig) -> Result<(), ApiError> {
+    if provider.display_name.trim().is_empty() {
+        return Err(ApiError::validation(
+            "provider_display_name_required",
+            "provider display_name must not be empty",
+        ));
+    }
+    let base_url = provider.base_url.trim();
+    if !base_url.starts_with("http://") && !base_url.starts_with("https://") {
+        return Err(ApiError::validation(
+            "provider_base_url_invalid",
+            "provider base_url must start with http:// or https://",
+        ));
+    }
+
+    match &provider.auth {
+        ProviderAuthConfig::None => {}
+        ProviderAuthConfig::BearerToken { token } => {
+            if token.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_auth_token_required",
+                    "bearer token auth requires a non-empty token",
+                ));
+            }
+        }
+        ProviderAuthConfig::ApiKey { header_name, value } => {
+            if header_name.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_auth_header_required",
+                    "api key auth requires a non-empty header_name",
+                ));
+            }
+            if value.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_auth_value_required",
+                    "api key auth requires a non-empty value",
+                ));
+            }
+        }
+        ProviderAuthConfig::Basic { username, password } => {
+            if username.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_auth_username_required",
+                    "basic auth requires a non-empty username",
+                ));
+            }
+            if password.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_auth_password_required",
+                    "basic auth requires a non-empty password",
+                ));
+            }
+        }
+    }
+
+    for (index, header) in provider.custom_headers.iter().enumerate() {
+        if header.name.trim().is_empty() {
+            return Err(ApiError::validation(
+                "provider_header_name_required",
+                format!("custom header at index {index} must have a name"),
+            ));
+        }
+    }
+
+    for (index, fragment) in provider.custom_body_fragments.iter().enumerate() {
+        if fragment.pointer.trim().is_empty() {
+            return Err(ApiError::validation(
+                "provider_body_pointer_required",
+                format!("custom body fragment at index {index} must have a pointer"),
+            ));
+        }
+    }
+
+    for (index, model) in provider.model_catalog.entries.iter().enumerate() {
+        if model.model_id.trim().is_empty() {
+            return Err(ApiError::validation(
+                "provider_model_id_required",
+                format!("model catalog entry at index {index} must have a model_id"),
+            ));
+        }
+    }
+
+    if provider
+        .model_catalog
+        .default_model
+        .as_ref()
+        .is_some_and(|default_model| default_model.trim().is_empty())
+    {
+        return Err(ApiError::validation(
+            "provider_default_model_invalid",
+            "provider default_model must not be empty when provided",
+        ));
+    }
+
+    for (index, preset) in provider.presets.iter().enumerate() {
+        if preset.name.trim().is_empty() {
+            return Err(ApiError::validation(
+                "provider_preset_name_required",
+                format!("preset at index {index} must have a name"),
+            ));
+        }
+        for header in &preset.headers {
+            if header.name.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_preset_header_name_required",
+                    format!("preset at index {index} contains a header without a name"),
+                ));
+            }
+        }
+        for fragment in &preset.body_fragments {
+            if fragment.pointer.trim().is_empty() {
+                return Err(ApiError::validation(
+                    "provider_preset_body_pointer_required",
+                    format!("preset at index {index} contains a body fragment without a pointer"),
+                ));
+            }
+        }
+    }
+
+    if let Some(default_preset_local_id) = provider.default_preset_local_id.as_ref() {
+        let default_preset_local_id = default_preset_local_id.trim();
+        if default_preset_local_id.is_empty() {
+            return Err(ApiError::validation(
+                "provider_default_preset_invalid",
+                "provider default_preset_local_id must not be empty when provided",
+            ));
+        }
+        let matches_known_preset = provider.presets.iter().any(|preset| {
+            preset.local_id.trim() == default_preset_local_id
+                || preset.name.trim() == default_preset_local_id
+        });
+        if !matches_known_preset {
+            return Err(ApiError::validation(
+                "provider_default_preset_unknown",
+                "provider default_preset_local_id must reference an existing preset local_id or preset name",
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn validate_agent_config(agent: &AgentConfig) -> Result<(), ApiError> {
+    agent
+        .validate()
+        .map_err(|error| ApiError::validation("agent_config_invalid", error.to_string()))
+}
+
+fn validate_pairing_exchange_request(
+    request: &PairingExchangeRequest,
+) -> Result<(), PairingExchangeFailureResponse> {
+    if request.pairing_session_id.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            None,
+            Some(request.namespace.clone()),
+            "pairing_session_id_required",
+            "pairing_session_id must not be empty",
+        ));
+    }
+    if request.namespace.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            None,
+            "pairing_namespace_required",
+            "namespace must not be empty",
+        ));
+    }
+    if request.bootstrap_token.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            Some(request.namespace.clone()),
+            "pairing_bootstrap_token_required",
+            "bootstrap_token must not be empty",
+        ));
+    }
+    if request.device_name.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            Some(request.namespace.clone()),
+            "pairing_device_name_required",
+            "device_name must not be empty",
+        ));
+    }
+    if request.device_public_key.trim().is_empty() {
+        return Err(pairing_validation_failure(
+            Some(request.pairing_session_id.clone()),
+            Some(request.namespace.clone()),
+            "pairing_device_public_key_required",
+            "device_public_key must not be empty",
+        ));
+    }
+    Ok(())
+}
+
+fn pairing_validation_failure(
+    pairing_session_id: Option<String>,
+    namespace: Option<String>,
+    code: &str,
+    message: &str,
+) -> PairingExchangeFailureResponse {
+    PairingExchangeFailureResponse {
+        pairing_session_id,
+        namespace,
+        status: PairingExchangeFailureStatus::Rejected,
+        error: PairingExchangeError {
+            code: code.to_string(),
+            message: message.to_string(),
+            retriable: false,
+        },
+    }
+}
+
+fn pairing_failure_status_code(failure: &PairingExchangeFailureResponse) -> StatusCode {
+    match failure.error.code.as_str() {
+        "pairing_session_not_found" => StatusCode::NOT_FOUND,
+        _ => match failure.status {
+            PairingExchangeFailureStatus::Rejected => StatusCode::BAD_REQUEST,
+            PairingExchangeFailureStatus::Expired => StatusCode::GONE,
+            PairingExchangeFailureStatus::Revoked => StatusCode::CONFLICT,
+        },
+    }
+}
+
+fn reject_duplicate_provider_create(
+    store: &FileStore,
+    provider: &ProviderConfig,
+) -> Result<(), ApiError> {
+    let mut references = std::collections::BTreeSet::new();
+    for reference in std::iter::once(provider.local_id.as_str())
+        .chain(std::iter::once(provider.base_url.as_str()))
+        .chain(provider.reference_aliases.iter().map(String::as_str))
+    {
+        let reference = reference.trim();
+        if reference.is_empty() {
+            continue;
+        }
+        references.insert(reference.to_string());
+    }
+
+    for reference in references {
+        let existing = store
+            .resolve_provider_reference(&reference)
+            .map_err(|error| ApiError::internal(error.to_string()))?;
+        if existing.is_some() {
+            return Err(ApiError::conflict(
+                "provider_already_exists",
+                format!("provider already exists for reference `{reference}`"),
+            ));
+        }
+    }
+
+    Ok(())
+}
+
+fn build_event_stream(
+    events: Vec<EventEnvelope<ChatEvent>>,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let stream = stream::iter(events)
+        .throttle(Duration::from_millis(250))
+        .map(|envelope| {
+            let payload = serde_json::to_string(&envelope).expect("serialize event");
+            Ok(Event::default().event("chat_event").data(payload))
+        });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keep-alive"),
+    )
+}
+
+fn build_live_session_stream(
+    state: AppState,
+    started: StreamSessionStart,
+) -> Sse<impl futures_util::Stream<Item = Result<Event, Infallible>>> {
+    let conversation_id = started.conversation_id;
+    let initial_stream = stream::iter(started.initial_events);
+    let follow_up_stream = stream::unfold(Some((state, conversation_id)), |state| async move {
+        let Some((state, conversation_id)) = state else {
+            return None;
+        };
+        tokio::time::sleep(Duration::from_millis(250)).await;
+        let next_event = {
+            let mut engine = state.engine.lock().await;
+            engine.poll_stream_event(conversation_id)
+        };
+
+        match next_event {
+            Ok(Some(event)) => Some((event, Some((state, conversation_id)))),
+            Ok(None) => None,
+            Err(error) => Some((
+                EventEnvelope::new(
+                    Some(conversation_id),
+                    ChatEvent::EngineError {
+                        error: EventError {
+                            kind: EventErrorKind::Internal,
+                            code: Some("stream_session_dispatch_failed".to_string()),
+                            message: error.to_string(),
+                            retriable: false,
+                        },
+                    },
+                ),
+                None,
+            )),
+        }
+    });
+
+    let stream = initial_stream
+        .chain(follow_up_stream)
+        .throttle(Duration::from_millis(250))
+        .map(|envelope| {
+            let payload = serde_json::to_string(&envelope).expect("serialize event");
+            Ok(Event::default().event("chat_event").data(payload))
+        });
+
+    Sse::new(stream).keep_alive(
+        KeepAlive::new()
+            .interval(Duration::from_secs(10))
+            .text("keep-alive"),
+    )
+}
+
+fn default_store_path() -> PathBuf {
+    std::env::var("VCPMOBILE_STORE_PATH")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| PathBuf::from("data/store.sqlite3"))
+}
+
+fn server_host() -> String {
+    std::env::var("HOST")
+        .ok()
+        .map(|host| host.trim().to_string())
+        .filter(|host| !host.is_empty())
+        .unwrap_or_else(|| "127.0.0.1".to_string())
+}
+
+fn server_port() -> u16 {
+    std::env::var("PORT")
+        .ok()
+        .and_then(|value| value.parse::<u16>().ok())
+        .filter(|port| *port > 0)
+        .unwrap_or(4001)
+}
+
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
+    let store = FileStore::new(default_store_path());
+    store
+        .bootstrap_conversations_from_legacy()
+        .context("bootstrap sqlite conversations from legacy json")?;
+    let topic_id = Uuid::new_v4();
+    let agent_id = Uuid::new_v4();
+    let engine = SessionEngine::try_new(store, topic_id, agent_id)?;
+
+    engine
+        .ensure_demo_conversation()
+        .context("seed demo conversation")?;
+
+    let state = AppState {
+        engine: Arc::new(Mutex::new(engine)),
+    };
+    let app = app(state);
+    let addr = format!("{}:{}", server_host(), server_port())
+        .parse::<SocketAddr>()
+        .context("parse host/port")?;
+    println!("vcpmobile-bridge-http listening on http://{}", addr);
+    let listener = tokio::net::TcpListener::bind(addr)
+        .await
+        .with_context(|| format!("bind {}", addr))?;
+    axum::serve(listener, app).await.context("serve axum")?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axum::{
+        body::{Body, to_bytes},
+        http::{Request, StatusCode},
+    };
+    use serde_json::{Value, json};
+    use std::{env, fs};
+    use tower::util::ServiceExt;
+    use vcpmobile_domain::TopicId;
+    use vcpmobile_session::PairingBootstrapSeed;
+
+    fn test_store_path(name: &str) -> PathBuf {
+        env::temp_dir().join(format!(
+            "vcpmobile-bridge-http-{name}-{}.json",
+            Uuid::new_v4()
+        ))
+    }
+
+    fn test_app_with_engine(name: &str) -> (Router, Arc<Mutex<SessionEngine>>, PathBuf) {
+        let path = test_store_path(name);
+        let engine = Arc::new(Mutex::new(
+            SessionEngine::try_new(FileStore::new(&path), TopicId::new_v4(), Uuid::new_v4())
+                .expect("create test engine"),
+        ));
+        let app = app(AppState {
+            engine: engine.clone(),
+        });
+        (app, engine, path)
+    }
+
+    fn test_app(name: &str) -> (Router, PathBuf) {
+        let (app, _engine, path) = test_app_with_engine(name);
+        (app, path)
+    }
+
+    fn sample_provider_payload() -> Value {
+        json!({
+            "adapter_kind": "openai_compatible",
+            "display_name": "OpenAI",
+            "base_url": "https://api.example.com/v1",
+            "auth": {
+                "type": "bearer_token",
+                "token": "secret-token"
+            },
+            "model_catalog": {
+                "default_model": "gpt-4.1-mini",
+                "entries": [
+                    {
+                        "model_id": "gpt-4.1-mini",
+                        "display_name": "GPT-4.1 mini",
+                        "enabled": true
+                    }
+                ]
+            },
+            "custom_headers": [
+                {
+                    "name": "X-Tenant",
+                    "value": "mobile"
+                }
+            ],
+            "custom_body_fragments": [
+                {
+                    "pointer": "/temperature",
+                    "value": 0.2
+                }
+            ],
+            "presets": [
+                {
+                    "name": "balanced",
+                    "model_id": "gpt-4.1-mini",
+                    "headers": [],
+                    "body_fragments": []
+                }
+            ],
+            "default_preset_local_id": "balanced"
+        })
+    }
+
+    fn sample_agent_payload(agent_id: Uuid) -> Value {
+        json!({
+            "id": agent_id,
+            "identity": {
+                "name": "Planner",
+                "avatar_uri": "file:///planner.png",
+                "description": "Plans tasks on mobile"
+            },
+            "prompt": {
+                "system_prompt": "You are a focused planner.",
+                "prompt_mode": "system_and_message_template",
+                "message_template": "Plan around {{goal}}",
+                "placeholders": [
+                    {
+                        "key": "goal",
+                        "label": "Goal",
+                        "value": "ship TES-14",
+                        "description": "current user goal"
+                    }
+                ]
+            },
+            "model": {
+                "provider_local_id": "provider_local_demo",
+                "model_id": "gpt-4.1-mini"
+            },
+            "request": {
+                "temperature": 0.4,
+                "top_p": 0.8
+            },
+            "memory": {
+                "use_conversation_memory": true,
+                "pin_top_level_facts": true
+            },
+            "tools": {
+                "enable_local_tools": true,
+                "overrides": [
+                    {
+                        "tool_id": "calendar",
+                        "enabled": false
+                    }
+                ]
+            },
+            "group": {
+                "role_label": "Planner",
+                "aliases": ["planner"],
+                "mention_tags": ["@planner"],
+                "respond_to_mentions": true,
+                "allow_auto_relay": false
+            }
+        })
+    }
+
+    async fn json_request(
+        app: Router,
+        method: &str,
+        uri: &str,
+        payload: Option<Value>,
+    ) -> (StatusCode, Value) {
+        let request = Request::builder()
+            .method(method)
+            .uri(uri)
+            .header("content-type", "application/json")
+            .body(match payload {
+                Some(payload) => Body::from(payload.to_string()),
+                None => Body::empty(),
+            })
+            .expect("build request");
+
+        let response = app.oneshot(request).await.expect("send request");
+        let status = response.status();
+        let bytes = to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read body");
+        let body = if bytes.is_empty() {
+            Value::Null
+        } else {
+            serde_json::from_slice(&bytes).expect("parse json body")
+        };
+        (status, body)
+    }
+
+    #[tokio::test]
+    async fn agent_prompt_preview_route_returns_resolved_prompt_and_provenance() {
+        let (app, path) = test_app("prompt-preview");
+
+        let request = json!({
+            "raw_prompt": "{{char}} meets {{cur_date}} via {{plugin_room}} and {{sticker_wave}}",
+            "placeholders": [
+                {
+                    "key": "plugin_room",
+                    "value": "plugin room",
+                    "category": "plugin",
+                    "source": "plugin"
+                },
+                {
+                    "key": "sticker_wave",
+                    "value": ":wave:",
+                    "category": "sticker_media",
+                    "source": "sticker_pack"
+                },
+                {
+                    "key": "cur_date",
+                    "value": "2026-03-13",
+                    "category": "generic",
+                    "source": "runtime"
+                },
+                {
+                    "key": "char",
+                    "value": "Analyst",
+                    "category": "agent",
+                    "source": "agent_profile"
+                }
+            ]
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/agents/prompt-preview", Some(request)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            body["preview"]["resolved_prompt"],
+            "Analyst meets 2026-03-13 via plugin room and {{sticker_wave}}"
+        );
+        assert_eq!(body["preview"]["records"][0]["category"], "agent");
+        assert_eq!(body["preview"]["records"][0]["status"], "applied");
+        assert_eq!(body["preview"]["records"][3]["category"], "sticker_media");
+        assert_eq!(body["preview"]["records"][3]["status"], "deferred");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn agent_crud_routes_persist_and_restore_full_agent_configs() {
+        let (app, path) = test_app("agent-crud");
+        let agent_id = Uuid::new_v4();
+
+        let (create_status, created) = json_request(
+            app.clone(),
+            "POST",
+            "/api/agents",
+            Some(sample_agent_payload(agent_id)),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::CREATED);
+        assert_eq!(created["id"], agent_id.to_string());
+        assert_eq!(created["identity"]["name"], "Planner");
+        assert_eq!(created["prompt"]["placeholders"][0]["key"], "goal");
+
+        let (list_status, listed) = json_request(app.clone(), "GET", "/api/agents", None).await;
+        assert_eq!(list_status, StatusCode::OK);
+        assert_eq!(listed.as_array().expect("agent list").len(), 1);
+
+        let (get_status, loaded) =
+            json_request(app.clone(), "GET", &format!("/api/agents/{agent_id}"), None).await;
+        assert_eq!(get_status, StatusCode::OK);
+        assert_eq!(loaded["identity"]["description"], "Plans tasks on mobile");
+
+        let mut updated_payload = sample_agent_payload(agent_id);
+        updated_payload["identity"]["name"] = Value::String("Planner v2".to_string());
+        updated_payload["group"]["aliases"] = json!(["planner", "strategist"]);
+
+        let (update_status, updated) = json_request(
+            app.clone(),
+            "PUT",
+            &format!("/api/agents/{agent_id}"),
+            Some(updated_payload),
+        )
+        .await;
+        assert_eq!(update_status, StatusCode::OK);
+        assert_eq!(updated["identity"]["name"], "Planner v2");
+        assert_eq!(updated["group"]["aliases"][1], "strategist");
+
+        let store = FileStore::new(&path);
+        let restored = store
+            .get_agent(&agent_id.to_string())
+            .expect("restore agent config from store")
+            .expect("stored agent config");
+        assert_eq!(restored.identity.name, "Planner v2");
+        assert_eq!(restored.group.aliases, vec!["planner", "strategist"]);
+
+        let (delete_status, deleted) = json_request(
+            app.clone(),
+            "DELETE",
+            &format!("/api/agents/{agent_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(delete_status, StatusCode::OK);
+        assert_eq!(deleted["id"], agent_id.to_string());
+
+        let (missing_status, missing) =
+            json_request(app, "GET", &format!("/api/agents/{agent_id}"), None).await;
+        assert_eq!(missing_status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "agent_not_found");
+
+        fs::remove_file(&path).ok();
+        fs::remove_file(path.with_extension("sqlite3")).ok();
+    }
+
+    #[tokio::test]
+    async fn agent_create_rejects_invalid_payloads() {
+        let (app, path) = test_app("agent-validation");
+        let agent_id = Uuid::new_v4();
+        let invalid = json!({
+            "id": agent_id,
+            "identity": {
+                "name": ""
+            },
+            "prompt": {
+                "system_prompt": " "
+            }
+        });
+
+        let (status, body) = json_request(app, "POST", "/api/agents", Some(invalid)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "agent_config_invalid");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_rejects_missing_fields_with_explicit_failure_shape() {
+        let (app, path) = test_app("pairing-validation");
+        let request = json!({
+            "pairing_session_id": "",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["status"], "rejected");
+        assert_eq!(body["error"]["code"], "pairing_session_id_required");
+        assert_eq!(body["error"]["retriable"], false);
+        assert_eq!(body["namespace"], "workspace-alpha");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_issues_mobile_token_for_seeded_bootstrap() {
+        let (app, engine, path) = test_app_with_engine("pairing-success");
+        engine
+            .lock()
+            .await
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            })
+            .expect("seed pairing");
+        let request = json!({
+            "pairing_session_id": "pairing-session-1",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(body["pairing_session_id"], "pairing-session-1");
+        assert_eq!(body["namespace"], "workspace-alpha");
+        assert_eq!(body["status"], "paired");
+        assert_eq!(body["mobile_token"]["token_type"], "bearer");
+        assert!(
+            body["mobile_token"]["access_token"]
+                .as_str()
+                .expect("mobile token")
+                .starts_with("mobile-token-")
+        );
+        assert_eq!(body["trusted_device"]["device_name"], "Pixel 9");
+        assert!(
+            body["resume_anchor"]["anchor"]
+                .as_str()
+                .expect("resume anchor")
+                .starts_with("resume-anchor-")
+        );
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_rejects_replayed_bootstrap_token() {
+        let (app, engine, path) = test_app_with_engine("pairing-replay");
+        engine
+            .lock()
+            .await
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
+            })
+            .expect("seed pairing");
+        let request = json!({
+            "pairing_session_id": "pairing-session-1",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (first_status, _) = json_request(
+            app.clone(),
+            "POST",
+            "/api/pairing/exchange",
+            Some(request.clone()),
+        )
+        .await;
+        assert_eq!(first_status, StatusCode::OK);
+
+        let (second_status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(second_status, StatusCode::CONFLICT);
+        assert_eq!(body["status"], "revoked");
+        assert_eq!(body["error"]["code"], "bootstrap_token_replayed");
+        assert_eq!(body["error"]["retriable"], false);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn pairing_exchange_route_rejects_expired_bootstrap_token() {
+        let (app, engine, path) = test_app_with_engine("pairing-expired");
+        engine
+            .lock()
+            .await
+            .seed_pairing_session(PairingBootstrapSeed {
+                pairing_session_id: "pairing-session-1".to_string(),
+                namespace: "workspace-alpha".to_string(),
+                bootstrap_token: "bootstrap-secret".to_string(),
+                expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
+            })
+            .expect("seed pairing");
+        let request = json!({
+            "pairing_session_id": "pairing-session-1",
+            "namespace": "workspace-alpha",
+            "bootstrap_token": "bootstrap-secret",
+            "device_name": "Pixel 9",
+            "device_platform": "android",
+            "device_public_key": "base64-public-key"
+        });
+
+        let (status, body) =
+            json_request(app, "POST", "/api/pairing/exchange", Some(request)).await;
+
+        assert_eq!(status, StatusCode::GONE);
+        assert_eq!(body["status"], "expired");
+        assert_eq!(body["error"]["code"], "bootstrap_token_expired");
+        assert_eq!(body["error"]["retriable"], false);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn provider_crud_routes_persist_and_redact_auth() {
+        let (app, path) = test_app("provider-crud");
+
+        let (create_status, created) = json_request(
+            app.clone(),
+            "POST",
+            "/api/providers",
+            Some(sample_provider_payload()),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::CREATED);
+
+        let local_id = created["local_id"]
+            .as_str()
+            .expect("provider local_id")
+            .to_string();
+        assert!(local_id.starts_with("provider_local_"));
+        assert_eq!(created["auth"]["type"], "bearer_token");
+        assert_eq!(created["auth"]["has_token"], true);
+        assert!(created["auth"].get("token").is_none());
+
+        let (list_status, listed) = json_request(app.clone(), "GET", "/api/providers", None).await;
+        assert_eq!(list_status, StatusCode::OK);
+        assert_eq!(listed.as_array().expect("provider list").len(), 1);
+
+        let (get_status, loaded) = json_request(
+            app.clone(),
+            "GET",
+            &format!("/api/providers/{local_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(get_status, StatusCode::OK);
+        assert_eq!(loaded["local_id"], local_id);
+        assert_eq!(loaded["auth"]["type"], "bearer_token");
+        assert_eq!(loaded["auth"]["has_token"], true);
+
+        let mut updated_payload = sample_provider_payload();
+        updated_payload["display_name"] = Value::String("OpenAI Mirror".to_string());
+        updated_payload["base_url"] = Value::String("https://mirror.example.com/v1".to_string());
+        updated_payload["auth"] = json!({
+            "type": "api_key",
+            "header_name": "X-API-Key",
+            "value": "updated-secret"
+        });
+
+        let (update_status, updated) = json_request(
+            app.clone(),
+            "PUT",
+            &format!("/api/providers/{local_id}"),
+            Some(updated_payload),
+        )
+        .await;
+        assert_eq!(update_status, StatusCode::OK);
+        assert_eq!(updated["local_id"], local_id);
+        assert_eq!(updated["display_name"], "OpenAI Mirror");
+        assert_eq!(updated["auth"]["type"], "api_key");
+        assert_eq!(updated["auth"]["header_name"], "X-API-Key");
+        assert_eq!(updated["auth"]["has_value"], true);
+        assert!(updated["auth"].get("value").is_none());
+
+        let stored: serde_json::Value =
+            serde_json::from_str(&fs::read_to_string(&path).expect("read store file"))
+                .expect("parse store json");
+        let stored_provider = &stored["provider_configs"][&local_id];
+        assert_eq!(
+            stored_provider["auth"]["value"].as_str(),
+            Some("updated-secret")
+        );
+
+        let (delete_status, deleted) = json_request(
+            app.clone(),
+            "DELETE",
+            &format!("/api/providers/{local_id}"),
+            None,
+        )
+        .await;
+        assert_eq!(delete_status, StatusCode::OK);
+        assert_eq!(deleted["local_id"], local_id);
+
+        let (missing_status, missing) =
+            json_request(app, "GET", &format!("/api/providers/{local_id}"), None).await;
+        assert_eq!(missing_status, StatusCode::NOT_FOUND);
+        assert_eq!(missing["error"]["code"], "provider_not_found");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn provider_catalog_route_returns_provider_and_model_lists() {
+        let (app, path) = test_app("provider-catalog");
+
+        let (create_status, created) = json_request(
+            app.clone(),
+            "POST",
+            "/api/providers",
+            Some(sample_provider_payload()),
+        )
+        .await;
+        assert_eq!(create_status, StatusCode::CREATED);
+
+        let (catalog_status, catalog) =
+            json_request(app, "GET", "/api/providers/catalog", None).await;
+        assert_eq!(catalog_status, StatusCode::OK);
+
+        let listed = catalog.as_array().expect("provider catalog");
+        assert_eq!(listed.len(), 1);
+
+        let provider = &listed[0];
+        assert_eq!(provider["provider_local_id"], created["local_id"]);
+        assert_eq!(provider["display_name"], "OpenAI");
+        assert_eq!(provider["default_model_id"], "gpt-4.1-mini");
+        assert!(provider.get("auth").is_none());
+        assert!(provider.get("base_url").is_none());
+
+        let models = provider["models"].as_array().expect("provider models");
+        assert_eq!(models.len(), 1);
+        assert_eq!(models[0]["model_id"], "gpt-4.1-mini");
+        assert_eq!(models[0]["display_name"], "GPT-4.1 mini");
+        assert_eq!(models[0]["enabled"], true);
+        assert_eq!(models[0]["is_default"], true);
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn provider_create_rejects_invalid_payloads() {
+        let (app, path) = test_app("provider-validation");
+        let invalid = json!({
+            "adapter_kind": "openai_compatible",
+            "display_name": "",
+            "base_url": "ftp://invalid.example.com",
+            "auth": {
+                "type": "bearer_token",
+                "token": ""
+            }
+        });
+
+        let (status, body) = json_request(app, "POST", "/api/providers", Some(invalid)).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(body["error"]["code"], "provider_display_name_required");
+
+        fs::remove_file(path).ok();
+    }
+
+    #[tokio::test]
+    async fn provider_create_rejects_duplicate_references() {
+        let (app, path) = test_app("provider-conflict");
+
+        let (status, _) = json_request(
+            app.clone(),
+            "POST",
+            "/api/providers",
+            Some(sample_provider_payload()),
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+
+        let (duplicate_status, duplicate_body) = json_request(
+            app,
+            "POST",
+            "/api/providers",
+            Some(sample_provider_payload()),
+        )
+        .await;
+        assert_eq!(duplicate_status, StatusCode::CONFLICT);
+        assert_eq!(duplicate_body["error"]["code"], "provider_already_exists");
+
+        fs::remove_file(path).ok();
+    }
+}

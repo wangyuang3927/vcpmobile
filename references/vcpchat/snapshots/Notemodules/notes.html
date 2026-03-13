@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>我的笔记</title>
+    <!-- 确保这个路径对于你的项目结构是正确的 -->
+    <!-- <link rel="stylesheet" href="../style.css"> -->
+<link rel="stylesheet" href="../styles/themes.css"> <!-- 引用主题样式 -->
+    <link rel="stylesheet" href="notes.css">
+    <!-- 用于语法高亮的 Highlight.js -->
+    <link rel="stylesheet" href="../vendor/atom-one-dark.min.css" id="highlight-theme-style">
+    <script src="../vendor/marked.min.js"></script>
+    <script src="../vendor/highlight.min.js"></script>
+    <!-- DOMPurify for HTML sanitization -->
+    <script src="../vendor/purify.min.js"></script>
+    <!-- KaTeX for LaTeX rendering -->
+    <link rel="stylesheet" href="../vendor/katex.min.css">
+    <script defer src="../vendor/katex.min.js" crossorigin="anonymous"></script>
+    <script defer src="../vendor/auto-render.min.js" crossorigin="anonymous"></script>
+</head>
+<body>
+<!-- Custom Title Bar -->
+    <div id="custom-title-bar">
+        <div class="title">VCP - 笔记</div>
+        <div class="window-controls">
+            <button id="minimize-notes-btn" class="window-control-btn" title="最小化">
+                <svg width="10" height="10" viewBox="0 0 10 10"><line x1="0" y1="5" x2="10" y2="5" stroke="currentColor" stroke-width="1.2"></line></svg>
+            </button>
+            <button id="maximize-notes-btn" class="window-control-btn" title="最大化">
+                <svg width="10" height="10" viewBox="0 0 10 10"><path fill="none" stroke="currentColor" stroke-width="1" d="M0.5,0.5 h9 v9 h-9 z"></path></svg>
+            </button>
+            <button id="close-notes-btn" class="window-control-btn" title="关闭">
+                <svg width="10" height="10" viewBox="0 0 10 10"><path fill="currentColor" d="M0.5,0.5 9.5,9.5 M9.5,0.5 0.5,9.5" stroke="currentColor" stroke-width="1.2"></path></svg>
+            </button>
+        </div>
+    </div>
+    <div class="top-light-effect"></div>
+    <div class="container">
+        <!-- 用于笔记列表和操作的侧边栏 -->
+        <div class="sidebar">
+            <div class="sidebar-header">
+                <input type="text" id="searchInput" placeholder="搜索笔记..." aria-label="搜索笔记">
+                <div class="sidebar-actions">
+                    <button id="newMdBtn" class="button">新建MD</button>
+                    <button id="newTxtBtn" class="button">新建TXT</button>
+                    <button id="newFolderBtn" class="button">新建文档</button>
+                </div>
+            </div>
+            <ul id="noteList" class="note-list-panel" aria-live="polite">
+                <!-- 笔记项目将由 JavaScript 动态插入此处 -->
+            </ul>
+        </div>
+
+        <!-- Resizer Handle -->
+        <div class="resizer" id="resizer"></div>
+
+        <!-- 用于笔记编辑和预览的主内容区域 -->
+        <div class="main-content">
+            <div class="note-editor-header">
+                <input type="text" id="noteTitle" placeholder="笔记标题" aria-label="笔记标题">
+                <div class="note-actions">
+                    <button id="saveNoteBtn" class="button button-primary">保存</button>
+                    <button id="deleteNoteBtn" class="button button-danger">删除</button>
+                </div>
+            </div>
+            <div class="note-body">
+                <!-- Editor Area -->
+                <div class="editor-container">
+                    <textarea id="noteContent" placeholder="开始写笔记..." aria-label="笔记内容"></textarea>
+                    <div class="content-bubble editor-bubble">编辑区</div>
+                </div>
+                <!-- Preview Area -->
+                <div class="preview-container">
+                    <div id="previewContent" class="markdown-preview" aria-live="polite">
+                        <!-- Markdown 预览将在此处渲染 -->
+                    </div>
+                    <div class="content-bubble preview-bubble">预览区</div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <script src="notes.js"></script>
+
+    <!-- Custom Context Menu HTML -->
+    <div id="customContextMenu" class="custom-context-menu">
+        <ul>
+            <li id="context-rename">重命名</li>
+            <li id="context-delete">删除</li>
+            <li id="context-copy-note">复制笔记</li>
+        </ul>
+    </div>
+<!-- Confirmation Modal -->
+    <div id="confirmationModal" class="modal-overlay" style="display: none;">
+        <div class="modal-content">
+            <h3 id="modalTitle">确认操作</h3>
+            <p id="modalMessage">你确定要执行这个操作吗？</p>
+            <div class="modal-actions">
+                <button id="modalConfirmBtn" class="button button-danger">确认</button>
+                <button id="modalCancelBtn" class="button">取消</button>
+            </div>
+        </div>
+    </div>
+</body>
+</html>

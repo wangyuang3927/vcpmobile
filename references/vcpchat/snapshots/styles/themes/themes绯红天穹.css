@@ -1,0 +1,189 @@
+/*
+ * styles/themes.css
+ * Curated by 小吉 for Professor Ryan
+ * New Palette Set 4: "Crimson Cyber" and "Celestial Dream"
+ * A duality of fierce energy and serene divinity.
+ */
+
+/* * =================================================================
+ * Dark Theme (Default): Crimson Cyber Palette (绯红赛博)
+ * Inspired by a red-hot android warrior in a futuristic cityscape.
+ * A theme of focus, power, and high-tech aesthetics.
+ * =================================================================
+ */
+:root {
+    /* --- Wallpaper Interface --- */
+    /*
+     * For the frosted glass effect on chat bubbles to be prominent,
+     * it's recommended to set a wallpaper.
+     * 使用方法: 将 'none' 替换为您的壁纸文件路径, 例如 url('ComfyUI_004237_600107602399358_00017.jpg')
+     */
+    --chat-wallpaper-dark: url('../assets/wallpaper/ComfyUI_004237_600107602399358_00017.png');
+
+    /* --- Base Colors --- */
+    --primary-bg: #0D0F12;      /* 主背景 - 深邃碳黑 */
+    --secondary-bg: #1A1C20;    /* 侧边栏/面板背景 - 金属炭灰 */
+    --tertiary-bg: #050607;     /* 聊天区背景 - 纯粹的黑暗 */
+    --accent-bg: #4D1A1A;       /* 悬停/选中背景 - 能量红的余烬 */
+    --border-color: #9F1212;    /* 边框颜色 - 鲜明的警告红 */
+    --input-bg: #1A1C20;        /* 输入框背景 */
+
+    /* --- Frosted Panel Background --- */
+    --panel-bg-dark: rgba(26, 28, 32, 0.8); /* 基于--secondary-bg, 磨砂玻璃效果 */
+
+    /* --- Text Colors --- */
+    --primary-text: #EAEBEE;    /* 主要文字 - 高对比度的亮灰色 */
+    --secondary-text: #A0A3AB;  /* 次要/标题文字 - 中性科技灰 */
+    --highlight-text: #FF073A;  /* 高亮文字 - 炽热能量红 */
+    --text-on-accent: #FFFFFF;  /* 在强调色背景上的文字 */
+    --placeholder-text: #555960; /* 输入框占位文字 */
+    --quoted-text: #00E5FF;     /* 引用文本颜色 - 对比色赛博青 */
+    --user-text: #F0F1F5;       /* 用户气泡文字 */
+    --agent-text: #EAEBEE;      /* Agent气泡文字 - 高对比度的亮灰色 */
+
+    /* --- Bubble Colors (Frosted Glass Ready) --- */
+    --user-bubble-bg: rgba(255, 7, 58, 0.15);    /* 用户气泡 - 半透明能量红 */
+    --assistant-bubble-bg: rgba(40, 42, 47, 0.25); /* AI气泡 - 半透明金属灰 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #FF073A;           /* 按钮背景 - 能量红 */
+    --button-hover-bg: #FF3D67;      /* 按钮悬停 */
+    --danger-color: #E53E3E;        /* 危险操作 - 经典警报红 */
+    --danger-hover-bg: #C0392B;
+    --success-color: #00E5FF;       /* 成功操作 - 赛博青 */
+    --notification-bg: #1A1C20;
+    --notification-header-bg: #0D0F12;
+    --notification-border: #FF073A;
+    --tool-bubble-bg: rgba(0, 229, 255, 0.1);
+    --tool-bubble-border: #00E5FF;
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(26, 28, 32, 0.5);
+    --scrollbar-thumb: rgba(159, 18, 18, 0.7);
+    --scrollbar-thumb-hover: rgba(255, 7, 58, 0.8);
+
+    /* --- Shimmer Effect for Loading --- */
+    --shimmer-color-transparent: rgba(234, 235, 238, 0.1);
+    --shimmer-color-highlight: rgba(234, 235, 238, 0.5);
+
+    /* --- Text Shadow for Frosted Panels --- */
+    --panel-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-dark);
+}
+
+body {
+    background-image: var(--chat-wallpaper-dark);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}
+
+/* * =================================================================
+ * Light Theme: Celestial Dream Palette (天穹遐梦)
+ * Inspired by a divine being resting in a sea of clouds.
+ * A theme of serenity, imagination, and ethereal beauty.
+ * =================================================================
+ */
+body.light-theme {
+    /* --- Wallpaper Interface --- */
+    /*
+     * 使用方法: 将 'none' 替换为您的壁纸文件路径, 例如 url('ComfyUI_003700_242440569464029_00016.jpg')
+     */
+    --chat-wallpaper-light: url('../assets/wallpaper/ComfyUI_003700_242440569464029_00016.png');
+    background-image: var(--chat-wallpaper-light);
+
+    /* --- Base Colors --- */
+    --primary-bg: #F7F9FF;      /* 主背景 - 晨曦天蓝白 */
+    --secondary-bg: #FFFFFF;    /* 侧边栏 - 纯净云白 */
+    --tertiary-bg: #F0F4FF;     /* 聊天区 - 柔和天空 */
+    --accent-bg: #DDE7FF;       /* 悬停背景 - 梦幻蓝 */
+    --border-color: #C0B283;    /* 边框 - 温和的圣金色 */
+    --input-bg: #FFFFFF;        /* 输入框 */
+
+    /* --- Frosted Panel Background --- */
+    --panel-bg-light: rgba(255, 255, 255, 0.85); /* 基于--secondary-bg, 磨砂玻璃效果 */
+
+    /* --- Text Colors --- */
+    --primary-text: #3A4A6A;    /* 主要文字 - 深空蓝灰 */
+    --secondary-text: #6B7D9E;  /* 次要文字 - 柔和石板蓝 */
+    --highlight-text: #B8860B;  /* 高亮文字 - 暗金色 (DarkGoldenRod) */
+    --text-on-accent: #3A4A6A;  /* 强调背景文字 */
+    --placeholder-text: #A0AEC0; /* 占位文字 - 浅灰蓝 */
+    --quoted-text: #4FD1C5;     /* 引用文字 - 宁静的薄荷青 */
+    --user-text: #2c3e50;       /* 用户气泡文字 - 接近深空蓝灰 */
+    --agent-text: #3A4A6A;      /* Agent气泡文字 - 深空蓝灰 */
+
+    /* --- Bubble Colors --- */
+    --user-bubble-bg: rgba(173, 216, 230, 0.25);  /* 用户气泡 - 半透明天蓝 */
+    --assistant-bubble-bg: rgba(240, 244, 255, 0.5);/* AI气泡 - 半透明云白 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #cc9a1a;           /* 按钮 - 暗金色 */
+    --button-hover-bg: #e9c54c;     /* 按钮悬停 - 更亮的金色 */
+    --danger-color: #FF7F50;        /* 危险色 - 珊瑚粉，取自云霞 */
+    --danger-hover-bg: #E9967A;
+    --success-color: #4FD1C5;       /* 成功色 - 宁静薄荷青 */
+    --notification-bg: #F0F4FF;
+    --notification-header-bg: #F7F9FF;
+    --notification-border: #B8860B;
+    --tool-bubble-bg: rgba(184, 134, 11, 0.08);
+    --tool-bubble-border: #B8860B;
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(240, 244, 255, 0.7);
+    --scrollbar-thumb: rgba(176, 196, 222, 0.8); /* 钢青色 */
+    --scrollbar-thumb-hover: rgba(184, 134, 11, 0.7); /* 暗金色 */
+
+    /* --- Shimmer Effect for Loading --- */
+    --shimmer-color-transparent: rgba(58, 74, 106, 0.04);
+    --shimmer-color-highlight: rgba(58, 74, 106, 0.15);
+    
+    /* --- Text Shadow for Frosted Panels --- */
+    --panel-text-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-light);
+}
+
+/* * =================================================================
+ * Enhanced Frosted Glass Effect (通用增强)
+ * =================================================================
+ */
+.message-bubble {
+    backdrop-filter: blur(12px) saturate(120%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.message-bubble:hover {
+    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+
+.tool-bubble {
+    backdrop-filter: blur(10px) saturate(110%);
+    -webkit-backdrop-filter: blur(10px) saturate(110%);
+    border: 1px solid var(--tool-bubble-border);
+    background: var(--tool-bubble-bg);
+}
+
+/* 深色主题下的特殊光效 */
+:root .message-bubble {
+    box-shadow: 
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* 浅色主题下的柔和阴影 */
+body.light-theme .message-bubble {
+    box-shadow: 
+        0 4px 20px rgba(45, 41, 34, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+

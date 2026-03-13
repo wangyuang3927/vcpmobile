@@ -1,0 +1,190 @@
+/*
+ * styles/themes.css
+ * Curated by 小吉 for Professor Ryan
+ * New Palette Set 6: "Crimson Witch" and "Crystal Empress"
+ * A theme of elemental power, contrasting fire and ice.
+ */
+
+/* * =================================================================
+ * Dark Theme (Default): Crimson Witch Palette (炽焰魔女)
+ * Inspired by a gothic fire mage unleashing her power.
+ * A theme of passion, power, and dark elegance.
+ * =================================================================
+ */
+:root {
+    /* --- Wallpaper Interface --- */
+    /*
+     * For the frosted glass effect on chat bubbles to be prominent,
+     * it's recommended to set a wallpaper.
+     * 使用方法: 将 'none' 替换为您的壁纸文件路径, 例如 url('ComfyUI_000255_716618914351835_00002.jpg')
+     */
+    --chat-wallpaper-dark: url('../assets/wallpaper/ComfyUI_000255_716618914351835_00002.png');
+
+    /* --- Base Colors --- */
+    --primary-bg: #0B0A0A;      /* 主背景 - 熔岩冷却后的黑曜石 */
+    --secondary-bg: #1C1A1A;    /* 侧边栏/面板背景 - 炭灰色 */
+    --tertiary-bg: #000000;     /* 聊天区背景 - 纯粹的深渊 */
+    --accent-bg: #5C1F1F;       /* 悬停/选中背景 - 燃烧后的余烬红 */
+    --border-color: #FF4500;    /* 边框颜色 - 炽热的橙红色 */
+    --input-bg: #1C1A1A;        /* 输入框背景 */
+
+    /* --- Frosted Panel Background --- */
+    --panel-bg-dark: rgba(28, 26, 26, 0.8); /* 基于--secondary-bg, 磨砂玻璃效果 */
+
+    /* --- Text Colors --- */
+    --primary-text: #F5EBEB;    /* 主要文字 - 烟灰白 */
+    --secondary-text: #c3aeae;  /* 次要/标题文字 - 灰烬色 */
+    --highlight-text: #FF2400;  /* 高亮文字 - 猩红色 (Scarlet) */
+    --text-on-accent: #FFFFFF;  /* 在强调色背景上的文字 */
+    --placeholder-text: #6B5B5B; /* 输入框占位文字 */
+    --quoted-text: #FF4500;     /* 引用文本颜色 - 橙红色 */
+    --user-text: #FFFFFF;       /* 用户气泡文字 */
+    --agent-text: #F5EBEB;      /* Agent气泡文字 - 烟灰白 */
+
+    /* --- Bubble Colors (Frosted Glass Ready) --- */
+    --user-bubble-bg: rgba(155, 38, 20, 0.423);    /* 用户气泡 - 半透明猩红色 */
+    --assistant-bubble-bg: rgba(45, 42, 42, 0.433); /* AI气泡 - 半透明炭灰色 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #D70000;           /* 按钮背景 - 鲜血红 */
+    --button-hover-bg: #FF2400;      /* 按钮悬停 - 猩红色 */
+    --danger-color: #E53E3E;        /* 危险操作 - 警告红 */
+    --danger-hover-bg: #C0392B;
+    --success-color: #FF8C00;       /* 成功操作 - 暗橙色 */
+    --notification-bg: #1C1A1A;
+    --notification-header-bg: #0B0A0A;
+    --notification-border: #D70000;
+    --tool-bubble-bg: rgba(255, 140, 0, 0.15);
+    --tool-bubble-border: #FF8C00;
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(28, 26, 26, 0.5);
+    --scrollbar-thumb: rgba(215, 0, 0, 0.7);
+    --scrollbar-thumb-hover: rgba(255, 36, 0, 0.9);
+
+    /* --- Shimmer Effect for Loading --- */
+    /* --- 流式输出动画部分，分别定义了光影闪烁时最低透明度的transparent色和高光动画色highlignt色 --- */
+    --shimmer-color-transparent: rgba(255, 233, 233, 0.533);
+    --shimmer-color-highlight: rgba(255, 185, 35, 0.947);
+
+    /* --- Text Shadow for Frosted Panels --- */
+    --panel-text-shadow: 0 1px 3px rgba(0, 0, 0, 0.6);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-dark);
+}
+
+body {
+    background-image: var(--chat-wallpaper-dark);
+    background-size: cover;
+    background-position: center;
+    background-attachment: fixed;
+}
+
+/* * =================================================================
+ * Light Theme: Crystal Empress Palette (冰晶女皇)
+ * Inspired by a regal queen in her ice palace.
+ * A theme of serenity, elegance, and crystalline beauty.
+ * =================================================================
+ */
+body.light-theme {
+    /* --- Wallpaper Interface --- */
+    /*
+     * 使用方法: 将 'none' 替换为您的壁纸文件路径, 例如 url('ComfyUI_000412_585196949091647_00003.jpg')
+     */
+    --chat-wallpaper-light: url('../assets/wallpaper/ComfyUI_000412_585196949091647_00003.png');
+    background-image: var(--chat-wallpaper-light);
+
+    /* --- Base Colors --- */
+    --primary-bg: #F5FAFF;      /* 主背景 - 初雪白 */
+    --secondary-bg: #FFFFFF;    /* 侧边栏 - 纯净冰晶白 */
+    --tertiary-bg: #EAF4FF;     /* 聊天区 - 冰川蓝 */
+    --accent-bg: #D6E8FF;       /* 悬停背景 - 柔和天蓝 */
+    --border-color: #A4DDED;    /* 边框 - 冰蓝色 */
+    --input-bg: #FFFFFF;        /* 输入框 */
+
+    /* --- Frosted Panel Background --- */
+    --panel-bg-light: rgba(255, 255, 255, 0.82); /* 基于--secondary-bg, 磨砂玻璃效果 */
+
+    /* --- Text Colors --- */
+    --primary-text: #2C3E50;    /* 主要文字 - 深邃的午夜蓝 */
+    --secondary-text: #5D7A99;  /* 次要文字 - 灰蓝色 */
+    --highlight-text: #1E90FF;  /* 高亮文字 - 闪耀的道奇蓝 */
+    --text-on-accent: #2C3E50;  /* 强调背景文字 */
+    --placeholder-text: #9FB3C8; /* 占位文字 - 浅灰蓝 */
+    --quoted-text: #4682B4;     /* 引用文字 - 钢蓝色 */
+    --user-text: #2C3E50;       /* 用户气泡文字 */
+    --agent-text: #2C3E50;      /* Agent气泡文字 - 深邃的午夜蓝 */
+
+    /* --- Bubble Colors --- */
+    --user-bubble-bg: rgba(30, 144, 255, 0.12);  /* 用户气泡 - 半透明道奇蓝 */
+    --assistant-bubble-bg: rgba(234, 244, 255, 0.6);/* AI气泡 - 半透明冰川蓝 */
+
+    /* --- UI Element Colors --- */
+    --button-bg: #1E90FF;           /* 按钮 - 道奇蓝 */
+    --button-hover-bg: #4DA8FF;     /* 按钮悬停 */
+    --danger-color: #FF6B81;        /* 危险色 - 柔和的珊瑚粉 */
+    --danger-hover-bg: #FF4757;
+    --success-color: #32CD32;       /* 成功色 - 酸橙绿，如冰中之光 */
+    --notification-bg: #EAF4FF;
+    --notification-header-bg: #F5FAFF;
+    --notification-border: #1E90FF;
+    --tool-bubble-bg: rgba(50, 205, 50, 0.1);
+    --tool-bubble-border: #32CD32;
+
+    /* --- Scrollbar --- */
+    --scrollbar-track: rgba(234, 244, 255, 0.8);
+    --scrollbar-thumb: rgba(164, 221, 237, 0.9); /* 冰蓝色 */
+    --scrollbar-thumb-hover: rgba(30, 144, 255, 1); /* 道奇蓝 */
+
+    /* --- Shimmer Effect for Loading --- */
+    --shimmer-color-transparent: rgba(140, 172, 204, 0.663);
+    --shimmer-color-highlight: rgba(48, 140, 232, 0.923);
+    
+    /* --- Text Shadow for Frosted Panels --- */
+    --panel-text-shadow: 0 1px 1px rgba(0, 0, 0, 0.08);
+
+    /* --- Unified Panel Background --- */
+    --panel-bg: var(--panel-bg-light);
+}
+
+/* * =================================================================
+ * Enhanced Frosted Glass Effect (通用增强)
+ * =================================================================
+ */
+.message-bubble {
+    backdrop-filter: blur(12px) saturate(120%);
+    -webkit-backdrop-filter: blur(12px) saturate(120%);
+    border: 1px solid rgba(255, 255, 255, 0.175);
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+    transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.message-bubble:hover {
+    backdrop-filter: blur(16px) saturate(130%);
+    -webkit-backdrop-filter: blur(16px) saturate(130%);
+    transform: translateY(-1px);
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.15);
+}
+
+.tool-bubble {
+    backdrop-filter: blur(10px) saturate(110%);
+    -webkit-backdrop-filter: blur(10px) saturate(110%);
+    border: 1px solid var(--tool-bubble-border);
+    background: var(--tool-bubble-bg);
+}
+
+/* 深色主题下的特殊光效 */
+:root .message-bubble {
+    box-shadow: 
+        0 8px 32px rgba(0, 0, 0, 0.3),
+        inset 0 1px 0 rgba(255, 255, 255, 0.1);
+}
+
+/* 浅色主题下的柔和阴影 */
+body.light-theme .message-bubble {
+    box-shadow: 
+        0 4px 20px rgba(45, 41, 34, 0.08),
+        inset 0 1px 0 rgba(255, 255, 255, 0.7);
+}
+
