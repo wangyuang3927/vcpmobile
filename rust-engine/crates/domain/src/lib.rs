@@ -1524,12 +1524,207 @@ mod tests {
     use super::*;
     use serde_json::json;
 
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct ExpectedPromptRecord {
+        key: String,
+        value: String,
+        category: PlaceholderCategory,
+        source: PlaceholderSource,
+        status: PromptResolutionStatus,
+    }
+
+    struct PromptPreviewFixture {
+        raw_prompt: &'static str,
+        placeholders: Vec<PromptPlaceholderValue>,
+        expected_resolved_prompt: &'static str,
+        expected_unresolved_tokens: Vec<&'static str>,
+        expected_partial_tokens: Vec<&'static str>,
+        expected_records: Vec<ExpectedPromptRecord>,
+    }
+
     fn sample_provider(base_url: &str) -> ProviderConfig {
         ProviderConfig::new(
             ProviderAdapterKind::OpenAiCompatible,
             "Sample Provider",
             base_url,
         )
+    }
+
+    fn layered_placeholder_preview_fixture() -> PromptPreviewFixture {
+        PromptPreviewFixture {
+            raw_prompt: "{{char}} / {{user}} / {{room}} / {{plugin_room}} / {{app_name}} / {{sticker_wave}} / {{missing}}",
+            placeholders: vec![
+                PromptPlaceholderValue::new(
+                    "plugin_room",
+                    "plugin room",
+                    PlaceholderCategory::Plugin,
+                    PlaceholderSource::Plugin,
+                ),
+                PromptPlaceholderValue::new(
+                    "sticker_wave",
+                    ":wave:",
+                    PlaceholderCategory::StickerMedia,
+                    PlaceholderSource::StickerPack,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "static user",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "app_name",
+                    "vcpmobile",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "char",
+                    "Analyst",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentProfile,
+                ),
+                PromptPlaceholderValue::new(
+                    "room",
+                    "team room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Conversation,
+                ),
+                PromptPlaceholderValue::new(
+                    "room",
+                    "fallback room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Runtime,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "agent user",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
+                ),
+            ],
+            expected_resolved_prompt: "Analyst / agent user / team room / plugin room / vcpmobile / {{sticker_wave}} / {{missing}}",
+            expected_unresolved_tokens: vec!["missing"],
+            expected_partial_tokens: Vec::new(),
+            expected_records: vec![
+                ExpectedPromptRecord {
+                    key: "char".to_string(),
+                    value: "Analyst".to_string(),
+                    category: PlaceholderCategory::Agent,
+                    source: PlaceholderSource::AgentProfile,
+                    status: PromptResolutionStatus::Applied,
+                },
+                ExpectedPromptRecord {
+                    key: "user".to_string(),
+                    value: "agent user".to_string(),
+                    category: PlaceholderCategory::Agent,
+                    source: PlaceholderSource::AgentBinding,
+                    status: PromptResolutionStatus::Applied,
+                },
+                ExpectedPromptRecord {
+                    key: "room".to_string(),
+                    value: "team room".to_string(),
+                    category: PlaceholderCategory::Generic,
+                    source: PlaceholderSource::Conversation,
+                    status: PromptResolutionStatus::Applied,
+                },
+                ExpectedPromptRecord {
+                    key: "room".to_string(),
+                    value: "fallback room".to_string(),
+                    category: PlaceholderCategory::Generic,
+                    source: PlaceholderSource::Runtime,
+                    status: PromptResolutionStatus::Shadowed,
+                },
+                ExpectedPromptRecord {
+                    key: "plugin_room".to_string(),
+                    value: "plugin room".to_string(),
+                    category: PlaceholderCategory::Plugin,
+                    source: PlaceholderSource::Plugin,
+                    status: PromptResolutionStatus::Applied,
+                },
+                ExpectedPromptRecord {
+                    key: "user".to_string(),
+                    value: "static user".to_string(),
+                    category: PlaceholderCategory::Static,
+                    source: PlaceholderSource::StaticRegistry,
+                    status: PromptResolutionStatus::Shadowed,
+                },
+                ExpectedPromptRecord {
+                    key: "app_name".to_string(),
+                    value: "vcpmobile".to_string(),
+                    category: PlaceholderCategory::Static,
+                    source: PlaceholderSource::StaticRegistry,
+                    status: PromptResolutionStatus::Applied,
+                },
+                ExpectedPromptRecord {
+                    key: "sticker_wave".to_string(),
+                    value: ":wave:".to_string(),
+                    category: PlaceholderCategory::StickerMedia,
+                    source: PlaceholderSource::StickerPack,
+                    status: PromptResolutionStatus::Deferred,
+                },
+            ],
+        }
+    }
+
+    fn unresolved_placeholder_preview_fixture() -> PromptPreviewFixture {
+        PromptPreviewFixture {
+            raw_prompt: "hello {{known}} {{missing}} {{missing}} {{broken {legacy} {broken",
+            placeholders: vec![PromptPlaceholderValue::new(
+                "known",
+                "world",
+                PlaceholderCategory::Agent,
+                PlaceholderSource::AgentProfile,
+            )],
+            expected_resolved_prompt:
+                "hello world {{missing}} {{missing}} {{broken {legacy} {broken",
+            expected_unresolved_tokens: vec!["missing", "legacy"],
+            expected_partial_tokens: vec!["{{broken", "{broken"],
+            expected_records: vec![ExpectedPromptRecord {
+                key: "known".to_string(),
+                value: "world".to_string(),
+                category: PlaceholderCategory::Agent,
+                source: PlaceholderSource::AgentProfile,
+                status: PromptResolutionStatus::Applied,
+            }],
+        }
+    }
+
+    fn assert_preview_matches_fixture(fixture: PromptPreviewFixture) {
+        let preview = resolve_prompt_preview(fixture.raw_prompt, &fixture.placeholders);
+
+        assert_eq!(preview.raw_prompt, fixture.raw_prompt);
+        assert_eq!(preview.resolved_prompt, fixture.expected_resolved_prompt);
+        assert_eq!(
+            preview.unresolved_tokens,
+            fixture
+                .expected_unresolved_tokens
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            preview.partial_tokens,
+            fixture
+                .expected_partial_tokens
+                .into_iter()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            preview
+                .records
+                .iter()
+                .map(|record| ExpectedPromptRecord {
+                    key: record.key.clone(),
+                    value: record.value.clone(),
+                    category: record.category,
+                    source: record.source,
+                    status: record.status,
+                })
+                .collect::<Vec<_>>(),
+            fixture.expected_records
+        );
     }
 
     #[test]
@@ -1623,11 +1818,9 @@ mod tests {
             provider.default_preset_local_id,
             Some(provider.presets[0].local_id.clone())
         );
-        assert!(
-            provider.presets[0]
-                .local_id
-                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
-        );
+        assert!(provider.presets[0]
+            .local_id
+            .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX));
     }
 
     #[test]
@@ -1650,11 +1843,9 @@ mod tests {
             Some(provider.presets[0].local_id.clone())
         );
         assert_ne!(provider.presets[0].local_id, "balanced-v1");
-        assert!(
-            provider.presets[0]
-                .local_id
-                .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX)
-        );
+        assert!(provider.presets[0]
+            .local_id
+            .starts_with(PROVIDER_PRESET_LOCAL_ID_PREFIX));
     }
 
     #[test]
@@ -1676,29 +1867,13 @@ mod tests {
     }
 
     #[test]
-    fn resolve_prompt_preview_tracks_unresolved_tokens_without_touching_partial_markers() {
-        let preview = resolve_prompt_preview(
-            "hello {{known}} {{missing}} {{missing}} {{broken {legacy} {broken",
-            &[PromptPlaceholderValue::new(
-                "known",
-                "world",
-                PlaceholderCategory::Agent,
-                PlaceholderSource::AgentProfile,
-            )],
-        );
+    fn resolve_prompt_preview_fixture_covers_order_and_provenance() {
+        assert_preview_matches_fixture(layered_placeholder_preview_fixture());
+    }
 
-        assert_eq!(
-            preview.resolved_prompt,
-            "hello world {{missing}} {{missing}} {{broken {legacy} {broken"
-        );
-        assert_eq!(
-            preview.unresolved_tokens,
-            vec!["missing".to_string(), "legacy".to_string()]
-        );
-        assert_eq!(
-            preview.partial_tokens,
-            vec!["{{broken".to_string(), "{broken".to_string()]
-        );
+    #[test]
+    fn resolve_prompt_preview_fixture_covers_unresolved_and_partial_tokens() {
+        assert_preview_matches_fixture(unresolved_placeholder_preview_fixture());
     }
 
     #[test]

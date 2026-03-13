@@ -1,4 +1,4 @@
-use base64::{Engine as _, engine::general_purpose::STANDARD};
+use base64::{engine::general_purpose::STANDARD, Engine as _};
 use chrono::Utc;
 use sha2::{Digest, Sha256};
 use std::{
@@ -8,12 +8,11 @@ use std::{
 use thiserror::Error;
 use uuid::Uuid;
 use vcpmobile_domain::{
-    Conversation, ConversationId, DOCUMENT_MIME_APPLICATION_PDF, DOCUMENT_MIME_DOCX,
-    DOCUMENT_MIME_PPTX, DOCUMENT_MIME_TEXT_MARKDOWN, DOCUMENT_MIME_TEXT_PLAIN,
-    DocumentAttachmentInput, DocumentDescriptor, DocumentPromptTransformItem,
-    DocumentPromptTransformOutput, DocumentPromptTransformStatus, GenerationSignal,
-    GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole, MessageVariant,
-    NodeId, TopicId, VariantStatus,
+    Conversation, ConversationId, DocumentAttachmentInput, DocumentDescriptor,
+    DocumentPromptTransformItem, DocumentPromptTransformOutput, DocumentPromptTransformStatus,
+    GenerationSignal, GenerationState, MessageNode, MessagePart, MessagePartPayload, MessageRole,
+    MessageVariant, NodeId, TopicId, VariantStatus, DOCUMENT_MIME_APPLICATION_PDF,
+    DOCUMENT_MIME_DOCX, DOCUMENT_MIME_PPTX, DOCUMENT_MIME_TEXT_MARKDOWN, DOCUMENT_MIME_TEXT_PLAIN,
 };
 use vcpmobile_protocol::{
     ChatEvent, EventEnvelope, NodeBundle, SnapshotBranch, SnapshotConversation, SnapshotNode,
@@ -22,7 +21,9 @@ use vcpmobile_protocol::{
 use vcpmobile_store::{FileStore, StoreError, StoredConversation, StoredConversationCatalogItem};
 
 #[cfg(test)]
-use vcpmobile_domain::{PromptPlaceholderValue, PromptResolutionStatus};
+use vcpmobile_domain::{
+    PlaceholderCategory, PlaceholderSource, PromptPlaceholderValue, PromptResolutionStatus,
+};
 
 pub use vcpmobile_domain::resolve_prompt_preview;
 
@@ -1945,7 +1946,7 @@ pub fn demo_stream(
                 branch: SnapshotBranch {
                     cursor_node_id: conversation.current_cursor,
                     nodes: vec![
-                        selected_node_projection(&node_bundle).expect("demo node projection"),
+                        selected_node_projection(&node_bundle).expect("demo node projection")
                     ],
                 },
             },
@@ -2093,7 +2094,10 @@ mod tests {
             .expect("completed upsert");
         match fifth.payload {
             ChatEvent::ConversationNodeUpsert { branch } => {
-                assert_eq!(branch.node.selected_variant.status, VariantStatus::Completed);
+                assert_eq!(
+                    branch.node.selected_variant.status,
+                    VariantStatus::Completed
+                );
             }
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         }
@@ -2157,7 +2161,10 @@ mod tests {
             .expect("cancelled upsert");
         match first.payload {
             ChatEvent::ConversationNodeUpsert { branch } => {
-                assert_eq!(branch.node.selected_variant.status, VariantStatus::Cancelled);
+                assert_eq!(
+                    branch.node.selected_variant.status,
+                    VariantStatus::Cancelled
+                );
             }
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         }
@@ -2226,7 +2233,10 @@ mod tests {
             .expect("interrupted upsert");
         match first.payload {
             ChatEvent::ConversationNodeUpsert { branch } => {
-                assert_eq!(branch.node.selected_variant.status, VariantStatus::Cancelled);
+                assert_eq!(
+                    branch.node.selected_variant.status,
+                    VariantStatus::Cancelled
+                );
             }
             other => panic!("expected conversation_node_upsert, got {other:?}"),
         }
@@ -2323,110 +2333,137 @@ mod tests {
         }
     }
 
-    #[test]
-    fn resolve_prompt_preview_applies_frozen_category_order_and_defers_sticker_media() {
-        let preview = resolve_prompt_preview(
-            "{{char}} meets {{cur_date}} via {{plugin_room}} under {{app_name}} and {{sticker_wave}}",
-            &[
+    fn placeholder_resolution_fixture() -> (&'static str, Vec<PromptPlaceholderValue>) {
+        (
+            "{{char}} / {{user}} / {{room}} / {{plugin_room}} / {{app_name}} / {{sticker_wave}} / {{missing}}",
+            vec![
                 PromptPlaceholderValue::new(
                     "plugin_room",
                     "plugin room",
-                    vcpmobile_domain::PlaceholderCategory::Plugin,
-                    vcpmobile_domain::PlaceholderSource::Plugin,
+                    PlaceholderCategory::Plugin,
+                    PlaceholderSource::Plugin,
                 ),
                 PromptPlaceholderValue::new(
                     "sticker_wave",
                     ":wave:",
-                    vcpmobile_domain::PlaceholderCategory::StickerMedia,
-                    vcpmobile_domain::PlaceholderSource::StickerPack,
-                ),
-                PromptPlaceholderValue::new(
-                    "app_name",
-                    "vcpmobile",
-                    vcpmobile_domain::PlaceholderCategory::Static,
-                    vcpmobile_domain::PlaceholderSource::StaticRegistry,
-                ),
-                PromptPlaceholderValue::new(
-                    "cur_date",
-                    "2026-03-13",
-                    vcpmobile_domain::PlaceholderCategory::Generic,
-                    vcpmobile_domain::PlaceholderSource::Runtime,
-                ),
-                PromptPlaceholderValue::new(
-                    "char",
-                    "Analyst",
-                    vcpmobile_domain::PlaceholderCategory::Agent,
-                    vcpmobile_domain::PlaceholderSource::AgentProfile,
-                ),
-            ],
-        );
-
-        assert_eq!(
-            preview.resolved_prompt,
-            "Analyst meets 2026-03-13 via plugin room under vcpmobile and {{sticker_wave}}"
-        );
-        assert_eq!(
-            preview
-                .records
-                .iter()
-                .map(|record| (record.category, record.status))
-                .collect::<Vec<_>>(),
-            vec![
-                (
-                    vcpmobile_domain::PlaceholderCategory::Agent,
-                    PromptResolutionStatus::Applied,
-                ),
-                (
-                    vcpmobile_domain::PlaceholderCategory::Generic,
-                    PromptResolutionStatus::Applied,
-                ),
-                (
-                    vcpmobile_domain::PlaceholderCategory::Plugin,
-                    PromptResolutionStatus::Applied,
-                ),
-                (
-                    vcpmobile_domain::PlaceholderCategory::Static,
-                    PromptResolutionStatus::Applied,
-                ),
-                (
-                    vcpmobile_domain::PlaceholderCategory::StickerMedia,
-                    PromptResolutionStatus::Deferred,
-                ),
-            ]
-        );
-    }
-
-    #[test]
-    fn resolve_prompt_preview_shadows_lower_priority_duplicates() {
-        let preview = resolve_prompt_preview(
-            "{{user}} / {user}",
-            &[
-                PromptPlaceholderValue::new(
-                    "user",
-                    "generic user",
-                    vcpmobile_domain::PlaceholderCategory::Generic,
-                    vcpmobile_domain::PlaceholderSource::Runtime,
-                ),
-                PromptPlaceholderValue::new(
-                    "user",
-                    "agent user",
-                    vcpmobile_domain::PlaceholderCategory::Agent,
-                    vcpmobile_domain::PlaceholderSource::AgentBinding,
+                    PlaceholderCategory::StickerMedia,
+                    PlaceholderSource::StickerPack,
                 ),
                 PromptPlaceholderValue::new(
                     "user",
                     "static user",
-                    vcpmobile_domain::PlaceholderCategory::Static,
-                    vcpmobile_domain::PlaceholderSource::StaticRegistry,
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "app_name",
+                    "vcpmobile",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                ),
+                PromptPlaceholderValue::new(
+                    "char",
+                    "Analyst",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentProfile,
+                ),
+                PromptPlaceholderValue::new(
+                    "room",
+                    "team room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Conversation,
+                ),
+                PromptPlaceholderValue::new(
+                    "room",
+                    "fallback room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Runtime,
+                ),
+                PromptPlaceholderValue::new(
+                    "user",
+                    "agent user",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
                 ),
             ],
-        );
+        )
+    }
 
-        assert_eq!(preview.resolved_prompt, "agent user / agent user");
-        assert_eq!(preview.records.len(), 3);
-        assert_eq!(preview.records[0].status, PromptResolutionStatus::Applied);
-        assert_eq!(preview.records[1].status, PromptResolutionStatus::Shadowed);
-        assert_eq!(preview.records[2].status, PromptResolutionStatus::Shadowed);
+    #[test]
+    fn resolve_prompt_preview_fixture_preserves_precedence_provenance_and_unresolved_tokens() {
+        let (raw_prompt, placeholders) = placeholder_resolution_fixture();
+        let preview = resolve_prompt_preview(raw_prompt, &placeholders);
+
+        assert_eq!(
+            preview.resolved_prompt,
+            "Analyst / agent user / team room / plugin room / vcpmobile / {{sticker_wave}} / {{missing}}"
+        );
+        assert_eq!(preview.unresolved_tokens, vec!["missing".to_string()]);
+        assert!(preview.partial_tokens.is_empty());
+        assert_eq!(
+            preview
+                .records
+                .iter()
+                .map(|record| {
+                    (
+                        record.key.as_str(),
+                        record.category,
+                        record.source,
+                        record.status,
+                    )
+                })
+                .collect::<Vec<_>>(),
+            vec![
+                (
+                    "char",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentProfile,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "user",
+                    PlaceholderCategory::Agent,
+                    PlaceholderSource::AgentBinding,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Conversation,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "room",
+                    PlaceholderCategory::Generic,
+                    PlaceholderSource::Runtime,
+                    PromptResolutionStatus::Shadowed,
+                ),
+                (
+                    "plugin_room",
+                    PlaceholderCategory::Plugin,
+                    PlaceholderSource::Plugin,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "user",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                    PromptResolutionStatus::Shadowed,
+                ),
+                (
+                    "app_name",
+                    PlaceholderCategory::Static,
+                    PlaceholderSource::StaticRegistry,
+                    PromptResolutionStatus::Applied,
+                ),
+                (
+                    "sticker_wave",
+                    PlaceholderCategory::StickerMedia,
+                    PlaceholderSource::StickerPack,
+                    PromptResolutionStatus::Deferred,
+                ),
+            ]
+        );
     }
 
     fn docx_bytes() -> Vec<u8> {
@@ -2472,11 +2509,9 @@ mod tests {
             output.items[0].extracted_char_count,
             "hello\nworld".chars().count()
         );
-        assert!(
-            output.items[0]
-                .prompt_text
-                .contains("[Document: notes.txt]")
-        );
+        assert!(output.items[0]
+            .prompt_text
+            .contains("[Document: notes.txt]"));
         assert!(output.items[0].prompt_text.contains("MIME: text/plain"));
         assert!(output.items[0].prompt_text.contains("hello\nworld"));
         assert_eq!(output.combined_prompt_text, output.items[0].prompt_text);
@@ -2498,18 +2533,14 @@ mod tests {
             output.items[0].status,
             DocumentPromptTransformStatus::ParseFailed
         );
-        assert!(
-            output.items[0]
-                .prompt_text
-                .contains("[Document Parse Failure: broken.pdf]")
-        );
-        assert!(
-            output.items[0]
-                .error
-                .as_deref()
-                .expect("parse failure error")
-                .contains("invalid base64 payload")
-        );
+        assert!(output.items[0]
+            .prompt_text
+            .contains("[Document Parse Failure: broken.pdf]"));
+        assert!(output.items[0]
+            .error
+            .as_deref()
+            .expect("parse failure error")
+            .contains("invalid base64 payload"));
     }
 
     #[test]
@@ -2524,11 +2555,9 @@ mod tests {
             .expect("transform docx");
 
         assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
-        assert!(
-            output.items[0]
-                .prompt_text
-                .contains("Hello DOCX\nSecond line")
-        );
+        assert!(output.items[0]
+            .prompt_text
+            .contains("Hello DOCX\nSecond line"));
     }
 
     #[test]
@@ -2543,11 +2572,9 @@ mod tests {
             .expect("transform pptx");
 
         assert_eq!(output.items[0].status, DocumentPromptTransformStatus::Ready);
-        assert!(
-            output.items[0]
-                .prompt_text
-                .contains("Hello PPTX\n\nSecond slide")
-        );
+        assert!(output.items[0]
+            .prompt_text
+            .contains("Hello PPTX\n\nSecond slide"));
     }
 
     #[test]
@@ -3154,7 +3181,10 @@ mod tests {
             .expect("assistant bundle");
         assert_eq!(assistant_bundle.variants.len(), 2);
         assert_eq!(assistant_bundle.node.select_index, 1);
-        assert_eq!(assistant_bundle.variants[0].variant, original_variant.variant);
+        assert_eq!(
+            assistant_bundle.variants[0].variant,
+            original_variant.variant
+        );
         assert_eq!(assistant_bundle.variants[0].parts, original_variant.parts);
         assert_eq!(
             assistant_bundle.variants[1].variant.id,
@@ -4095,11 +4125,9 @@ mod tests {
                 ],
             })
             .expect("persist restart fixture");
-        assert!(
-            store
-                .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
-                .expect("select second variant")
-        );
+        assert!(store
+            .write_selected_variant(conversation_id, assistant_node_id, second_variant_id)
+            .expect("select second variant"));
 
         let recovered = engine
             .snapshot_for(conversation_id)
