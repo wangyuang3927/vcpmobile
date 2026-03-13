@@ -477,8 +477,8 @@ impl FileStore {
     }
 
     pub fn get_agent(&self, agent_id: &str) -> StoreResult<Option<AgentConfig>> {
-        let data = self.load()?;
-        Ok(data.agent_configs.get(agent_id).cloned())
+        self.ensure_sqlite_agents()?;
+        Ok(self.sqlite_store().get_agent(agent_id)?)
     }
 
     pub fn upsert_agent(&self, mut agent: AgentConfig) -> StoreResult<AgentConfig> {
@@ -486,30 +486,26 @@ impl FileStore {
             .validate()
             .map_err(|error| StoreError::Validation(error.to_string()))?;
 
-        let mut data = self.load()?;
+        self.ensure_sqlite_agents()?;
+        let existing = self.sqlite_store().get_agent(&agent.id.to_string())?;
         let now = chrono::Utc::now();
-        if let Some(existing) = data.agent_configs.get(&agent.id.to_string()) {
+        if let Some(existing) = existing {
             agent.created_at = existing.created_at;
         }
         agent.updated_at = now;
 
-        data.agent_configs
-            .insert(agent.id.to_string(), agent.clone());
-        self.save(&data)?;
+        self.sqlite_store().upsert_agent(&agent)?;
         Ok(agent)
     }
 
     pub fn list_agents(&self) -> StoreResult<Vec<AgentConfig>> {
-        let mut agents = self.load()?.agent_configs.into_values().collect::<Vec<_>>();
-        agents.sort_by(|left, right| right.updated_at.cmp(&left.updated_at));
-        Ok(agents)
+        self.ensure_sqlite_agents()?;
+        Ok(self.sqlite_store().list_agents()?)
     }
 
     pub fn delete_agent(&self, agent_id: &str) -> StoreResult<Option<AgentConfig>> {
-        let mut data = self.load()?;
-        let removed = data.agent_configs.remove(agent_id);
-        self.save(&data)?;
-        Ok(removed)
+        self.ensure_sqlite_agents()?;
+        Ok(self.sqlite_store().delete_agent(agent_id)?)
     }
 
     pub fn resolve_provider_reference(
@@ -595,6 +591,21 @@ impl FileStore {
         }
 
         sqlite_store.import_conversations(data.conversations.into_values())?;
+        Ok(())
+    }
+
+    fn ensure_sqlite_agents(&self) -> StoreResult<()> {
+        let sqlite_store = self.sqlite_store();
+        if sqlite_store.has_agent_configs()? || !self.legacy_path.exists() {
+            return Ok(());
+        }
+
+        let data = self.load()?;
+        if data.agent_configs.is_empty() {
+            return Ok(());
+        }
+
+        sqlite_store.import_agents(data.agent_configs.into_values())?;
         Ok(())
     }
 }
@@ -873,8 +884,16 @@ mod tests {
                 .name,
             "Planner"
         );
+        assert!(
+            !path.exists(),
+            "agent CRUD should no longer depend on the legacy json store"
+        );
+        assert!(
+            path.with_extension("sqlite3").exists(),
+            "agent CRUD should persist into sqlite"
+        );
 
-        fs::remove_file(path).ok();
+        cleanup_store_paths(&path);
     }
 
     #[test]
@@ -887,7 +906,40 @@ mod tests {
         let error = store.upsert_agent(agent).expect_err("validation failure");
         assert!(matches!(error, StoreError::Validation(_)));
 
-        fs::remove_file(path).ok();
+        cleanup_store_paths(&path);
+    }
+
+    #[test]
+    fn list_agents_imports_legacy_agent_configs_into_sqlite() {
+        let path = temp_store_path("agents-legacy-import");
+        let agent = sample_agent("Legacy planner");
+        let legacy = StoreData {
+            conversations: BTreeMap::new(),
+            agent_configs: BTreeMap::from([(agent.id.to_string(), agent.clone())]),
+            provider_configs: BTreeMap::new(),
+        };
+        fs::write(
+            &path,
+            serde_json::to_string_pretty(&legacy).expect("serialize legacy agents"),
+        )
+        .expect("write legacy agents");
+
+        let store = FileStore::new(&path);
+        let listed = store.list_agents().expect("import agents from legacy json");
+
+        assert_eq!(listed, vec![agent]);
+        assert_eq!(
+            store
+                .get_agent(&listed[0].id.to_string())
+                .expect("get imported agent")
+                .expect("stored imported agent")
+                .identity
+                .name,
+            "Legacy planner"
+        );
+        assert!(path.with_extension("sqlite3").exists());
+
+        cleanup_store_paths(&path);
     }
 
     #[test]
