@@ -13,7 +13,7 @@ use vcpmobile_domain::{
     AgentConfig, Conversation, ConversationId, GenerationState, MessageNode, NodeId,
     ProviderAuthConfig, ProviderConfig, ProviderModelCatalog, VariantId,
 };
-use vcpmobile_protocol::{NodeBundle, VariantBundle};
+use vcpmobile_protocol::{NodeBundle, PairingDevicePlatform, VariantBundle};
 
 pub use sqlite::{
     CURRENT_SCHEMA_VERSION, MigrationRecord, SqliteStore, SqliteStoreError, SqliteStoreResult,
@@ -130,6 +130,60 @@ pub struct StoredConversationResumeAnchor {
     pub variant_id: VariantId,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StoredPairingSessionStatus {
+    Pending,
+    Paired,
+    Expired,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredTrustedDevice {
+    pub trusted_device_id: String,
+    pub namespace: String,
+    pub device_name: String,
+    pub device_platform: PairingDevicePlatform,
+    pub device_public_key: String,
+    pub paired_at: chrono::DateTime<chrono::Utc>,
+    pub last_seen_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredPairingSession {
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub bootstrap_token: String,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub status: StoredPairingSessionStatus,
+    pub trusted_device_id: Option<String>,
+    pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredMobileSession {
+    pub access_token: String,
+    pub pairing_session_id: String,
+    pub namespace: String,
+    pub trusted_device_id: String,
+    pub issued_at: chrono::DateTime<chrono::Utc>,
+    pub expires_at: chrono::DateTime<chrono::Utc>,
+    pub revoked_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub resume_anchor: String,
+    pub resume_anchor_expires_at: chrono::DateTime<chrono::Utc>,
+}
+
+#[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct StoredPairingState {
+    #[serde(default)]
+    pub pairing_sessions: BTreeMap<String, StoredPairingSession>,
+    #[serde(default)]
+    pub trusted_devices: BTreeMap<String, StoredTrustedDevice>,
+    #[serde(default)]
+    pub mobile_sessions: BTreeMap<String, StoredMobileSession>,
+}
+
 #[derive(Debug, Default, Clone, Serialize, Deserialize)]
 pub struct StoreData {
     #[serde(default)]
@@ -138,6 +192,12 @@ pub struct StoreData {
     pub agent_configs: BTreeMap<String, AgentConfig>,
     #[serde(default, alias = "providers")]
     pub provider_configs: BTreeMap<String, ProviderConfig>,
+    #[serde(default)]
+    pub pairing_sessions: BTreeMap<String, StoredPairingSession>,
+    #[serde(default)]
+    pub trusted_devices: BTreeMap<String, StoredTrustedDevice>,
+    #[serde(default)]
+    pub mobile_sessions: BTreeMap<String, StoredMobileSession>,
 }
 
 #[derive(Debug, Clone)]
@@ -606,6 +666,23 @@ impl FileStore {
             .lock()
             .expect("lock bootstrap report cache") = Some(report.clone());
         Ok(report)
+    }
+
+    pub fn load_pairing_state(&self) -> StoreResult<StoredPairingState> {
+        let data = self.load()?;
+        Ok(StoredPairingState {
+            pairing_sessions: data.pairing_sessions,
+            trusted_devices: data.trusted_devices,
+            mobile_sessions: data.mobile_sessions,
+        })
+    }
+
+    pub fn save_pairing_state(&self, state: &StoredPairingState) -> StoreResult<()> {
+        let mut data = self.load()?;
+        data.pairing_sessions = state.pairing_sessions.clone();
+        data.trusted_devices = state.trusted_devices.clone();
+        data.mobile_sessions = state.mobile_sessions.clone();
+        self.save(&data)
     }
 
     fn sqlite_store(&self) -> SqliteStore {
@@ -1107,6 +1184,9 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            pairing_sessions: BTreeMap::new(),
+            trusted_devices: BTreeMap::new(),
+            mobile_sessions: BTreeMap::new(),
         };
         fs::write(
             &path,
@@ -1174,6 +1254,9 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            pairing_sessions: BTreeMap::new(),
+            trusted_devices: BTreeMap::new(),
+            mobile_sessions: BTreeMap::new(),
         };
         fs::write(
             &path,
@@ -1242,6 +1325,9 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            pairing_sessions: BTreeMap::new(),
+            trusted_devices: BTreeMap::new(),
+            mobile_sessions: BTreeMap::new(),
         };
         fs::write(
             &path,
@@ -1316,6 +1402,9 @@ mod tests {
             )]),
             agent_configs: BTreeMap::new(),
             provider_configs: BTreeMap::new(),
+            pairing_sessions: BTreeMap::new(),
+            trusted_devices: BTreeMap::new(),
+            mobile_sessions: BTreeMap::new(),
         };
         fs::write(
             &path,
@@ -2231,5 +2320,63 @@ mod tests {
         );
 
         fs::remove_file(path).ok();
+    }
+
+    #[test]
+    fn pairing_state_round_trips_through_store_sidecar() {
+        let path = temp_store_path("pairing-state");
+        let store = FileStore::new(&path);
+        let now = chrono::Utc::now();
+        let trusted_device = StoredTrustedDevice {
+            trusted_device_id: "trusted-device-1".to_string(),
+            namespace: "workspace-alpha".to_string(),
+            device_name: "Pixel 9".to_string(),
+            device_platform: PairingDevicePlatform::Android,
+            device_public_key: "base64-public-key".to_string(),
+            paired_at: now,
+            last_seen_at: now,
+            revoked_at: None,
+        };
+        let pairing_state = StoredPairingState {
+            pairing_sessions: BTreeMap::from([(
+                "pairing-session-1".to_string(),
+                StoredPairingSession {
+                    pairing_session_id: "pairing-session-1".to_string(),
+                    namespace: "workspace-alpha".to_string(),
+                    bootstrap_token: "bootstrap-secret".to_string(),
+                    expires_at: now,
+                    status: StoredPairingSessionStatus::Paired,
+                    trusted_device_id: Some(trusted_device.trusted_device_id.clone()),
+                    completed_at: Some(now),
+                },
+            )]),
+            trusted_devices: BTreeMap::from([(
+                trusted_device.trusted_device_id.clone(),
+                trusted_device.clone(),
+            )]),
+            mobile_sessions: BTreeMap::from([(
+                "mobile-token-1".to_string(),
+                StoredMobileSession {
+                    access_token: "mobile-token-1".to_string(),
+                    pairing_session_id: "pairing-session-1".to_string(),
+                    namespace: "workspace-alpha".to_string(),
+                    trusted_device_id: trusted_device.trusted_device_id.clone(),
+                    issued_at: now,
+                    expires_at: now,
+                    revoked_at: None,
+                    resume_anchor: "resume-anchor-1".to_string(),
+                    resume_anchor_expires_at: now,
+                },
+            )]),
+        };
+
+        store
+            .save_pairing_state(&pairing_state)
+            .expect("persist pairing state");
+
+        let reloaded = store.load_pairing_state().expect("reload pairing state");
+        assert_eq!(reloaded, pairing_state);
+
+        cleanup_store_paths(&path);
     }
 }

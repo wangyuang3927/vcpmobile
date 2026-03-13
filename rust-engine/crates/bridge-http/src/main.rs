@@ -1117,7 +1117,7 @@ async fn main() -> anyhow::Result<()> {
         .context("bootstrap sqlite conversations from legacy json")?;
     let topic_id = Uuid::new_v4();
     let agent_id = Uuid::new_v4();
-    let engine = SessionEngine::new(store, topic_id, agent_id);
+    let engine = SessionEngine::try_new(store, topic_id, agent_id)?;
 
     engine
         .ensure_demo_conversation()
@@ -1160,11 +1160,10 @@ mod tests {
 
     fn test_app_with_engine(name: &str) -> (Router, Arc<Mutex<SessionEngine>>, PathBuf) {
         let path = test_store_path(name);
-        let engine = Arc::new(Mutex::new(SessionEngine::new(
-            FileStore::new(&path),
-            TopicId::new_v4(),
-            Uuid::new_v4(),
-        )));
+        let engine = Arc::new(Mutex::new(
+            SessionEngine::try_new(FileStore::new(&path), TopicId::new_v4(), Uuid::new_v4())
+                .expect("create test engine"),
+        ));
         let app = app(AppState {
             engine: engine.clone(),
         });
@@ -1474,7 +1473,8 @@ mod tests {
                 namespace: "workspace-alpha".to_string(),
                 bootstrap_token: "bootstrap-secret".to_string(),
                 expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
-            });
+            })
+            .expect("seed pairing");
         let request = json!({
             "pairing_session_id": "pairing-session-1",
             "namespace": "workspace-alpha",
@@ -1520,7 +1520,8 @@ mod tests {
                 namespace: "workspace-alpha".to_string(),
                 bootstrap_token: "bootstrap-secret".to_string(),
                 expires_at: chrono::Utc::now() + chrono::Duration::minutes(5),
-            });
+            })
+            .expect("seed pairing");
         let request = json!({
             "pairing_session_id": "pairing-session-1",
             "namespace": "workspace-alpha",
@@ -1561,7 +1562,8 @@ mod tests {
                 namespace: "workspace-alpha".to_string(),
                 bootstrap_token: "bootstrap-secret".to_string(),
                 expires_at: chrono::Utc::now() - chrono::Duration::seconds(1),
-            });
+            })
+            .expect("seed pairing");
         let request = json!({
             "pairing_session_id": "pairing-session-1",
             "namespace": "workspace-alpha",
